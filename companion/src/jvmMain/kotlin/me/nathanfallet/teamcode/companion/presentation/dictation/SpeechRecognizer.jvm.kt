@@ -11,11 +11,61 @@ import kotlinx.coroutines.flow.emptyFlow
 /**
  * The desktop has no portable speech API. On macOS the app starts the system's own Dictation (Edit > Start Dictation…)
  * in the focused field: the system transcribes, shows its listening indicator at the caret and types the words through
- * the text input protocol, which the field takes like any input method. Windows and Linux show no microphone: Windows
- * Voice Typing (Win+H) can still be started by the member, the app does not synthesize the shortcut.
+ * the text input protocol, which the field takes like any input method. On Windows 10 and 11 the app presses Win+H,
+ * which opens the system's Voice Typing on the focused field the same way. Linux shows no microphone.
  */
 @Composable
-actual fun rememberSpeechRecognizer(): SpeechRecognizer? = remember { MacDictation.takeIf { it.available } }
+actual fun rememberSpeechRecognizer(): SpeechRecognizer? = remember { desktopDictation() }
+
+private fun desktopDictation(): SpeechRecognizer? {
+    val os = System.getProperty("os.name").orEmpty()
+    return when {
+        os.startsWith("Mac") -> MacDictation.takeIf { it.available }
+        os.startsWith("Windows") -> WindowsVoiceTyping.takeIf { it.available }
+        else -> null
+    }
+}
+
+/**
+ * Windows Voice Typing has no API: the Win+H shortcut opens it on the focused field, and pressed again closes it. The
+ * shortcut is sent with `keybd_event`; the system types the words through its own input, with its own microphone panel.
+ */
+internal object WindowsVoiceTyping : SpeechRecognizer {
+    override val systemDictation = true
+
+    private const val VK_LWIN = 0x5B
+    private const val VK_H = 0x48
+    private const val KEYEVENTF_KEYUP = 0x2
+
+    private val user32: User32? by lazy {
+        if (!System.getProperty("os.name").orEmpty().startsWith("Windows")) return@lazy null
+        try { Native.load("user32", User32::class.java) } catch (_: Throwable) { null }
+    }
+
+    /** Voice Typing with Win+H exists from Windows 10 (version 1903): the JVM reports 10.0 for Windows 10 and 11. */
+    val available: Boolean by lazy {
+        user32 != null && (System.getProperty("os.version").orEmpty().substringBefore('.').toIntOrNull() ?: 0) >= 10
+    }
+
+    override fun toggleSystemDictation() {
+        val user32 = user32?.takeIf { available } ?: return
+        try {
+            user32.keybd_event(VK_LWIN.toByte(), 0, 0, null)
+            user32.keybd_event(VK_H.toByte(), 0, 0, null)
+            user32.keybd_event(VK_H.toByte(), 0, KEYEVENTF_KEYUP, null)
+        } finally {
+            user32.keybd_event(VK_LWIN.toByte(), 0, KEYEVENTF_KEYUP, null)
+        }
+    }
+
+    override fun listen(): Flow<SpeechEvent> = emptyFlow()
+    override fun stop() {}
+
+    @Suppress("FunctionName")
+    private interface User32 : Library {
+        fun keybd_event(key: Byte, scan: Byte, flags: Int, extra: Pointer?)
+    }
+}
 
 private object MacDictation : SpeechRecognizer {
     override val systemDictation = true
