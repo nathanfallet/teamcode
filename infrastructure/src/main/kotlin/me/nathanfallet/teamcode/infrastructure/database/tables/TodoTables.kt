@@ -17,7 +17,7 @@ object SessionTodos : Table("session_todos") {
     val lastDone = integer("last_done").nullable()
     val lastItems = integer("last_items").nullable()
     val lastNotes = integer("last_notes").nullable()
-    /** JSON: what the Stop hook recorded about itself (would_block, blocked, hook_error), the newest 20. Null until the first. */
+    /** JSON: what the Stop hook recorded about itself (blocked, hook_error), the newest 20. Null until the first. */
     val hookEvents = text("hook_events").nullable()
     /** When the Stop hook last asked about this session, and the last turn end the server-side reminder judged (`cloud_session_events.seq`). */
     val lastHookAt = long("last_hook_at").nullable()

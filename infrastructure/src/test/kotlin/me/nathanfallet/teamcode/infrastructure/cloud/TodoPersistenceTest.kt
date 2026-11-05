@@ -198,7 +198,7 @@ class TodoPersistenceTest {
             val sent = java.util.concurrent.ConcurrentLinkedQueue<String>()
             val owner = Principal(w.member.member, "waits-resolver", w.teamId)
             val outcomes = coroutineScope {
-                listOf(svcA, svcB).map { s -> async(Dispatchers.IO) { s.remind(w.teamId, owner, running, TodoTurnEnd(6, 5_000), true) { text, key -> sent += key; assertTrue(text.startsWith("[TeamCode todo] 0 of 2 items done.")) } } }.awaitAll()
+                listOf(svcA, svcB).map { s -> async(Dispatchers.IO) { s.remind(w.teamId, owner, running, TodoTurnEnd(6, 5_000)) { text, key -> sent += key; assertTrue(text.startsWith("[TeamCode todo] 0 of 2 items done.")) } } }.awaitAll()
             }
             assertEquals(1, outcomes.count { it == TodoReminderOutcome.REMINDED }, outcomes.toString())
             assertEquals(1, sent.size)
@@ -207,13 +207,13 @@ class TodoPersistenceTest {
             // The next turn end is a new judgement; a stop the hook saw inside it is not reminded.
             svcB.stop(w.member, running, TodoStopInput(TodoStopPhase.BEGIN))
             val hookAt = svcA.get(w.member, running)!!.lastHookAt!!
-            assertEquals(TodoReminderOutcome.SKIPPED, svcA.remind(w.teamId, owner, running, TodoTurnEnd(7, hookAt - 1), true) { _, _ -> error("not sent") })
+            assertEquals(TodoReminderOutcome.SKIPPED, svcA.remind(w.teamId, owner, running, TodoTurnEnd(7, hookAt - 1)) { _, _ -> error("not sent") })
             assertEquals(7L, svcB.get(w.member, running)!!.reminderSeq)
             // Stalls 2 and 3: the third turn end without progress asks the owner (a wait the server opens as itself), and no message goes out.
-            assertEquals(TodoReminderOutcome.REMINDED, svcA.remind(w.teamId, owner, running, TodoTurnEnd(8, hookAt + 10), true) { _, _ -> sent += "second" })
-            assertEquals(TodoReminderOutcome.ESCALATED, svcB.remind(w.teamId, owner, running, TodoTurnEnd(9, hookAt + 10), true) { _, _ -> error("not sent") })
+            assertEquals(TodoReminderOutcome.REMINDED, svcA.remind(w.teamId, owner, running, TodoTurnEnd(8, hookAt + 10)) { _, _ -> sent += "second" })
+            assertEquals(TodoReminderOutcome.ESCALATED, svcB.remind(w.teamId, owner, running, TodoTurnEnd(9, hookAt + 10)) { _, _ -> error("not sent") })
             // The wait now open holds the reminder back, from either replica.
-            assertEquals(TodoReminderOutcome.SKIPPED, svcA.remind(w.teamId, owner, running, TodoTurnEnd(10, hookAt + 10), true) { _, _ -> error("not sent") })
+            assertEquals(TodoReminderOutcome.SKIPPED, svcA.remind(w.teamId, owner, running, TodoTurnEnd(10, hookAt + 10)) { _, _ -> error("not sent") })
             w.a.database.query { assertEquals(1L, Waits.selectAll().where { (Waits.sessionId eq running) and (Waits.status eq "open") }.count()) }
         }
     }

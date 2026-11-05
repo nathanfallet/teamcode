@@ -69,11 +69,10 @@ data class TodoItem(
 data class TodoProgress(val done: Int, val items: Int, val notes: Int)
 
 /**
- * What the Stop hook recorded about itself: `would_block` (observation mode: the stop it would have refused, with the reason),
- * `blocked` (the third stop without progress opened a wait) or `hook_error` (it failed open). The newest [TodoRules.MAX_HOOK_EVENTS] are kept.
+ * What the Stop hook recorded about itself: `blocked` (the third stop without progress opened a wait) or `hook_error` (it failed open). The newest [TodoRules.MAX_HOOK_EVENTS] are kept.
  */
 data class TodoHookEvent(val at: Long, val kind: String, val text: String) {
-    companion object { val kinds = listOf("would_block", "blocked", "hook_error") }
+    companion object { val kinds = listOf("blocked", "hook_error") }
 }
 
 data class TodoList(

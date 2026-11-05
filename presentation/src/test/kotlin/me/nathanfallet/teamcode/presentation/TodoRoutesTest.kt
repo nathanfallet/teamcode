@@ -133,12 +133,8 @@ class TodoRoutesTest {
         assertEquals("block", first.action)
         assertTrue(first.reason!!.startsWith("[TeamCode todo] 1 of 3 items done."), first.reason)
         assertEquals(listOf("a", "finish-pr-5", "b").sorted(), first.todo!!.items.map { it.id }.sorted())
-        // Observation: the same stop is recorded and passes.
-        val observed = stop("""{"phase":"verify","observe":true}""")
-        assertEquals(listOf("allow", true), listOf(observed.action, observed.wouldBlock))
-        assertEquals("would_block", observed.todo!!.hookEvents.single().kind)
         val failed = Serialization.json.decodeFromString<TodoSessionView>(call("/api/v1/todos/session/hook-error", "exec-token", """{"text":"The stop hook ran out of time (140 s)."}""").bodyAsText())
-        assertEquals(listOf("would_block", "hook_error"), failed.todo!!.hookEvents.map { it.kind })
+        assertEquals(listOf("hook_error"), failed.todo!!.hookEvents.map { it.kind })
         // Another credential (the reader, a key without todo:session) never reaches them.
         assertEquals(HttpStatusCode.Forbidden, call("/api/v1/todos/session/stop", "reader", """{}""").status)
         assertEquals(HttpStatusCode.Forbidden, call("/api/v1/todos/session/hook-error", "reader", """{"text":"x"}""").status)

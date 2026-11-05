@@ -141,7 +141,7 @@ data class TodoView(
     val updatedAt: Long,
     /** The id of the first `todo` item whose dependencies are done, or null. */
     val nextItemId: String? = null,
-    /** What the Stop hook recorded about itself, oldest first (`would_block`, `blocked`, `hook_error`). */
+    /** What the Stop hook recorded about itself, oldest first (`blocked`, `hook_error`). */
     val hookEvents: List<TodoHookEventView> = emptyList(),
 )
 
@@ -155,11 +155,11 @@ data class TodoStopItemInput(val itemId: String, val checks: List<TodoCheckRepor
 /**
  * One stop of the agent, asked to the server by `teamcode cloud todo-stop`. [phase] is `begin`, `verify` (with [items], the cheap
  * checks, and [orphans], the pull requests the session opened) or `settle` (every check of the done items). [background]: a
- * background agent of the session still runs. [observe]: the profile only observes (nothing is refused).
+ * background agent of the session still runs.
  */
 @Serializable
 data class TodoStopRequest(
-    val sessionId: String? = null, val phase: String = "begin", val background: Boolean = false, val observe: Boolean = false,
+    val sessionId: String? = null, val phase: String = "begin", val background: Boolean = false,
     val items: List<TodoStopItemInput> = emptyList(), val orphans: List<String> = emptyList(), val lastMessage: String? = null,
 )
 
@@ -168,7 +168,7 @@ data class TodoStopRequest(
  * `verify`), `settle` (run every check of the done items and ask again with `settle`) or `block` ([reason] is the message to give the agent).
  */
 @Serializable
-data class TodoStopView(val action: String, val todo: TodoView? = null, val reason: String? = null, val why: String? = null, val wouldBlock: Boolean = false, val escalated: Boolean = false)
+data class TodoStopView(val action: String, val todo: TodoView? = null, val reason: String? = null, val why: String? = null, val escalated: Boolean = false)
 
 /** The block a session is reminded of after a compaction or on resume: [text] is null while the session has no active list. */
 @Serializable

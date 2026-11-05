@@ -43,15 +43,15 @@ class TodoStopTest {
 
     @Test fun aStopThatIsNotAStopOrNotJsonIsLeftAlone() = runBlocking {
         val api = Api(mutableListOf())
-        assertNull(TodoStop.decide("not json", false, api, checks))
-        assertNull(TodoStop.decide("""{"hook_event_name":"SubagentStop"}""", false, api, checks))
+        assertNull(TodoStop.decide("not json", api, checks))
+        assertNull(TodoStop.decide("""{"hook_event_name":"SubagentStop"}""", api, checks))
         assertEquals(emptyList(), api.requests)
     }
 
     @Test fun aStopWithNothingToHoldBackAsksOnceAndPrintsNothing() = runBlocking {
         val api = Api(mutableListOf(TodoStopView("allow", why = "wait_open")))
         // stop_hook_active is true here: the hook never relaxes on it, the server decides.
-        assertNull(TodoStop.decide(stop, false, api, checks))
+        assertNull(TodoStop.decide(stop, api, checks))
         assertEquals(emptyList(), api.errors, "letting the stop pass is not a failure")
         assertEquals(1, api.requests.size)
         assertEquals("begin", api.requests.single().phase)
@@ -60,14 +60,14 @@ class TodoStopTest {
 
     @Test fun backgroundWorkIsReportedToTheServer() = runBlocking {
         val api = Api(mutableListOf(TodoStopView("allow", why = "background_task")))
-        TodoStop.decide("""{"hook_event_name":"Stop","background_tasks":[{"id":"t1"}]}""", false, api, checks)
+        TodoStop.decide("""{"hook_event_name":"Stop","background_tasks":[{"id":"t1"}]}""", api, checks)
         assertTrue(api.requests.single().background)
     }
 
     @Test fun itRunsTheCheapChecksAndTheDoingItemButNeverACommandOfATodoItemThenBlocksWithTheServersMessage() = runBlocking {
         val list = view(item("a", "doing", merged), item("b", "todo", merged), item("c", "todo", command), item("d", "done", merged))
         val api = Api(mutableListOf(TodoStopView("verify", list), TodoStopView("block", list, reason = "[TeamCode todo] 1 of 4 items done.")))
-        val out = TodoStop.decide(stop, false, api, checks)
+        val out = TodoStop.decide(stop, api, checks)
         assertEquals("""{"decision":"block","reason":"[TeamCode todo] 1 of 4 items done."}""", out)
         val verify = api.requests[1]
         assertEquals("verify", verify.phase)
@@ -80,25 +80,14 @@ class TodoStopTest {
 
     @Test fun theDoingItemRunsItsCommandToo() = runBlocking {
         val api = Api(mutableListOf(TodoStopView("verify", view(item("a", "doing", command))), TodoStopView("allow")))
-        TodoStop.decide(stop, false, api, checks)
+        TodoStop.decide(stop, api, checks)
         assertTrue(ran.any { it.contains("make verify") })
-    }
-
-    @Test fun inObservationItNeverPrintsABlockButTellsTheServer() = runBlocking {
-        val list = view(item("a", "doing", merged))
-        val api = Api(mutableListOf(TodoStopView("verify", list), TodoStopView("allow", list, why = "observation", wouldBlock = true)))
-        assertNull(TodoStop.decide(stop, true, api, checks))
-        assertEquals(emptyList(), api.errors)
-        assertTrue(api.requests.all { it.observe })
-        // Even if an older or odd server answered block, observation prints nothing.
-        val odd = Api(mutableListOf(TodoStopView("verify", list), TodoStopView("block", list, reason = "x")))
-        assertNull(TodoStop.decide(stop, true, odd, checks))
     }
 
     @Test fun whenEverythingIsClosedItRunsEveryCheckOfTheDoneItemsAndSettles() = runBlocking {
         val list = view(item("a", "done", merged, command), item("b", "done", merged))
         val api = Api(mutableListOf(TodoStopView("verify", list), TodoStopView("settle", list), TodoStopView("allow", list, why = "settled")))
-        assertNull(TodoStop.decide(stop, false, api, checks))
+        assertNull(TodoStop.decide(stop, api, checks))
         assertEquals(emptyList(), api.errors)
         assertEquals(listOf("begin", "verify", "settle"), api.requests.map { it.phase })
         assertEquals(listOf("a", "b"), api.requests[2].items.map { it.itemId })
@@ -108,11 +97,11 @@ class TodoStopTest {
 
     @Test fun aFailureLetsTheStopPassAndIsRecorded() = runBlocking {
         val api = Api(mutableListOf()).apply { fail = IllegalStateException("boom") }
-        assertNull(TodoStop.decide(stop, false, api, checks))
+        assertNull(TodoStop.decide(stop, api, checks))
         assertEquals(listOf("The stop hook failed (IllegalStateException)."), api.errors)
         // An empty script (the server answered nothing usable) is also a failure, not a block.
         val empty = Api(mutableListOf())
-        assertNull(TodoStop.decide(stop, false, empty, checks))
+        assertNull(TodoStop.decide(stop, empty, checks))
         assertEquals(1, empty.errors.size)
     }
 
@@ -136,12 +125,9 @@ class TodoStopTest {
         } finally { FileSystem.SYSTEM.deleteRecursively(directory) }
     }
 
-    @Test fun theHookIsInstalledOnStopWithItsOwnTimeoutAndObservationByDefault() {
+    @Test fun theHookIsInstalledOnStopWithItsOwnTimeoutAndNoMode() {
         val command = TodoStop.hookCommand("/opt/teamcode/teamcode", 4711, session, null)
-        assertEquals("'/opt/teamcode/teamcode' cloud todo-stop --relay http://127.0.0.1:4711 --session $session --mode observe", command)
-        assertTrue(TodoStop.hookCommand("/t", 1, session, null, "block").endsWith("--mode block"))
-        assertEquals("observe", TodoStop.modeOf(null)); assertEquals("observe", TodoStop.modeOf("nonsense")); assertEquals("block", TodoStop.modeOf(" Block "))
-        assertFailsWith<IllegalArgumentException> { TodoStop.hookCommand("/t", 1, session, null, "off") }
+        assertEquals("'/opt/teamcode/teamcode' cloud todo-stop --relay http://127.0.0.1:4711 --session $session", command)
         val stopHooks = Json.parseToJsonElement(assertNotNull(cloudHookSettings(emptyList(), todoStop = command))).jsonObject["hooks"]!!.jsonObject
         assertEquals(setOf("Stop"), stopHooks.keys)
         val entry = stopHooks["Stop"]!!.jsonArray.single().jsonObject["hooks"]!!.jsonArray.single().jsonObject

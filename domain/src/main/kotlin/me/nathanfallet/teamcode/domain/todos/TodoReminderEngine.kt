@@ -16,8 +16,6 @@ class TodoReminderEngine(
     private val store: TodoReminderStore,
     private val todos: TodoService,
     private val sessions: WaitSessions,
-    /** Without it the reminder only records `would_block`, like the hook's observation mode. */
-    private val enforce: Boolean = false,
 ) {
     /** One pass; the number of turn ends that were reminded or escalated. */
     suspend fun run(): Int {
@@ -31,7 +29,7 @@ class TodoReminderEngine(
             try {
                 val member = store.member(candidate.teamId, candidate.ownerId)?.takeUnless { it.disabled } ?: continue
                 val owner = Principal(member, WaitService.SYSTEM_CREDENTIAL, candidate.teamId)
-                val outcome = todos.remind(candidate.teamId, owner, candidate.sessionId, turn, enforce) { text, key -> sessions.deliver(owner, candidate.sessionId, text, key) }
+                val outcome = todos.remind(candidate.teamId, owner, candidate.sessionId, turn) { text, key -> sessions.deliver(owner, candidate.sessionId, text, key) }
                 if (outcome == TodoReminderOutcome.REMINDED || outcome == TodoReminderOutcome.ESCALATED) acted++
             } catch (error: CancellationException) { throw error } catch (_: Exception) { /* the next pass tries this turn again */ }
         }
