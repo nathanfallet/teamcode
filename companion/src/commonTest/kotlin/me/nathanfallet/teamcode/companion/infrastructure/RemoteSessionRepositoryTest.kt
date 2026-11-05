@@ -160,6 +160,19 @@ class RemoteSessionRepositoryTest {
         assertFalse("workflow" in requests.single().url.parameters["types"].orEmpty(), "an older server refuses a type it does not know")
     }
 
+    @Test fun theTodoEventIsAskedForOnlyWhenWantedAndCarriesTheSessionsCounter() = runTest {
+        sse(teamEvent(1, "cloud.todo", data = """{"sessionId":"s1","kind":"cloud","status":"active","done":4,"total":9}""") + "event: denied\ndata: {}\n\n")
+        val seen = mutableListOf<LiveUpdate<SessionChange>>()
+        assertFailsWith<CompanionException.AccessRevoked> { sessions.sessionChanges("a1", todos = true).collect { seen += it } }
+        assertTrue("cloud.todo" in requests.single().url.parameters["types"].orEmpty().split(","))
+        val change = seen.filterIsInstance<LiveUpdate.Item<SessionChange>>().single().value
+        assertEquals(SessionChange.TODO, change.type); assertEquals("s1", change.sessionId); assertEquals(4, change.todoDone); assertEquals(9, change.todoTotal)
+        requests.clear()
+        sse("event: denied\ndata: {}\n\n")
+        assertFailsWith<CompanionException.AccessRevoked> { sessions.sessionChanges("a1").collect { } }
+        assertFalse("cloud.todo" in requests.single().url.parameters["types"].orEmpty(), "an older server refuses a type it does not know")
+    }
+
     @Test fun theWaitingEventsAreAskedWhenWantedAndASessionSaysWhatItWaitsFor() = runTest {
         sse(teamEvent(1, "cloud.session.waiting", data = """{"reason":"question","requestId":"r1","eventSeq":4}""") +
             teamEvent(2, "cloud.session.answered", data = """{"requestId":"r1","behavior":"allow","reason":"answered"}""") + "event: denied\ndata: {}\n\n")

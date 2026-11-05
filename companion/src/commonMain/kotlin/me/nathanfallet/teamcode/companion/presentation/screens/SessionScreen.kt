@@ -122,6 +122,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.runtime.key
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.LiveState
+import me.nathanfallet.teamcode.companion.presentation.viewmodels.PanelTab
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.SessionNotice
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.SessionUiState
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.SessionViewModel
@@ -229,19 +230,30 @@ fun SessionScreen(
     val byId = remember(work) { work.subagents.associateBy { it.id } }
     val mode = currentSubagentPanelMode()
     val thread = state.thread?.takeIf { it in byId }
-    val layout = subagentLayout(mode, work.hasContent, state.panelOpen, state.panelHidden, thread != null)
+    val todo = state.todo
+    // The panel is there for the agents' work, and for the todo once the agent made one.
+    val layout = subagentLayout(mode, work.hasContent || todo != null, state.panelOpen, state.panelHidden, thread != null)
     val canStop = live?.stoppable == true && messaging && state.agentRuns
     val openThread = { id: String -> viewModel.openThread(id); if (mode == SubagentPanelMode.SCREEN || mode == SubagentPanelMode.OVERLAY) viewModel.closePanel() }
     val togglePanel = { if (mode == SubagentPanelMode.SCREEN || mode == SubagentPanelMode.OVERLAY) viewModel.togglePanel() else viewModel.togglePanelHidden() }
     val panel = @Composable { modifier: Modifier, onClose: (() -> Unit)?, onHide: (() -> Unit)? ->
         SubagentPanel(work, thread, state.stopping, canStop, now, onOpen = openThread,
             onMain = { viewModel.backToMain(); if (mode == SubagentPanelMode.SCREEN || mode == SubagentPanelMode.OVERLAY) viewModel.closePanel() },
-            onStop = viewModel::askStop, modifier = modifier, onClose = onClose, onHide = onHide)
+            onStop = viewModel::askStop, modifier = modifier, onClose = onClose, onHide = onHide,
+            todo = todo, tab = state.panelTab, onTab = viewModel::selectPanelTab, todoReconnecting = state.todoReconnecting,
+            onVerify = viewModel::verifyTodoAgainstPlan.takeIf { messaging }, onAddItem = viewModel::addTodoItem.takeIf { messaging })
+    }
+    // The header's counter: opens the panel on the Todo view (a hidden side panel is shown again).
+    val openTodo = {
+        viewModel.selectPanelTab(PanelTab.TODO)
+        val sided = mode == SubagentPanelMode.SIDE || mode == SubagentPanelMode.SIDE_AND_THREAD
+        if (sided) { if (state.panelHidden) viewModel.togglePanelHidden() } else if (!state.panelOpen) viewModel.togglePanel()
     }
     val backToMain = stringResource(Res.string.subagents_back_to_main)
     FileDropArea(enabled = messaging && state.files.canAttach, onDropped = viewModel::attach, modifier = Modifier.fillMaxSize()) { dropping ->
         Column(Modifier.fillMaxSize().background(colors.background).dismissKeyboardOnTap()) {
             NavBar(backLabel, onBack, state.session?.name.orEmpty()) {
+                if (todo != null) TodoBadge(todo, onClick = openTodo)
                 if (work.hasContent) RunningBadge(work, onClick = togglePanel)
                 SessionMenu(state, viewModel, onOpenArtifacts, menuItems)
             }

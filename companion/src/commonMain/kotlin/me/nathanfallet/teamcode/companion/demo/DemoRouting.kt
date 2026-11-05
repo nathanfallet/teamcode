@@ -1,5 +1,6 @@
 package me.nathanfallet.teamcode.companion.demo
 
+import me.nathanfallet.teamcode.companion.domain.repositories.TodoRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -144,7 +145,7 @@ class DemoAwareSessionRepository(private val real: SessionRepository, private va
     override suspend fun resume(accountId: String, sessionId: String) = of(accountId).resume(accountId, sessionId)
     override suspend fun rename(accountId: String, sessionId: String, name: String) = of(accountId).rename(accountId, sessionId, name)
     override suspend fun end(accountId: String, sessionId: String) = of(accountId).end(accountId, sessionId)
-    override fun sessionChanges(accountId: String, kinds: Set<SessionKind>, waiting: Boolean, waits: Boolean, renames: Boolean, workflows: Boolean) = of(accountId).sessionChanges(accountId, kinds, waiting, waits, renames, workflows)
+    override fun sessionChanges(accountId: String, kinds: Set<SessionKind>, waiting: Boolean, waits: Boolean, renames: Boolean, workflows: Boolean, todos: Boolean) = of(accountId).sessionChanges(accountId, kinds, waiting, waits, renames, workflows, todos)
 }
 
 class DemoAwareTranscriptRepository(private val real: TranscriptRepository, private val demo: TranscriptRepository) : TranscriptRepository {
@@ -231,4 +232,8 @@ class DemoAwareWaitRepository(private val real: WaitRepository, private val demo
     override suspend fun answer(accountId: String, waitId: String, action: String, values: Map<String, JsonElement>) = of(accountId).answer(accountId, waitId, action, values)
     override suspend fun inProgress(accountId: String) = of(accountId).inProgress(accountId)
     override suspend fun cancel(accountId: String, waitId: String) = of(accountId).cancel(accountId, waitId)
+}
+
+class DemoAwareTodoRepository(private val real: TodoRepository, private val demo: TodoRepository) : TodoRepository {
+    override suspend fun todo(accountId: String, sessionId: String) = (if (isDemo(accountId)) demo else real).todo(accountId, sessionId)
 }

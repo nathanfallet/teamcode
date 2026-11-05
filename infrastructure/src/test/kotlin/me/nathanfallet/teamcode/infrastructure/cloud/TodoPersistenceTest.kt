@@ -243,4 +243,34 @@ class TodoPersistenceTest {
         val inferenceOnly = credential(setOf(ServiceScope.INFERENCE), null)
         refusedWith("credential_scope") { a.get(inferenceOnly, own) }
     }
+
+    @Test @Timeout(240)
+    fun theFeedHearsOfAChangeAScreenShowsAndNotOfTheRemindersBookkeeping() = runBlocking {
+        AutomationWorld.run(98) { w ->
+            val store = SqlTodoStore(w.a.database)
+            val todos = TodoService(store, WaitBackedDropWaits(SqlWaitStore(w.a.database)))
+            val session = (w.a.sessions.create(w.member, null, CloudSessionDraft("Plan", w.profile.id, null, null, null, emptyMap(), null), null) as CloudCreateOutcome.Created).session.id
+            suspend fun events() = w.a.database.query {
+                TeamEvents.selectAll().where { (TeamEvents.type eq "cloud.todo") and (TeamEvents.subjectId eq session) }.orderBy(TeamEvents.seq to SortOrder.ASC).map { it[TeamEvents.data] }
+            }
+            assertEquals(emptyList(), events())
+
+            todos.create(w.member, session, "The plan", emptyList(), listOf(item("a"), item("b", "a")))
+            assertEquals(1, events().size, "a list created is announced")
+            assertContains(events().single(), "\"done\":0"); assertContains(events().single(), "\"total\":2"); assertContains(events().single(), "\"kind\":\"cloud\"")
+
+            // The reminder's bookkeeping is not shown by any screen: a quiet turn publishes nothing.
+            store.mutate(w.member.teamId, session) { it.copy(lastHookAt = 5L, reminderSeq = 3L) to Unit }
+            assertEquals(1, events().size)
+
+            todos.start(w.member, session, "a", false, null)
+            assertEquals(2, events().size, "an item started is announced")
+            todos.add(w.member, session, item("extra"), "A migration is needed")
+            assertContains(events().last(), "\"total\":3")
+            // The owner hears it; the event names the session only by its counter, never an item or a proof.
+            val row = w.a.database.query { TeamEvents.selectAll().where { (TeamEvents.type eq "cloud.todo") and (TeamEvents.subjectId eq session) }.first() }
+            assertEquals(w.member.member.id, row[TeamEvents.ownerId])
+            assertFalse("Item a" in row[TeamEvents.data])
+        }
+    }
 }

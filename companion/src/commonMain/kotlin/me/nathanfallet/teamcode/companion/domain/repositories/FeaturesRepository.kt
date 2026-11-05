@@ -44,4 +44,8 @@ object Features {
     const val WORKFLOWS = "workflows.v1"
     /** The feed carries `cloud.workflow.run.updated`: asked for only then (an older server refuses a type it does not know). */
     const val WORKFLOWS_LIVE = "workflows.live.v1"
+    /** Session todos (`/todos/session`): the agent's list, read by the session screen. */
+    const val TODOS = "todos.v1"
+    /** The feed carries `cloud.todo`: asked for only then (an older server refuses a type it does not know). */
+    const val TODOS_LIVE = "todos.live.v1"
 }

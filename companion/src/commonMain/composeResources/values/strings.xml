@@ -1246,4 +1246,30 @@
     <string name="office_close_panel">Close the session</string>
     <string name="office_waiting_permission">Asks permission to use a tool</string>
     <string name="office_waiting_question">Has a question for you</string>
+
+    <!-- Session todo (todos.v1): the panel's Todo view, its counter and shortcuts -->
+    <string name="todo_tab">Todo</string>
+    <string name="agents_tab">Agents</string>
+    <string name="todo_reference">Plan</string>
+    <string name="todo_current">Now: %1$s</string>
+    <string name="todo_done_when">Done when: %1$s</string>
+    <string name="todo_last_proof">Last proof, %1$s: %2$s</string>
+    <string name="todo_added_along">Added along the way</string>
+    <string name="todo_unverified">Not verified</string>
+    <string name="todo_attested_flag">More than a third of the points rest on the agent's word alone.</string>
+    <string name="todo_hook_errors">Stop hook errors</string>
+    <string name="todo_reconnecting">Reconnecting: the list may be late.</string>
+    <string name="todo_status_done">Finished</string>
+    <string name="todo_status_abandoned">Abandoned</string>
+    <string name="todo_state_todo">To do</string>
+    <string name="todo_state_doing">In progress</string>
+    <string name="todo_state_done">Done</string>
+    <string name="todo_state_drop_requested">Drop requested</string>
+    <string name="todo_state_dropped">Dropped</string>
+    <string name="todo_counter_description">Todo: %1$d of %2$d done. Open the list.</string>
+    <string name="todo_verify_plan">Verify against the plan</string>
+    <string name="todo_add_item">Add an item…</string>
+    <string name="todo_add_hint">What should the agent add?</string>
+    <string name="todo_add_action">Ask the agent to add it</string>
+    <string name="todo_panel_title">Todo</string>
 </resources>

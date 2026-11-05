@@ -12,6 +12,7 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import me.nathanfallet.teamcode.companion.domain.models.SessionTodo
 import me.nathanfallet.teamcode.companion.domain.models.TranscriptEvent
 import me.nathanfallet.teamcode.companion.domain.models.TranscriptPage
 
@@ -67,6 +68,10 @@ data class SessionActivity(
     }
 }
 
+/** The session's todo is the checklist when it has one; the transcript's `TodoWrite` steps are only for an agent without a todo. */
+internal fun SessionActivity.withTodo(todo: SessionTodo?): SessionActivity =
+    if (todo == null || todo.total == 0) this else copy(steps = Steps(todo.done, todo.total, todo.current?.name))
+
 /**
  * The activity of the sessions the member looks at, read one session at a time when asked ([peek]) and kept a little:
  * hovering an agent costs one request, never one per agent. A session read less than [freshMillis] ago is not read again,
@@ -78,6 +83,8 @@ class ActivityPeeks(
     private val now: () -> Long,
     private val freshMillis: Long = 20_000,
     private val capacity: Int = 64,
+    /** The session's todo, when the server has one: its counter replaces the transcript's `TodoWrite` steps (null: no todo to read). */
+    private val todo: (suspend (accountId: String, sessionId: String) -> SessionTodo?)? = null,
 ) {
     private class Entry(val at: Long, val activity: SessionActivity?)
 
@@ -98,7 +105,7 @@ class ActivityPeeks(
         if (!reading.add(key)) return
         scope.launch {
             val activity = try {
-                SessionActivity.of(load(accountId, sessionId).events)
+                SessionActivity.of(load(accountId, sessionId).events).withTodo(readTodo(accountId, sessionId))
             } catch (cancelled: CancellationException) {
                 reading.remove(key)
                 throw cancelled
@@ -113,6 +120,15 @@ class ActivityPeeks(
             }
             activities.value = entries.value.mapNotNull { (k, entry) -> entry.activity?.let { k.substringAfter('/') to it } }.toMap()
         }
+    }
+
+    /** The todo, read beside the transcript: a failure here never loses what the transcript showed. */
+    private suspend fun readTodo(accountId: String, sessionId: String): SessionTodo? = try {
+        todo?.invoke(accountId, sessionId)
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (_: Exception) {
+        null
     }
 
     /** Forgets everything read: another account is shown. */

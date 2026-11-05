@@ -6,6 +6,7 @@ import me.nathanfallet.teamcode.domain.cloud.CloudSessionState
 import me.nathanfallet.teamcode.domain.cloud.DesiredState
 import me.nathanfallet.teamcode.domain.team.Member
 import me.nathanfallet.teamcode.domain.team.Principal
+import me.nathanfallet.teamcode.domain.team.TeamEventType
 import me.nathanfallet.teamcode.domain.team.TeamFailure
 import me.nathanfallet.teamcode.domain.todos.*
 import me.nathanfallet.teamcode.domain.waits.WaitStatus
@@ -41,12 +42,14 @@ class SqlTodoStore(private val database: Database) : TodoStore, TodoReminderStor
             it[status] = list.status.wire; it[stall] = list.stall; it[createdAt] = list.createdAt; it[updatedAt] = list.updatedAt
         }
         list.items.forEachIndexed { index, item -> insertItem(list.sessionId, index, item) }
+        publish(list)
     }
 
     override suspend fun <T> mutate(teamId: String, sessionId: String, change: (TodoList) -> Pair<TodoList, T>): T = database.query {
         val before = read(teamId, sessionId, lock = true) ?: throw TeamFailure("todo_not_found", 404, "This session has no todo.")
         val (after, value) = change(before)
         write(before, after)
+        if (visible(before) != visible(after)) publish(after)
         value
     }
 
@@ -154,6 +157,19 @@ class SqlTodoStore(private val database: Database) : TodoStore, TodoReminderStor
         it[SessionTodoItems.status] = item.status.wire; it[SessionTodoItems.proof] = item.proof?.let(TodoJson::proof); it[SessionTodoItems.notes] = TodoJson.notes(item.notes)
         it[SessionTodoItems.dropReason] = item.dropReason; it[SessionTodoItems.dropWaitId] = item.dropWaitId
         it[SessionTodoItems.links] = item.links.takeIf { it.isNotEmpty() }?.let(TodoJson::links)
+    }
+
+    /** What a screen shows of a list: the reminder bookkeeping (`lastHookAt`, `reminderSeq`) is not part of it, so a quiet turn publishes nothing. */
+    private fun visible(list: TodoList) = list.copy(lastHookAt = null, reminderSeq = null, updatedAt = 0)
+
+    /** `cloud.todo` on the feed, last in the transaction of a visible change (see [publishTeamEvent]); it belongs to the session's owner and carries the counter and the session's kind. */
+    private fun JdbcTransaction.publish(list: TodoList) {
+        val session = CloudSessions.select(CloudSessions.ownerId, CloudSessions.kind).where { CloudSessions.id eq list.sessionId }.single()
+        val counted = list.items.filter { it.status != TodoItemStatus.DROPPED }
+        publishTeamEvent(list.teamId, TeamEventType.TODO_UPDATED, list.sessionId, session[CloudSessions.ownerId], buildJsonObject {
+            put("sessionId", list.sessionId); put("kind", session[CloudSessions.kind]); put("status", list.status.wire)
+            put("done", counted.count { it.status == TodoItemStatus.DONE }); put("total", counted.size)
+        }, list.updatedAt)
     }
 
     /** Writes only what changed: the list row, new items, and the items whose content or place moved. Nothing is deleted. */

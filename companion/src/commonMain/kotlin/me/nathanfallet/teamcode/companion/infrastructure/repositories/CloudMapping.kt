@@ -88,6 +88,8 @@ internal fun TeamEventView.sessionChange(): SessionChange? {
         requestId = data.text("requestId"),
         waitId = if (type in SessionChange.WAIT_TYPES) subjectId else null,
         name = if (type == SessionChange.RENAMED) data.text("name") else null,
+        todoDone = if (type == SessionChange.TODO) data["done"].int() else null,
+        todoTotal = if (type == SessionChange.TODO) data["total"].int() else null,
     )
 }
 

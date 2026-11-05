@@ -26,6 +26,9 @@ import me.nathanfallet.teamcode.companion.domain.models.LiveUpdate
 import me.nathanfallet.teamcode.companion.domain.models.TranscriptEvent
 import me.nathanfallet.teamcode.companion.domain.models.TurnPhase
 import me.nathanfallet.teamcode.companion.domain.models.PendingMessage
+import me.nathanfallet.teamcode.companion.domain.models.SessionTodo
+import me.nathanfallet.teamcode.companion.domain.usecases.todos.FollowTodoUseCase
+import me.nathanfallet.teamcode.companion.domain.usecases.todos.TodoShortcuts
 import me.nathanfallet.teamcode.companion.domain.models.SessionGroup
 import me.nathanfallet.teamcode.companion.domain.models.SessionState
 import me.nathanfallet.teamcode.companion.domain.repositories.AccountRepository
@@ -40,6 +43,9 @@ import me.nathanfallet.teamcode.companion.domain.usecases.transcript.FollowTrans
 import me.nathanfallet.teamcode.companion.domain.usecases.transcript.LoadTranscriptUseCase
 import me.nathanfallet.teamcode.companion.domain.usecases.transcript.Transcript
 import me.nathanfallet.teamcode.companion.presentation.navigation.SessionRoute
+
+/** The panel's two views: the subagents and background work, or the agent's todo. */
+enum class PanelTab { AGENTS, TODO }
 
 enum class LiveState { CONNECTING, LIVE, RECONNECTING, ENDED, STOPPED }
 
@@ -125,6 +131,12 @@ data class SessionUiState(
     val confirmStop: String? = null,
     /** Tasks asked to stop that the runner still reports. */
     val stopping: Set<String> = emptySet(),
+    /** The session's todo (`todos.v1`), kept current by the feed (`todos.live.v1`); null until the agent creates one. */
+    val todo: SessionTodo? = null,
+    /** The todo is shown from a feed that dropped and is reconnecting: it may be late. */
+    val todoReconnecting: Boolean = false,
+    /** The panel's selected view; the todo shows by itself while there is nothing else to list. */
+    val panelTab: PanelTab = PanelTab.AGENTS,
 ) {
     /** The session's agent runs (ready or active): only then has it background tasks. */
     val agentRuns: Boolean get() = session?.state == SessionState.READY || session?.state == SessionState.ACTIVE
@@ -171,6 +183,8 @@ class SessionViewModel(
     private val answerPermission: AnswerPermissionUseCase,
     /** Null when the app does not send files: no paperclip, messages without files as before. */
     filesUseCase: SessionFilesUseCase? = null,
+    /** Null when the app does not read todos: no Todo view, no counter. */
+    private val followTodo: FollowTodoUseCase? = null,
 ) : ViewModel() {
     private val state = MutableStateFlow(SessionUiState())
     val uiState: StateFlow<SessionUiState> = state.asStateFlow()
@@ -180,12 +194,24 @@ class SessionViewModel(
     private val loading = Mutex()
     private var follow: Job? = null
     private var header: Job? = null
+    private var todoJob: Job? = null
     private var started = false
 
     fun start() {
         started = true
         if (!state.value.renames) viewModelScope.launch { if (control.supportsRename(route.accountId)) state.update { it.copy(renames = true) } }
         files?.load()
+        if (followTodo != null && todoJob?.isActive != true) todoJob = viewModelScope.launch {
+            try {
+                followTodo(route.accountId, route.sessionId).collect { update ->
+                    state.update { if (update.reconnecting) it.copy(todoReconnecting = true) else it.copy(todo = update.todo ?: it.todo, todoReconnecting = false) }
+                }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Exception) {
+                // The list is a companion to the conversation: a failing feed leaves what was read, and the conversation's own stream tells the rest.
+            }
+        }
         // The transcript does not carry pauses, resumes or a failed pod: the header is read again while visible.
         if (header?.isActive != true) header = viewModelScope.launch {
             while (true) {
@@ -247,6 +273,7 @@ class SessionViewModel(
         started = false
         follow?.cancel(); follow = null
         header?.cancel(); header = null
+        todoJob?.cancel(); todoJob = null
         state.update { if (it.live == LiveState.ENDED) it else it.copy(live = LiveState.STOPPED) }
     }
 
@@ -353,6 +380,25 @@ class SessionViewModel(
     /** Shows the subagent [id]'s thread in place of the main agent's (or beside it, on an extra-large window). */
     fun openThread(id: String) = state.update { it.copy(thread = id) }
     fun backToMain() = state.update { it.copy(thread = null) }
+    fun selectPanelTab(tab: PanelTab) = state.update { it.copy(panelTab = tab) }
+
+    /** "Verify against the plan": an ordinary message to the session, as if typed. */
+    fun verifyTodoAgainstPlan() = sendShortcut(TodoShortcuts.VERIFY)
+
+    /** "Add an item…": the member's text, wrapped as the agent is asked to write it. */
+    fun addTodoItem(text: String) { if (text.isNotBlank()) sendShortcut(TodoShortcuts.add(text)) }
+
+    private fun sendShortcut(text: String) {
+        val message = try {
+            sendMessage.draft(text, emptyList())
+        } catch (error: IllegalArgumentException) {
+            state.update { it.copy(notice = SessionNotice.Text(error.userMessage())) }
+            return
+        }
+        state.update { it.copy(pending = it.pending + message, notice = null) }
+        deliver(message)
+    }
+
     fun togglePanel() = state.update { it.copy(panelOpen = !it.panelOpen) }
     fun closePanel() = state.update { it.copy(panelOpen = false) }
     fun togglePanelHidden() = state.update { it.copy(panelHidden = !it.panelHidden) }

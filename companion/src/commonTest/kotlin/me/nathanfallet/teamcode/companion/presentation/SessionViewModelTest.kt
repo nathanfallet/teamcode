@@ -50,6 +50,18 @@ import me.nathanfallet.teamcode.companion.presentation.viewmodels.SessionNotice
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.SessionUiState
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.SessionViewModel
 import kotlin.test.*
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.flow.flow
+import me.nathanfallet.teamcode.companion.domain.models.SessionChange
+import me.nathanfallet.teamcode.companion.domain.models.SessionTodo
+import me.nathanfallet.teamcode.companion.domain.models.TodoItem
+import me.nathanfallet.teamcode.companion.domain.models.TodoItemState
+import me.nathanfallet.teamcode.companion.domain.repositories.TodoRepository
+import me.nathanfallet.teamcode.companion.domain.usecases.sessions.SessionFeed
+import me.nathanfallet.teamcode.companion.domain.usecases.todos.FollowTodoUseCase
+import me.nathanfallet.teamcode.companion.domain.usecases.todos.TodoShortcuts
+import me.nathanfallet.teamcode.companion.presentation.viewmodels.PanelTab
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class SessionViewModelTest {
@@ -67,16 +79,61 @@ class SessionViewModelTest {
     @BeforeTest fun setUp() = Dispatchers.setMain(dispatcher)
     @AfterTest fun tearDown() = Dispatchers.resetMain()
 
-    private fun viewModel(): SessionViewModel {
+    private fun viewModel(todo: FollowTodoUseCase? = null): SessionViewModel {
         val features = FakeFeatures()
         val accounts = InMemoryAccountRepository(listOf(account("a1")))
         val guard = AccountGuard(RefreshAccountUseCase(FakeAuthRepository(), accounts, credentials(), FixedClock()))
         return SessionViewModel(
             SessionRoute("a1", "s1"), GetSessionUseCase(sessions, guard), LoadTranscriptUseCase(transcripts, features, guard), FollowTranscriptUseCase(transcripts, guard),
             SendMessageUseCase(sessions, features, guard, SequenceIds()), ControlSessionUseCase(sessions, guard, SequenceIds(), features), accounts,
-            AnswerPermissionUseCase(sessions, features, guard, SequenceIds()),
+            AnswerPermissionUseCase(sessions, features, guard, SequenceIds()), followTodo = todo,
         )
     }
+
+    private val todoFeatures = FakeFeatures().also { it.features += setOf("todos.v1", "todos.live.v1") }
+    private val todoRepository = object : TodoRepository {
+        var list: SessionTodo? = null
+        override suspend fun todo(accountId: String, sessionId: String) = list
+    }
+    private fun followTodo(): FollowTodoUseCase {
+        val accounts = InMemoryAccountRepository(listOf(account("a1")))
+        val guard = AccountGuard(RefreshAccountUseCase(FakeAuthRepository(), accounts, credentials(), FixedClock()))
+        return FollowTodoUseCase(todoRepository, SessionFeed(sessions, todoFeatures, CoroutineScope(dispatcher)), todoFeatures, guard)
+    }
+    private fun todoOf(done: Int, total: Int) = SessionTodo(
+        "s1", "Plan", null, "active", (1..total).map { TodoItem("i$it", "Point $it", "", "Done when $it", if (it <= done) TodoItemState.DONE else TodoItemState.TODO, false, null, null, false, null) }, 1,
+    )
+
+    @Test fun theTodoFollowsTheFeedAndTheTwoShortcutsSendOrdinaryMessages() = runTest(dispatcher) {
+        todoRepository.list = todoOf(1, 3)
+        sessions.changes = flow {
+            emit(LiveUpdate.Opened(false))
+            todoGate.receive()
+            todoRepository.list = todoOf(2, 3)
+            emit(LiveUpdate.Item(SessionChange(1, SessionChange.TODO, "s1", "m1", 1, null, null, todoDone = 2, todoTotal = 3)))
+            awaitCancellation()
+        }
+        val model = viewModel(followTodo())
+        model.start(); settle()
+        assertEquals(1, model.uiState.value.todo?.done)
+        todoGate.send(Unit); settle()
+        assertEquals(2, model.uiState.value.todo?.done, "a cloud.todo event reads the list again, never the transcript")
+        assertEquals(PanelTab.AGENTS, model.uiState.value.panelTab)
+        model.selectPanelTab(PanelTab.TODO)
+        assertEquals(PanelTab.TODO, model.uiState.value.panelTab)
+
+        model.verifyTodoAgainstPlan(); settle()
+        model.addTodoItem("   "); settle()
+        model.addTodoItem("Update the changelog"); settle()
+        val sent = sessions.calls.filter { it.startsWith("send s1 ") }
+        assertEquals(2, sent.size, "a blank item sends nothing")
+        assertTrue(sent[0].startsWith("send s1 ${TodoShortcuts.VERIFY} "), sent[0])
+        assertTrue(sent[1].startsWith("send s1 ${TodoShortcuts.add("Update the changelog")} "), sent[1])
+        assertEquals(2, model.uiState.value.pending.size, "shown at once, as a typed message is")
+        model.stop()
+    }
+
+    private val todoGate = Channel<Unit>(Channel.UNLIMITED)
 
     @Test fun aWorkingSessionWhoseTurnStartedBeforeTheLoadedPageIsRunning() {
         val noTurn = Transcript(listOf(TranscriptEvent.Status(5, 0, "claude", "opus", null)))
