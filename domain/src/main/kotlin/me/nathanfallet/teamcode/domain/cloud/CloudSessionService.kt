@@ -173,6 +173,7 @@ class CloudSessionService(
         val actor = actor(principal, null)
         AgentRunService.identifier(draft.runId)
         validate(CloudSessionDraft(draft.name, "", null, null, null, draft.labels, null))
+        LabelRules.requireUnreserved(draft.labels)
         if (draft.agentKind !in REMOTE_AGENTS) throw TeamFailure("invalid_agent", 400, "Use the agent claude or codex.")
         val run = store.localRun(principal.teamId, draft.runId)
         if (run == null || run.memberId != principal.member.id || !run.running)

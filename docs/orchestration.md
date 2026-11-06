@@ -18,7 +18,7 @@ Capability: `cloud.orchestration.v1` (advertised while cloud sessions are on). S
 | A child's inference scheduled as background work (the runner's background workload route) | Implemented |
 | Audit `cloud.session.child_created` (details: the parent id) and `cloud.session.child_terminated` | Implemented |
 | Companion tree view of a session and its children | Planned |
-| Remote sessions (on a member's device) as orchestrators or children | Not planned in this version: children are always cloud sessions, and a remote session has no profile to enable it |
+| Remote sessions (on a member's device) and local sessions (`teamcode run`) as orchestrators or children | Not planned in this version: children are always cloud sessions, and neither kind has a profile to enable it |
 | A root reaching its grandchildren directly | Not planned (see [Confinement](#confinement)) |
 | Per-profile override of the member's running and retained caps for children | Planned |
 
@@ -40,14 +40,14 @@ Every rule of an ordinary creation also applies to a child, for the parent's own
 ## Data
 
 - `cloud_sessions.parent_session_id` (nullable), `root_session_id` (null for a top-level session, which is its own root), `depth` (0 at the top), fixed at creation, written only by the orchestration service. No foreign key: a parent's row may be purged before its children's.
-- Labels: every child carries `teamcode.parent=<parent id>`, so `teamcode cloud list --label teamcode.parent=<id>` (and `GET /cloud/sessions?label=teamcode.parent=<id>`) lists a parent's children for its owner. The key is **reserved**: a creation request (cloud or remote) that sets it is refused with `400 reserved_label`. No other key is reserved; `teamcode.*` keys stay free as before. A child's own labels count toward the 16 labels with it.
+- Labels: every child carries `teamcode.parent=<parent id>`, so `teamcode cloud list --label teamcode.parent=<id>` (and `GET /cloud/sessions?label=teamcode.parent=<id>`) lists a parent's children for its owner. The key is **reserved**: a creation request (cloud, remote, or the local session of a `teamcode run`) that sets it is refused with `400 reserved_label`. No other key is reserved; `teamcode.*` keys stay free as before. A child's own labels count toward the 16 labels with it.
 - `waits.child_session_id`: the child a `child` wait follows.
 
 ## Execution credential
 
 `sessions:children` is added to a session's `tcex_` credential (`ORCHESTRATOR_SCOPES` = the execution scopes + `sessions:children`) only when its pinned profile version has `orchestration.enabled` and the session's depth is below `maxDepth`. The scope is held by `tcex_` credentials only: it is never offered when creating a service key, and a key that carried it would be refused (`403 credential_scope`) because it is bound to no session. An interactive login or a `cloud:write` key gets `403 credential_scope` on `/cloud/children`: a member manages the children, which are their own sessions, through the ordinary session routes.
 
-A remote session's host credential (`REMOTE_SESSION_SCOPES`) never carries it.
+The host credential of a remote or local session (`REMOTE_SESSION_SCOPES`) never carries it.
 
 ## Routes
 
@@ -133,7 +133,7 @@ The agent is told (Claude Code `--append-system-prompt`, Codex `developer_instru
 - Children count toward the owner's running and retained caps, which an orchestrator reaches quickly with the defaults (2 running).
 - A child created by an orchestrator whose profile requires GitHub gets the owner's GitHub access like any session the owner creates; the parent's credential acts as the owner.
 - A transfer of a parent does not move its children: they stay with their owner, and the new owner's parent cannot reach them (the owner check fails).
-- Remote sessions neither orchestrate nor become children.
+- Remote and local sessions neither orchestrate nor become children: their host credential (`REMOTE_SESSION_SCOPES`) never carries `sessions:children`.
 
 ## Evidence
 

@@ -167,6 +167,8 @@ class OrchestrationServiceTest {
     @Test fun membersCannotSetTheReservedLabel() {
         val sessions = CloudSessionService(sessionStore, access = access)
         failure("reserved_label") { sessions.create(Principal(ownerMember, "login", "team"), null, CloudSessionDraft("X", "p", null, null, null, mapOf(LabelRules.PARENT_LABEL to "parent"), null), null) }
+        // A local session of `teamcode run` takes the launch's labels: the key is refused there too.
+        failure("reserved_label") { sessions.createLocal(Principal(ownerMember, "login", "team"), LocalSessionDraft("0b1e7f4c-2a51-4d3e-9c8a-6f0d2e4b7a19", "X", "claude", mapOf(LabelRules.PARENT_LABEL to "parent"))) }
     }
 
     @Test fun messagesInterruptsAndTerminationActOnTheChild() = runBlocking {

@@ -15,7 +15,7 @@ class SqlOrchestrationStore(private val database: Database) : OrchestrationStore
     }
 
     /**
-     * `cloud_session_parent (parent_session_id, created_at, id)`: the parent's children in index order from the cursor, at most
+     * `cloud_session_parent (parent_session_id, team_id, created_at, id)`: the parent's children in index order from the cursor, at most
      * [limit] + 1 rows, then their labels in one `inList` read. No sort step, no read of another parent's children.
      */
     override suspend fun children(teamId: String, parentId: String, beforeId: String?, limit: Int): CloudSessionPage = database.query {
