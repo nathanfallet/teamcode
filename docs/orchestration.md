@@ -10,7 +10,7 @@ Capability: `cloud.orchestration.v1` (advertised while cloud sessions are on). S
 | --- | --- |
 | Profile switch `orchestration {enabled, maxActiveChildren, maxDepth, childProfileIds}` on each published profile version (`PUT/POST /cloud/profiles`), validated | Implemented |
 | Columns `parent_session_id`, `root_session_id`, `depth` on `cloud_sessions`, indexes `cloud_session_parent` and `cloud_session_parent_state`; `child_session_id` on `waits` with `wait_child` (reviewed generated migrations) | Implemented |
-| `parentSessionId`, `rootSessionId`, `depth` in the session view (owner, administrators, `team:read`); the label `teamcode.parent=<parent id>` on every child | Implemented |
+| `parentSessionId`, `rootSessionId`, `depth` in the session view, which only its owner reads; the label `teamcode.parent=<parent id>` on every child | Implemented |
 | The `sessions:children` scope on the execution credential of a session whose pinned profile version enables orchestration below its maximum depth | Implemented |
 | Routes `/api/v1/cloud/children` (list, start, read, message, transcript, interrupt, terminate, wait), confined to the calling session's direct children, OpenAPI reference, typed client | Implemented |
 | Child waits: `POST /cloud/children/{id}/wait`, resolved where the child's turn ends, its permission request opens, it is paused or it ends; woken by the existing waits worker | Implemented |
@@ -72,7 +72,7 @@ Errors: `credential_scope` (403), `orchestration_disabled` (403), `child_profile
 
 Every call resolves the calling session from the credential (`cloud_inference_credentials`), checks again that it is a cloud session owned by the credential's member whose profile version still allows orchestration at its depth, then accepts only a session whose `parent_session_id` is that session **and** whose owner is that member. Anything else (the parent itself, a sibling, a sibling's child, a grandchild, another session of the member, an unknown id) is the same `404`.
 
-**Decision: direct children only.** A root does not reach its grandchildren. A grandchild is started, read and woken by its own parent (a child that orchestrates), and that child's turn end wakes the root in turn. This keeps the check to one equality on a column of the row already read, makes every relation one level deep to reason about, and lets a child orchestrator stay responsible for what it started. The relation is still visible to the owner and administrators (`rootSessionId`, `depth`, the labels).
+**Decision: direct children only.** A root does not reach its grandchildren. A grandchild is started, read and woken by its own parent (a child that orchestrates), and that child's turn end wakes the root in turn. This keeps the check to one equality on a column of the row already read, makes every relation one level deep to reason about, and lets a child orchestrator stay responsible for what it started. The relation is still visible to the owner, who reads every session of the tree (`rootSessionId`, `depth`, the labels).
 
 ## Waking the orchestrator
 
