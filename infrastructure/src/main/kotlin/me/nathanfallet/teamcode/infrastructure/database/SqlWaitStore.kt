@@ -58,7 +58,7 @@ class SqlWaitStore(private val database: Database, private val cipher: Credentia
             it[Waits.idempotencyKey] = idempotencyKey; it[createdAt] = wait.createdAt
             wait.timer?.let { timer ->
                 it[dueAt] = timer.dueAt; it[eventSource] = timer.eventSource?.wire; it[onTimeout] = timer.onTimeout?.wire
-                it[resumeMessage] = timer.resumeMessage; it[eventTokenHash] = timer.tokenHash
+                it[resumeMessage] = timer.resumeMessage; it[eventTokenHash] = timer.tokenHash; it[childSessionId] = timer.childSessionId
             }
         }
         audit(auditTeam, auditActor, "wait.created", wait.id, null, credential, related = wait.assigneeId.takeIf { it != auditActor })
@@ -66,6 +66,50 @@ class SqlWaitStore(private val database: Database, private val cipher: Credentia
         // Notifications (push, mail) are a separate piece of work; this is the place to start them.
         publish(TeamEventType.WAIT_CREATED, stored, stored.createdAt)
         return WaitChange(stored, true)
+    }
+
+    override suspend fun createChildWait(actor: Principal, wait: Wait, idempotencyKey: String?, limit: Int): WaitChange = database.query {
+        requireCurrent(this, actor)
+        val childId = requireNotNull(wait.timer?.childSessionId) { "A child wait names its child." }
+        // Lock order: the child's row, then the parent's (insertWait), then the team cursor (the feed): the child's own writes take
+        // its row first and the cursor last, and nothing locks a parent before its child.
+        val child = CloudSessions.select(CloudSessions.state, CloudSessions.desiredState, CloudSessions.awaitingReason, CloudSessions.failureCode, CloudSessions.terminatedReason)
+            .where { (CloudSessions.id eq childId) and (CloudSessions.teamId eq wait.teamId) }.forUpdate().singleOrNull() ?: throw TeamFailure("not_found", 404, "Session not found.")
+        val settled = settled(childId, child)
+        val change = insertWait(actor.teamId, actor.member.id, actor.tokenId, wait, idempotencyKey, limit)
+        if (!change.changed || settled == null) return@query change
+        // Already settled: resolved now, with no wake message, since the agent that asked reads the outcome in this answer.
+        val events = with(ChildWaits) { resolve(childId, settled.first, settled.second, nowMillis(), wake = false) }
+        if (events.isNotEmpty()) publishTeamEvents(wait.teamId, events)
+        WaitChange(read(wait.teamId, wait.id)!!, true)
+    }
+
+    /**
+     * What the child already is, under its row lock: ended, waiting for a person, paused with nothing to do, or idle (its last turn
+     * marker is an end, or it never had one, and no message waits for it); null while a turn runs or a message will start one.
+     * Two indexed reads at most: the last `turn` event (`cloud_event_type (session_id, type, seq)`) and one pending input
+     * (`cloud_input_session_status (session_id, status, created_at)`).
+     */
+    private fun JdbcTransaction.settled(childId: String, row: ResultRow): Pair<String, Map<String, JsonElement>>? {
+        val state = row[CloudSessions.state]
+        val desired = row[CloudSessions.desiredState]
+        if (state in setOf("terminated", "failed") || desired == "terminated")
+            return WaitService.CHILD_ENDED to buildMap {
+                put("state", JsonPrimitive(if (state in setOf("terminated", "failed")) state else "terminating"))
+                (row[CloudSessions.failureCode] ?: row[CloudSessions.terminatedReason])?.let { put("reason", JsonPrimitive(it.take(64))) }
+            }
+        if (row[CloudSessions.awaitingReason] != null && desired == "running" && state in setOf("ready", "active"))
+            return WaitService.CHILD_WAITING to mapOf("reason" to JsonPrimitive(row[CloudSessions.awaitingReason]!!))
+        val pending = CloudSessionInputs.select(CloudSessionInputs.id).where {
+            (CloudSessionInputs.sessionId eq childId) and (CloudSessionInputs.status inList listOf(me.nathanfallet.teamcode.domain.cloud.CloudInputStatus.QUEUED.wire, me.nathanfallet.teamcode.domain.cloud.CloudInputStatus.DELIVERED.wire))
+        }.limit(1).any()
+        if (pending) return null
+        val lastTurn = CloudSessionEvents.select(CloudSessionEvents.data).where { (CloudSessionEvents.sessionId eq childId) and (CloudSessionEvents.type eq me.nathanfallet.teamcode.domain.cloud.CloudEventType.TURN.wire) }
+            .orderBy(CloudSessionEvents.seq to SortOrder.DESC).limit(1).singleOrNull()?.get(CloudSessionEvents.data)
+            ?.let { (Json.parseToJsonElement(it) as? JsonObject)?.get("phase")?.let { p -> (p as? JsonPrimitive)?.contentOrNull } }
+        if (lastTurn == "started") return null
+        if (state == "paused") return WaitService.CHILD_PAUSED to mapOf("state" to JsonPrimitive(state))
+        return WaitService.CHILD_TURN_ENDED to mapOf("phase" to JsonPrimitive(lastTurn?.take(32) ?: "idle"))
     }
 
     override suspend fun find(teamId: String, id: String): Wait? = database.query { read(teamId, id) ?: sessionWait(teamId, id) }
@@ -205,7 +249,7 @@ class SqlWaitStore(private val database: Database, private val cipher: Credentia
             row[Waits.title], row[Waits.body], WaitJson.refs(row[Waits.refs]), WaitJson.fields(row[Waits.fieldDefs]), WaitJson.actions(row[Waits.actions]),
             answered?.let { WaitAnswer(it, WaitJson.values(row[Waits.answerValues]), row[Waits.answerAuthorId] ?: "", row[Waits.resolvedAt] ?: 0) },
             row[Waits.createdAt], row[Waits.resolvedAt],
-            row[Waits.dueAt]?.let { WaitTimer(it, row[Waits.eventSource]?.let(EventSource::parse), row[Waits.onTimeout]?.let(TimeoutAction::parse), row[Waits.resumeMessage], row[Waits.eventTokenHash]) },
+            row[Waits.dueAt]?.let { WaitTimer(it, row[Waits.eventSource]?.let(EventSource::parse), row[Waits.onTimeout]?.let(TimeoutAction::parse), row[Waits.resumeMessage], row[Waits.eventTokenHash], row[Waits.childSessionId]) },
         )
     }
 

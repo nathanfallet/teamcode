@@ -67,8 +67,17 @@ enum class ServiceScope(val wire: String) {
      * creating a key.
      */
     TODO_SESSION("todo:session"),
+    /**
+     * Start, read, message, interrupt, terminate and wait for the child sessions of the one cloud session an execution credential
+     * was issued for, and nothing else: never another session of the member (docs/orchestration.md). Held only by the `tcex_`
+     * credential of a session whose profile version enables orchestration and whose depth is below its maximum; a service key that
+     * carries it is refused wherever it is used, like [WAITS_SESSION]. Not offered when creating a key.
+     */
+    SESSIONS_CHILDREN("sessions:children"),
 }
-enum class CredentialAction { DISCOVERY, IDENTITY, LOGOUT, INFERENCE, USAGE_READ, GUIDANCE, SKILLS_READ, SKILLS_PUBLISH, HOOKS_READ, HOOKS_PUBLISH, MCP, CLOUD_READ, CLOUD_WRITE, WAITS_READ, WAITS_WRITE, WORKFLOW_DELIVER, TODO_READ, TODO_WRITE, TEAM_READ, ARTIFACTS_READ, ARTIFACTS_WRITE, INTERACTIVE }
+/** The scopes that mean something only on a `tcex_` credential bound to a session; never offered when creating a service key. */
+val SESSION_BOUND_SCOPES: Set<ServiceScope> = setOf(ServiceScope.WAITS_SESSION, ServiceScope.WORKFLOW_SESSION, ServiceScope.TODO_SESSION, ServiceScope.SESSIONS_CHILDREN)
+enum class CredentialAction { DISCOVERY, IDENTITY, LOGOUT, INFERENCE, USAGE_READ, GUIDANCE, SKILLS_READ, SKILLS_PUBLISH, HOOKS_READ, HOOKS_PUBLISH, MCP, CLOUD_READ, CLOUD_WRITE, WAITS_READ, WAITS_WRITE, WORKFLOW_DELIVER, TODO_READ, TODO_WRITE, CHILDREN, TEAM_READ, ARTIFACTS_READ, ARTIFACTS_WRITE, INTERACTIVE }
 
 fun Principal.requireInteractive() {
     if (serviceScopes != null) throw TeamFailure("credential_scope", 403, "Sign in with an interactive account for this operation.")
@@ -139,6 +148,16 @@ fun Principal.requireTodoWrite() {
 val Principal.todoSessionOnly: Boolean
     get() = serviceScopes != null && ServiceScope.TODO_SESSION in serviceScopes &&
         serviceScopes.none { it == ServiceScope.CLOUD_READ || it == ServiceScope.CLOUD_WRITE || it == ServiceScope.ADMIN_CLOUD || it == ServiceScope.TEAM_READ }
+/**
+ * The child-session routes (docs/orchestration.md): only an execution credential's `sessions:children`, which the orchestration
+ * service binds to its session. An interactive login or any other key is refused: a member manages the children, which are their
+ * own sessions, through the ordinary session routes.
+ */
+fun Principal.requireChildren() {
+    requireReady()
+    if (serviceScopes == null || ServiceScope.SESSIONS_CHILDREN !in serviceScopes)
+        throw TeamFailure("credential_scope", 403, "Only the execution credential of an orchestrating cloud session (sessions:children) drives child sessions.")
+}
 /** Artifact reads: an interactive login, or a key with `artifacts:read`, `artifacts:write` or `team:read`. */
 fun Principal.requireArtifactRead() {
     requireReady()
@@ -190,6 +209,7 @@ class AuthorizeCredentialUseCase {
             CredentialAction.WORKFLOW_DELIVER -> actor.requireWorkflowDeliver()
             CredentialAction.TODO_READ -> actor.requireTodoRead()
             CredentialAction.TODO_WRITE -> actor.requireTodoWrite()
+            CredentialAction.CHILDREN -> actor.requireChildren()
             CredentialAction.ARTIFACTS_READ -> actor.requireArtifactRead()
             CredentialAction.ARTIFACTS_WRITE -> actor.requireArtifactWrite()
             CredentialAction.INTERACTIVE -> actor.requireInteractive()

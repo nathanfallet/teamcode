@@ -853,6 +853,48 @@ class TeamCodeClient(
         require(path == "/api/v1/todos/session" || path.startsWith("/api/v1/todos/session/")) { "Only the session todo is relayed." }
         return forwardApi(method, path, query, body, contentType, runId, emptyMap(), TODO_RELAY_LIMIT, WAIT_RELAYED_HEADERS)
     }
+    // Session orchestration (`cloud.orchestration.v1`, docs/orchestration.md): only an orchestrating session's execution credential.
+
+    /** The calling session's children, newest first. */
+    suspend fun childSessions(before: String? = null, limit: Int = 20): CloudSessionPageView {
+        before?.let(::identifier); require(limit in 1..50) { "Use a page size between 1 and 50." }
+        return coded(HttpMethod.Get, "/api/v1/cloud/children", null as Unit?) { url { before?.let { parameters.append("before", it) }; parameters.append("limit", limit.toString()) } }
+    }
+    /** Starts a child; the same [idempotencyKey] and request replay the first one. */
+    suspend fun spawnChildSession(input: SpawnChildSessionRequest, idempotencyKey: String = Uuid.random().toString()): CloudSessionView {
+        require(CloudHeaders.idempotencyKey.matches(idempotencyKey)) { "Invalid idempotency key." }
+        return coded(HttpMethod.Post, "/api/v1/cloud/children", input) { header(CloudHeaders.IDEMPOTENCY_KEY, idempotencyKey) }
+    }
+    suspend fun childSession(id: String): CloudSessionView { identifier(id); return coded(HttpMethod.Get, "/api/v1/cloud/children/$id", null as Unit?) }
+    suspend fun messageChildSession(id: String, text: String, idempotencyKey: String = Uuid.random().toString()): CloudInputView {
+        identifier(id); require(CloudHeaders.idempotencyKey.matches(idempotencyKey)) { "Invalid idempotency key." }
+        return coded(HttpMethod.Post, "/api/v1/cloud/children/$id/messages", ChildMessageRequest(text)) { header(CloudHeaders.IDEMPOTENCY_KEY, idempotencyKey) }
+    }
+    /** The child's newest events (at most 50), oldest first; page back with [before]. */
+    suspend fun childSessionEvents(id: String, before: Long? = null, limit: Int = 20): CloudEventPageView {
+        identifier(id); require(limit in 1..50) { "Use a page size between 1 and 50." }
+        return coded(HttpMethod.Get, "/api/v1/cloud/children/$id/events", null as Unit?) { url { before?.let { parameters.append("before", it.toString()) }; parameters.append("limit", limit.toString()) } }
+    }
+    suspend fun interruptChildSession(id: String, idempotencyKey: String = Uuid.random().toString()): CloudInputView {
+        identifier(id); return coded(HttpMethod.Post, "/api/v1/cloud/children/$id/interrupt", null as Unit?) { header(CloudHeaders.IDEMPOTENCY_KEY, idempotencyKey) }
+    }
+    suspend fun terminateChildSession(id: String): CloudSessionView { identifier(id); return coded(HttpMethod.Post, "/api/v1/cloud/children/$id/terminate", null as Unit?) }
+    /** A wait on the calling session for this child; `status: resolved` at once when the child had already settled. */
+    suspend fun waitForChildSession(id: String, input: ChildWaitRequest = ChildWaitRequest(), idempotencyKey: String = Uuid.random().toString()): WaitView {
+        identifier(id); require(CloudHeaders.idempotencyKey.matches(idempotencyKey)) { "Invalid idempotency key." }
+        return coded(HttpMethod.Post, "/api/v1/cloud/children/$id/wait", input) { header(CloudHeaders.IDEMPOTENCY_KEY, idempotencyKey) }
+    }
+    /**
+     * Relays one call of `teamcode mcp sessions` received by the local proxy, with this client's credential (the execution credential in
+     * a cloud session): only the child-session routes, with the caller's `Idempotency-Key`.
+     */
+    suspend fun forwardChildren(method: HttpMethod, path: String, query: String, body: ByteArray, contentType: ContentType?, runId: String?, idempotencyKey: String?): ArtifactRelayResponse {
+        require(path == "/api/v1/cloud/children" || path.startsWith("/api/v1/cloud/children/")) { "Only the child-session routes are relayed." }
+        require(idempotencyKey == null || IDEMPOTENCY_KEY_PATTERN.matches(idempotencyKey)) { "Invalid idempotency key." }
+        return forwardApi(method, path, query, body, contentType, runId, listOfNotNull(idempotencyKey?.let { CloudHeaders.IDEMPOTENCY_KEY to it }).toMap(),
+            CHILDREN_RELAY_LIMIT, WAIT_RELAYED_HEADERS)
+    }
+
     /** The reminder block of the session's todo (after a compaction, on resume); its text is null without an active list. */
     suspend fun todoContext(sessionId: String? = null): TodoContextView {
         sessionId?.let(::identifier)
@@ -1286,6 +1328,8 @@ class TeamCodeClient(
         private const val WORKFLOW_RELAY_LIMIT = 1024 * 1024
         /** A todo with 50 items of 4 000 characters and their notes. */
         private const val TODO_RELAY_LIMIT = 1024 * 1024
+        /** 50 transcript events of at most 64 KiB, or a session view. */
+        private const val CHILDREN_RELAY_LIMIT = 4 * 1024 * 1024
         private val WAIT_RELAYED_HEADERS = listOf(HttpHeaders.RetryAfter, CloudHeaders.IDEMPOTENCY_REPLAYED, "x-teamcode-error", "x-teamcode-request-id")
         /** As the server accepts it (`WaitService`): 1 to 128 letters, digits or `. _ : -`. */
         private val IDEMPOTENCY_KEY_PATTERN = Regex("[A-Za-z0-9._:-]{1,128}")

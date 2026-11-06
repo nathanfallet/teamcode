@@ -17,7 +17,9 @@ enum class WaitResolver(val wire: String) {
     companion object { fun parse(value: String) = entries.singleOrNull { it.wire == value } }
 }
 enum class EventSource(val wire: String) {
-    WEBHOOK("webhook");
+    WEBHOOK("webhook"),
+    /** A child session's turn, wait for a person or end (docs/orchestration.md); made by the orchestration service only, never by `POST /waits`. */
+    CHILD("child");
     companion object { fun parse(value: String) = entries.singleOrNull { it.wire == value } }
 }
 enum class TimeoutAction(val wire: String) {
@@ -54,6 +56,8 @@ data class WaitAnswer(val action: String, val values: Map<String, JsonElement>, 
 data class WaitSchedule(
     val at: Long? = null, val afterSeconds: Long? = null, val source: EventSource? = null, val timeoutSeconds: Long? = null,
     val onTimeout: TimeoutAction? = null, val resumeMessage: String? = null,
+    /** The child session a `child` event wait follows; set by the server only. */
+    val childSessionId: String? = null,
 )
 
 /**
@@ -63,6 +67,8 @@ data class WaitSchedule(
 data class WaitTimer(
     val dueAt: Long, val eventSource: EventSource? = null, val onTimeout: TimeoutAction? = null, val resumeMessage: String? = null,
     val tokenHash: String? = null,
+    /** The child session a `child` event wait follows (docs/orchestration.md). */
+    val childSessionId: String? = null,
 )
 
 data class WaitDefinition(
@@ -154,6 +160,14 @@ interface WaitStore {
      * reminder, which has no sign-in of the owner to check): same rules and cap as [create], audited as `system`. A store that cannot says so.
      */
     suspend fun createForSystem(wait: Wait, limit: Int): WaitChange = throw UnsupportedOperationException("This store opens no server-made waits.")
+    /**
+     * Stores a `child` event wait ([WaitTimer.childSessionId]) on the parent's session like [create], and in the same transaction,
+     * under the child's row lock (the lock its turn ends and state changes are recorded under), resolves it at once when the child
+     * is already settled: ended, waiting for a person, or idle (no turn running and no message pending). Such a wait is resolved
+     * without a wake message, since the agent that asked reads the outcome in the answer. Same idempotency and cap as [create].
+     */
+    suspend fun createChildWait(actor: Principal, wait: Wait, idempotencyKey: String?, limit: Int): WaitChange =
+        throw UnsupportedOperationException("This store does not follow child sessions.")
     suspend fun find(teamId: String, id: String): Wait?
     /**
      * In one transaction: stored waits by keyset (newest first), and, on the first page only (`before` null), the open

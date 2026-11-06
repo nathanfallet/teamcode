@@ -47,7 +47,11 @@ class SqlCloudInferenceCredentialStore(private val database: Database) : CloudIn
         Tokens.insert {
             it[Tokens.id] = id; it[memberId] = member; it[tokenHash] = Passwords.digest(token)
             it[device] = (if (kind == ExecutionCredentialKind.REMOTE_SESSION) "remote session" else "cloud session") + " ${sessionId.take(8)} e$epoch"; it[deviceId] = null; it[createdAt] = now; it[Tokens.expiresAt] = expiresAt
-            it[serviceScopes] = Json.encodeToString((if (kind == ExecutionCredentialKind.REMOTE_SESSION) REMOTE_SESSION_SCOPES else EXECUTION_SCOPES).map { it.wire })
+            it[serviceScopes] = Json.encodeToString(when (kind) {
+                ExecutionCredentialKind.REMOTE_SESSION -> REMOTE_SESSION_SCOPES
+                ExecutionCredentialKind.ORCHESTRATOR -> ORCHESTRATOR_SCOPES
+                ExecutionCredentialKind.CLOUD -> EXECUTION_SCOPES
+            }.map { it.wire })
         }
         CloudInferenceCredentials.insert {
             it[tokenId] = id; it[CloudInferenceCredentials.sessionId] = sessionId; it[CloudInferenceCredentials.epoch] = epoch
@@ -114,6 +118,13 @@ internal fun revokeInferenceCredentialsBefore(sessionId: String, epoch: Int) {
  * interactive). Nothing else: no usage, no skill or hook publication, no cloud or interactive route.
  */
 val EXECUTION_SCOPES: List<ServiceScope> = listOf(ServiceScope.INFERENCE, ServiceScope.MCP, ServiceScope.SKILLS_READ, ServiceScope.HOOKS_READ, ServiceScope.ARTIFACTS_WRITE, ServiceScope.WAITS_SESSION, ServiceScope.WORKFLOW_SESSION, ServiceScope.TODO_SESSION)
+
+/**
+ * The execution credential of a session that orchestrates (docs/orchestration.md): everything in [EXECUTION_SCOPES], plus
+ * `sessions:children` over its own child sessions. Granted only when the session's pinned profile version enables orchestration
+ * and its depth is below the version's maximum; a remote session's host never gets it.
+ */
+val ORCHESTRATOR_SCOPES: List<ServiceScope> = EXECUTION_SCOPES + ServiceScope.SESSIONS_CHILDREN
 
 /**
  * What the loopback relays of a remote session's host may do upstream, as the member: the session's own waits (asking,

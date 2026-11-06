@@ -119,6 +119,8 @@ object WaitRules {
         } else {
             if (schedule.at != null || schedule.afterSeconds != null) throw invalid("at and after belong to waits for a time.")
             if (schedule.source == null) throw invalid("A wait for an event needs source (webhook).")
+            if ((schedule.source == EventSource.CHILD) != (schedule.childSessionId != null))
+                throw invalid("A wait for a child session is made with wait_for_child (POST /api/v1/cloud/children/{id}/wait), from an orchestrating session.")
             schedule.timeoutSeconds?.let { if (it !in MIN_AFTER_SECONDS..MAX_TIMEOUT_SECONDS) throw invalid("timeoutSeconds is $MIN_AFTER_SECONDS seconds to 7 days ($MAX_TIMEOUT_SECONDS seconds).") }
         }
         return definition.copy(actions = emptyList(), kind = WaitKind.TIMED)

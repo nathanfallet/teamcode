@@ -183,7 +183,18 @@ data class CloudSession(
     val automationId: String? = null,
     /** The `teamcode run` launch a local session is attached to ([CloudSessionKind.LOCAL]); null for every other kind. */
     val runId: String? = null,
+    /**
+     * The session that created this one as its child (docs/orchestration.md); null for a session a member, an automation or a
+     * workflow started. Fixed at creation, like [rootSessionId] and [depth].
+     */
+    val parentSessionId: String? = null,
+    /** The top of the tree this session belongs to; null for a top-level session, which is its own root ([root]). */
+    val rootSessionId: String? = null,
+    /** 0 for a top-level session, the parent's depth + 1 for a child. */
+    val depth: Int = 0,
 ) {
+    /** The root of this session's tree: itself when it has no parent. */
+    val root: String get() = rootSessionId ?: id
     /** Whether a permission answer can reach the agent now: `ready` or `active`, desired running. */
     val takesAnswers: Boolean get() = desiredState == DesiredState.RUNNING && (state == CloudSessionState.READY || state == CloudSessionState.ACTIVE)
     /**
@@ -243,7 +254,32 @@ data class CloudProfileSpec(
     val minIdleTimeoutMinutes: Int = 5,
     val maxIdleTimeoutMinutes: Int = 1440,
     val environment: CloudEnvironmentSpec = CloudEnvironmentSpec(),
+    /** Whether sessions of this profile may start and drive child sessions (docs/orchestration.md); off by default. */
+    val orchestration: CloudOrchestrationSpec = CloudOrchestrationSpec(),
 )
+
+/**
+ * Session orchestration on a profile version (docs/orchestration.md). With [enabled], a session started from this version whose
+ * [CloudSession.depth] is below [maxDepth] gets the `sessions:children` scope on its execution credential: it may start at most
+ * [maxActiveChildren] children at once, each of depth + 1, from this same profile or one of [childProfileIds].
+ */
+data class CloudOrchestrationSpec(
+    val enabled: Boolean = false,
+    val maxActiveChildren: Int = DEFAULT_ACTIVE_CHILDREN,
+    val maxDepth: Int = DEFAULT_DEPTH,
+    /** Other profiles a child may use; empty: the parent's own profile only. The owner must still be assigned to the one chosen. */
+    val childProfileIds: List<String> = emptyList(),
+) {
+    /** Whether a session of [depth] started from this version orchestrates. */
+    fun allows(depth: Int) = enabled && depth < maxDepth
+    companion object {
+        const val DEFAULT_ACTIVE_CHILDREN = 5
+        const val MAX_ACTIVE_CHILDREN = 20
+        const val DEFAULT_DEPTH = 2
+        const val MAX_DEPTH = 3
+        const val MAX_CHILD_PROFILES = 10
+    }
+}
 data class CloudProfile(
     val id: String,
     val teamId: String,
@@ -376,6 +412,12 @@ data class CloudSessionDraft(
 
 /** The local session of a `teamcode run` launch ([CloudSessionKind.LOCAL]): the launch it is attached to, its agent and its name. */
 data class LocalSessionDraft(val runId: String, val name: String, val agentKind: String, val labels: Map<String, String> = emptyMap())
+/**
+ * The parent a child session is created under (docs/orchestration.md), set by the orchestration service only, never from a
+ * member's request: [parentId], the tree's [rootId], the child's [depth], and the parent's cap of [maxActiveChildren] children not yet
+ * ended, which the store checks under the owner's row lock with the retained cap.
+ */
+data class ChildSessionLink(val parentId: String, val rootId: String, val depth: Int, val maxActiveChildren: Int)
 
 /** A session on the caller's own device: no profile, the agent and the directory's name come from the request. */
 data class RemoteSessionDraft(

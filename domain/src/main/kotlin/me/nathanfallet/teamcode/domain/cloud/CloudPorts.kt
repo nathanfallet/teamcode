@@ -50,6 +50,13 @@ interface CloudSessionStore {
      * replays the stored session, and a different digest fails with `idempotency_conflict`.
      */
     suspend fun insert(session: CloudSession, actor: CloudActor, idempotency: IdempotencyRequest?, retainedLimit: Int): CloudCreateOutcome
+    /**
+     * [insert] for a child session (docs/orchestration.md): under the same member row lock, also refuses the child when its
+     * parent ([ChildSessionLink.parentId]) already has [ChildSessionLink.maxActiveChildren] children that are neither ended nor
+     * being deleted (`409 child_session_limit`). The idempotency record is scoped like any creation's.
+     */
+    suspend fun insertChild(session: CloudSession, actor: CloudActor, idempotency: IdempotencyRequest, retainedLimit: Int, link: ChildSessionLink): CloudCreateOutcome =
+        throw UnsupportedOperationException("This store does not create child sessions.")
     suspend fun find(teamId: String, id: String): CloudSession?
     suspend fun list(teamId: String, query: CloudSessionQuery): CloudSessionPage
     suspend fun executions(teamId: String, sessionId: String): List<CloudExecution>

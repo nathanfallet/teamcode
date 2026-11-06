@@ -14,7 +14,9 @@ import me.nathanfallet.teamcode.domain.team.TeamFailure
  */
 data class RunnerAgentConfig(val kind: String, val version: String?, val model: String?, val effort: String?, val conversation: ConversationResume,
     val permissionRelay: Boolean = false, val permissionDeadlineMinutes: Int = 0, val liveText: Boolean = false,
-    val permissionMode: RemotePermissionMode? = null, val backgroundTasks: Boolean = false, val owner: RunnerOwner? = null)
+    val permissionMode: RemotePermissionMode? = null, val backgroundTasks: Boolean = false, val owner: RunnerOwner? = null,
+    /** `background` for a child session (docs/orchestration.md): its inference is scheduled as background work; null for the default. */
+    val workload: String? = null)
 
 /** The member an execution runs for: their [username] and their linked GitHub account's [githubLogin], if any. */
 data class RunnerOwner(val username: String, val githubLogin: String?)
@@ -44,7 +46,8 @@ class RunnerConversationUseCase(
             liveText = session.agentKind == "claude", backgroundTasks = session.agentKind == "claude",
             permissionMode = session.host?.permissionMode?.takeIf { session.kind == CloudSessionKind.REMOTE },
             // Read for the current owner at each execution start: after a transfer, the recipient.
-            owner = sessions.member(teamId, session.ownerId)?.let { RunnerOwner(it.username, githubLogin(teamId, session.ownerId)) })
+            owner = sessions.member(teamId, session.ownerId)?.let { RunnerOwner(it.username, githubLogin(teamId, session.ownerId)) },
+            workload = "background".takeIf { session.parentSessionId != null })
     }
 
     /**

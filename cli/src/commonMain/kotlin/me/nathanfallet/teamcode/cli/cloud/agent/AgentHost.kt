@@ -389,7 +389,7 @@ internal class AgentHost(
         reader?.cancel()
         // That reader's tail, which cancels its process's timers, may never run now.
         cancelDeadlines(null)
-        val config = settings ?: retrying { channel.agent() }.let { AgentSettings(it.kind, it.version, it.model, it.effort, it.permissionRelay, it.permissionDeadlineMinutes, it.liveText, it.permissionMode, it.backgroundTasks, it.owner) }.also { settings = it }
+        val config = settings ?: retrying { channel.agent() }.let { AgentSettings(it.kind, it.version, it.model, it.effort, it.permissionRelay, it.permissionDeadlineMinutes, it.liveText, it.permissionMode, it.backgroundTasks, it.owner, it.workload) }.also { settings = it }
         val stored = state.read()
         val kept = stored?.takeIf { it.kind == config.kind && it.version == config.version }
         val resume = kept?.conversationId
@@ -439,7 +439,7 @@ internal class AgentHost(
         val hooks = cloudHookSettings(tools?.hooks(kind).orEmpty(), runnerStop = stateHook.takeIf { kind == "claude" }, workflowStop = workflowStop, todoStop = todoStop, todoContext = todoContext)?.let { listOf("--settings", it) }.orEmpty()
         val plugin = if (kind == "claude") tools?.claudePlugin() else null
         val plan = agentLaunch(kind, base.arguments, endpoint.port, endpoint.token, guidancePlugin = plugin, runId = endpoint.runId, mcpServers = servers,
-            hookToken = false, artifacts = tools?.artifacts(), waits = tools?.waits(), workflow = workflow, todo = todo, identity = settings?.owner?.let { OwnerIdentity.sentence(it.username, it.githubLogin) })
+            hookToken = false, artifacts = tools?.artifacts(), waits = tools?.waits(), workflow = workflow, todo = todo, sessions = tools?.sessions(), workload = settings?.workload?.takeIf { it == "background" } ?: "interactive", identity = settings?.owner?.let { OwnerIdentity.sentence(it.username, it.githubLogin) })
         return AgentCommand(base.command, hooks + plan.arguments) to owner + AGENT_ENVIRONMENT + plan.environment
     }
 

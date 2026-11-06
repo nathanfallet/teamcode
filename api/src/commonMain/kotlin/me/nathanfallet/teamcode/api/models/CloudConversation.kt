@@ -273,6 +273,8 @@ data class RunnerAgentView(
     /** The server takes [CloudEventTypes.TASKS] events ([CloudTasks.FEATURE]); an older one refuses the batch that holds one. */
     val backgroundTasks: Boolean = false,
     val owner: RunnerOwnerView? = null,
+    /** `background` for a child session (docs/orchestration.md): the runner schedules its inference as background work. Null: interactive. */
+    val workload: String? = null,
 )
 /**
  * Who the execution runs for, as the agent is told: the member's [username] and, when they linked GitHub, the linked

@@ -46,6 +46,7 @@ internal val apiOperations: List<ApiOperation> by lazy {
         automationOperations()
         waitOperations()
         todoOperations()
+        orchestrationOperations()
         workflowOperations()
         artifactOperations()
         artifactTicketOperations()
@@ -86,6 +87,7 @@ internal object ApiTags {
     const val AUTOMATIONS = "Automations"
     const val WAITS = "Waits"
     const val TODOS = "Todos"
+    const val ORCHESTRATION = "Orchestration"
     const val WORKFLOWS = "Workflows"
     const val ARTIFACTS_ADMIN = "Artifact administration"
     const val ARTIFACTS = "Artifacts"
@@ -120,6 +122,7 @@ internal object ApiTags {
         GITHUB to "The team's GitHub App and members' GitHub links.",
         WEBHOOKS to "Signed, retried HTTP deliveries of the team's event feed to your own services.",
         AUTOMATIONS to "Cloud sessions started on a schedule or by a signed webhook, as their owner, and their run history.",
+        ORCHESTRATION to "A cloud session driving its own child sessions with its execution credential's sessions:children scope: start, read, message, interrupt, terminate and wait.",
         TODOS to "A cloud session's todo: the plan reference and the items an agent must finish, each with a typed end condition checked before it is done.",
         WAITS to "What sessions need from people before they can go on: questions, reviews, access, decisions, with fields to fill and actions that end them.",
         WORKFLOWS to "Saved sequences of agent, human and sub-workflow steps with typed deliverables: definitions, versions and who may edit them.",
@@ -168,6 +171,7 @@ internal class ApiAccess(val public: Boolean, val keyScopes: List<String>?) {
                 CredentialAction.WORKFLOW_DELIVER -> listOf("cloud:write", "admin:cloud", "workflow:session")
                 CredentialAction.TODO_READ -> listOf("cloud:read", "cloud:write", "admin:cloud", "team:read", "todo:session")
                 CredentialAction.TODO_WRITE -> listOf("cloud:write", "admin:cloud", "todo:session")
+                CredentialAction.CHILDREN -> listOf("sessions:children")
                 CredentialAction.ARTIFACTS_READ -> listOf("artifacts:read", "artifacts:write", "team:read")
                 CredentialAction.ARTIFACTS_WRITE -> listOf("artifacts:write")
                 CredentialAction.INTERACTIVE -> null

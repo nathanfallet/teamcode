@@ -72,6 +72,7 @@ class ApiDocsTest {
             waits = me.nathanfallet.teamcode.domain.waits.WaitService(stub()),
             workflows = me.nathanfallet.teamcode.domain.workflows.WorkflowService(stub()),
             workflowRuns = me.nathanfallet.teamcode.domain.workflows.WorkflowRunService(stub()), todos = me.nathanfallet.teamcode.domain.todos.TodoService(stub()),
+            orchestration = OrchestrationService(stub(), sessionStore, sessions, CloudConversationService(conversationStore, sessionStore, access, { _, _ -> false })),
             apiPrices = stub(), poolSizing = stub(),
             artifactAdmin = me.nathanfallet.teamcode.domain.artifacts.ArtifactAdministrationService(stub(), stub()),
             artifacts = me.nathanfallet.teamcode.domain.artifacts.ArtifactService(stub(), stub(), stub()),

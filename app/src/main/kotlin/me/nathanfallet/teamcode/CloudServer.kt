@@ -119,6 +119,8 @@ class CloudServer(
         override suspend fun authorize(actor: Principal, sessionId: String) = conversationService.authorizeWaitAnswer(actor, sessionId)
         override suspend fun deliver(actor: Principal, sessionId: String, text: String, clientKey: String) = conversationService.queueWaitAnswer(actor, sessionId, text, clientKey)
     }, context = me.nathanfallet.teamcode.domain.waits.WaitWakeContext { teamId, sessionId -> todos.wakeBlock(teamId, sessionId) })
+    /** A cloud session driving its own child sessions with its execution credential's `sessions:children` (docs/orchestration.md). */
+    val orchestration = OrchestrationService(me.nathanfallet.teamcode.infrastructure.database.SqlOrchestrationStore(database), store, sessions, conversationService, waits)
     /** Saved workflow definitions; runs are a later piece of work (docs/workflows.md). */
     val workflows = WorkflowService(workflowStore)
     /** Starting, reading, cancelling and delivering into workflow runs; the engine below moves them on (docs/workflows.md). */

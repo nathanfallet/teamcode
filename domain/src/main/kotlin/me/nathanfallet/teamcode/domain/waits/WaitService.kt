@@ -111,6 +111,29 @@ class WaitService(private val store: WaitStore, private val sessions: WaitSessio
     }
 
     /**
+     * A wait on [parentId] that resolves when its child [childId] ends a turn, starts waiting for a person, is paused or ends
+     * (docs/orchestration.md). Called by the orchestration service once it has confined [actor] (the parent's execution credential)
+     * to that parent and child; the store resolves it at once when the child is already settled ([WaitStore.createChildWait]).
+     */
+    suspend fun createChildWait(actor: Principal, parentId: String, childId: String, title: String, timeoutSeconds: Long?, onTimeout: TimeoutAction?,
+        resumeMessage: String?, idempotencyKey: String?): WaitChange {
+        store.revalidate(actor)
+        val now = store.now()
+        val valid = WaitRules.validate(WaitDefinition(parentId, title, resolver = WaitResolver.EVENT,
+            schedule = WaitSchedule(source = EventSource.CHILD, timeoutSeconds = timeoutSeconds, onTimeout = onTimeout, resumeMessage = resumeMessage, childSessionId = childId)), now)
+        val session = store.session(actor.teamId, parentId)?.takeIf { it.ownerId == actor.member.id } ?: throw TeamFailure("not_found", 404, "Session not found.")
+        val owner = store.member(actor.teamId, session.ownerId) ?: throw TeamFailure("invalid_assignee", 400, "The session's owner is not an active member.")
+        val timer = WaitTimer(WaitRules.dueAt(valid, now)!!, EventSource.CHILD, onTimeout ?: TimeoutAction.WAKE, resumeMessage, null, childId)
+        val wait = Wait(
+            id = UUID.randomUUID().toString(), teamId = actor.teamId, source = WaitSource.WAIT, kind = valid.kind, resolver = WaitResolver.EVENT,
+            status = WaitStatus.OPEN, sessionId = session.id, sessionName = session.name, requestId = null, assigneeId = owner.id, assigneeName = owner.username,
+            createdById = actor.member.id, title = valid.title, body = null, refs = emptyList(), fields = emptyList(), actions = emptyList(), answer = null,
+            createdAt = now, resolvedAt = null, timer = timer,
+        )
+        return store.createChildWait(actor, wait, idempotencyKey?.also { require(KEY.matches(it)) { "Use an idempotency key of 1 to 128 letters, digits or . _ : -." } }, WaitRules.MAX_OPEN_PER_SESSION)
+    }
+
+    /**
      * Answers a stored wait. A session's permission request is answered through the session (`cloud.permissions.v1`),
      * not here. The first answer wins: the store closes it atomically and a later one gets `409 wait_closed`.
      *
@@ -249,6 +272,12 @@ class WaitService(private val store: WaitStore, private val sessions: WaitSessio
         const val TIME_REACHED = "time_reached"
         const val EVENT_RECEIVED = "event_received"
         const val TIMED_OUT = "timed_out"
+        /** A `child` wait's resolutions (docs/orchestration.md): the child ended a turn, waits for a person, was paused, or ended. */
+        const val CHILD_TURN_ENDED = "child_turn_ended"
+        const val CHILD_WAITING = "child_waiting"
+        const val CHILD_PAUSED = "child_paused"
+        const val CHILD_ENDED = "child_ended"
+        val CHILD_ACTIONS = setOf(CHILD_TURN_ENDED, CHILD_WAITING, CHILD_PAUSED, CHILD_ENDED)
         /** The id the owner's wake messages carry as their credential: nothing is signed in, the server writes them. */
         const val SYSTEM_CREDENTIAL = "waits-resolver"
         private val NO_HASH = "0".repeat(64)
