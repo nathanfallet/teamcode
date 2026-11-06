@@ -13,7 +13,9 @@ import kotlinx.serialization.json.jsonPrimitive
 import me.nathanfallet.teamcode.companion.domain.repositories.AccountRepository
 import me.nathanfallet.teamcode.companion.domain.services.LocalAvailability
 import me.nathanfallet.teamcode.companion.domain.services.LocalHost
+import me.nathanfallet.teamcode.companion.domain.services.KnownFolder
 import me.nathanfallet.teamcode.companion.domain.services.LocalHostException
+import me.nathanfallet.teamcode.api.models.LocalKnownFoldersView
 import me.nathanfallet.teamcode.companion.domain.services.LocalSessionRequest
 import me.nathanfallet.teamcode.companion.domain.services.LocalResumables
 import me.nathanfallet.teamcode.companion.domain.services.LocalResumeBlock
@@ -78,7 +80,31 @@ class DesktopLocalHost(
         return resumables(processes.run(cli.executable, resumableArguments(directory, before), RESUMABLE_TIMEOUT_MILLIS))
     }
 
+    override suspend fun knownFolders(accountId: String): List<KnownFolder> {
+        val cli = locator.find() ?: throw LocalHostException("The TeamCode CLI is not installed.")
+        return knownFolders(processes.run(cli.executable, KNOWN_FOLDERS_ARGUMENTS, KNOWN_FOLDERS_TIMEOUT_MILLIS))
+    }
+
     companion object {
+        /** Local files only: no server answer is waited for. */
+        private const val KNOWN_FOLDERS_TIMEOUT_MILLIS = 15_000L
+        val KNOWN_FOLDERS_ARGUMENTS = listOf("remote", "folders", "--json", "--limit", KnownFolder.LIMIT.toString())
+
+        /**
+         * What `remote folders --json` answered: the folders it knows, bounded. A CLI without the command has none to
+         * suggest (the browse picker stays); any other failure is the CLI's own sentence.
+         */
+        fun knownFolders(result: CliResult): List<KnownFolder> {
+            val line = result.stdout.lineSequence().map { it.trim() }.firstOrNull { it.startsWith("{") }
+            if (line == null || result.exitCode != 0) {
+                if ("no such subcommand" in result.stderr) return emptyList()
+                throw LocalHostException(explanation(result))
+            }
+            val view = try { json.decodeFromString<LocalKnownFoldersView>(line) }
+                catch (_: Exception) { throw LocalHostException("The TeamCode CLI gave an answer this app does not read: run teamcode update.") }
+            return view.folders.filter { it.path.isNotBlank() && it.path.none(Char::isISOControl) }.take(KnownFolder.LIMIT).map { KnownFolder(it.path, it.lastUsedAt) }
+        }
+
         /** Two server answers (capabilities, devices) and a bounded read of the folder's transcripts. */
         private const val RESUMABLE_TIMEOUT_MILLIS = 30_000L
         /** `remote start` waits up to 30 s for its host; the rest is the server's answers and the CLI's own start. */

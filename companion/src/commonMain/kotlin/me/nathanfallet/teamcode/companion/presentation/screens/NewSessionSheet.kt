@@ -338,7 +338,7 @@ private fun PermissionFields(state: NewSessionUiState, viewModel: NewSessionView
 private fun deviceName(device: HostDevice): String = device.name
 
 @Composable
-private fun Option(title: String, subtitle: String?, selected: Boolean, tag: String, onClick: () -> Unit) {
+internal fun Option(title: String, subtitle: String?, selected: Boolean, tag: String, onClick: () -> Unit) {
     val colors = TeamCode.colors
     Row(
         Modifier.fillMaxWidth().heightIn(min = 56.dp).selectable(selected, role = Role.RadioButton, onClick = onClick).padding(horizontal = 14.dp, vertical = 8.dp).testTag(tag),

@@ -77,6 +77,23 @@ data class ResumableSessionsView(val sessions: List<ResumableSessionView>, val n
 @Serializable
 data class LocalResumableSessionsView(val sessions: List<ResumableSessionView> = emptyList(), val nextBefore: Long? = null, val unavailable: String? = null)
 
+/**
+ * What `teamcode remote folders --json` prints for the desktop app's "On this device": the folders this device already
+ * knows, read from its own files and never sent to the server. [path] is the full path (it stays on this device),
+ * [lastUsedAt] when a session of this device last started there (milliseconds), null for a folder only offered.
+ */
+@Serializable
+data class LocalKnownFoldersView(val folders: List<LocalKnownFolderView> = emptyList())
+
+@Serializable
+data class LocalKnownFolderView(val path: String, val lastUsedAt: Long? = null)
+
+/** Bounds of `teamcode remote folders`. */
+object LocalKnownFolders {
+    const val DEFAULT_LIMIT = 20
+    const val MAX_LIMIT = 50
+}
+
 /** Why this device cannot continue one of its own conversations in a new session (`teamcode remote start --resume`). */
 object LocalResumeReasons {
     /** The server does not announce `cloud.sessions.remote.resume.v1` (or does not start sessions on devices). */

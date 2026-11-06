@@ -33,8 +33,25 @@ interface LocalHost {
      */
     suspend fun resumable(accountId: String, directory: String, before: Long?): LocalResumables = LocalResumables.Unavailable(LocalResumeBlock.CLI_TOO_OLD)
 
+    /**
+     * The folders this device already knows (`teamcode remote folders`), the most recently used first and at most
+     * [KnownFolder.LIMIT]: the directories of its remote sessions and the folders its daemon offers, read from its own
+     * files, never through the server. Empty with a CLI older than the command.
+     */
+    suspend fun knownFolders(accountId: String): List<KnownFolder> = emptyList()
+
     /** The folder the app was opened with (`teamcode ui DIRECTORY`), given once; null otherwise. */
     fun takeInitialDirectory(): String? = null
+}
+
+/** A folder of this device offered to start a session in: its full [path] (it stays on the device), and when a session last started there. */
+data class KnownFolder(val path: String, val lastUsedAt: Long? = null) {
+    /** The folder's own name, whichever separator the system uses. */
+    val name: String get() = path.trimEnd('/', '\\').substringAfterLast('/').substringAfterLast('\\').ifEmpty { path }
+
+    companion object {
+        const val LIMIT = 20
+    }
 }
 
 /** What "On this device" needs, in the order the app checks it. */

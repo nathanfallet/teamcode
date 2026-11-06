@@ -7,6 +7,7 @@ import me.nathanfallet.teamcode.companion.domain.repositories.Features
 import me.nathanfallet.teamcode.companion.domain.repositories.FeaturesRepository
 import me.nathanfallet.teamcode.companion.domain.services.LocalAvailability
 import me.nathanfallet.teamcode.companion.domain.services.LocalHost
+import me.nathanfallet.teamcode.companion.domain.services.KnownFolder
 import me.nathanfallet.teamcode.companion.domain.services.LocalHostException
 import me.nathanfallet.teamcode.companion.domain.services.LocalSessionRequest
 import me.nathanfallet.teamcode.companion.domain.services.LocalResumables
@@ -39,6 +40,10 @@ class StartLocalSessionUseCase(
         if (Features.RESUME_SESSIONS !in features.features(accountId)) return LocalResumables.Unavailable(LocalResumeBlock.SERVER)
         return host.resumable(accountId, directory, before)
     }
+
+    /** The folders this device already knows, to suggest instead of browsing: bounded, each once, the most recent first. */
+    suspend fun knownFolders(accountId: String): List<KnownFolder> =
+        host.knownFolders(accountId).filter { it.path.isNotBlank() && it.path.none(Char::isISOControl) }.distinctBy { it.path }.take(KnownFolder.LIMIT)
 
     suspend operator fun invoke(accountId: String, request: LocalSessionRequest, message: String): LocalSessionStart {
         val name = request.name.trim()

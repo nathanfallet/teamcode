@@ -12,6 +12,7 @@ import kotlinx.coroutines.launch
 import me.nathanfallet.teamcode.companion.domain.models.PendingMessage
 import me.nathanfallet.teamcode.companion.domain.models.PermissionMode
 import me.nathanfallet.teamcode.companion.domain.repositories.PreferencesRepository
+import me.nathanfallet.teamcode.companion.domain.services.KnownFolder
 import me.nathanfallet.teamcode.companion.domain.services.LocalAvailability
 import me.nathanfallet.teamcode.companion.domain.services.LocalHost
 import me.nathanfallet.teamcode.companion.domain.services.LocalSessionRequest
@@ -52,6 +53,12 @@ data class LocalSessionUiState(
     val resumeOpen: Boolean = false,
     /** The conversation the session continues; null, the default, starts a new one. */
     val resumeId: String? = null,
+    /** The folders this device already knows, read when the section first opens; null until then. */
+    val knownFolders: List<KnownFolder>? = null,
+    val loadingFolders: Boolean = false,
+    /** Why the known folders could not be read; the browse picker still works. */
+    val foldersError: Failure? = null,
+    val foldersOpen: Boolean = false,
 ) {
     /** The picker shows once a folder is chosen, for Claude Code only. */
     val showsResume: Boolean get() = availability == LocalAvailability.Ready && directory.isNotBlank() && agent == "claude"
@@ -117,12 +124,46 @@ class LocalSessionViewModel(
                 state.update { it.copy(error = error.userMessage()) }
                 null
             } ?: return@launch
-            edit {
-                val moved = directory != it.directory
-                it.copy(directory = directory, name = if (it.nameEdited) it.name else StartLocalSessionUseCase.defaultName(directory))
-                    .let { next -> if (moved) next.withoutResume(list = true) else next }
+            select(directory)
+        }
+    }
+
+    /** Opens or closes the known folders; the first opening reads them from this device. */
+    fun onFoldersOpen() {
+        val current = state.value
+        if (current.starting) return
+        state.update { it.copy(foldersOpen = !it.foldersOpen) }
+        if (state.value.foldersOpen && current.knownFolders == null && !current.loadingFolders) loadFolders()
+    }
+
+    /** Reads the known folders again, after a failure. */
+    fun onFoldersRetry() { if (!state.value.loadingFolders) loadFolders() }
+
+    /** Chooses one of the known folders, as the picker would, and closes the section. */
+    fun onKnownFolder(path: String) {
+        if (state.value.knownFolders?.none { it.path == path } != false) return
+        select(path)
+        state.update { it.copy(foldersOpen = false) }
+    }
+
+    private fun loadFolders() {
+        state.update { it.copy(loadingFolders = true, foldersError = null) }
+        viewModelScope.launch {
+            try {
+                val found = start.knownFolders(route.accountId)
+                state.update { it.copy(knownFolders = found, loadingFolders = false) }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                state.update { it.copy(loadingFolders = false, foldersError = error.userMessage(), foldersOpen = true) }
             }
         }
+    }
+
+    private fun select(directory: String) = edit {
+        val moved = directory != it.directory
+        it.copy(directory = directory, name = if (it.nameEdited) it.name else StartLocalSessionUseCase.defaultName(directory))
+            .let { next -> if (moved) next.withoutResume(list = true) else next }
     }
 
     // Codex continues no Claude Code conversation: the choice goes with the agent.
