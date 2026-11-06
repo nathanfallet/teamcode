@@ -118,7 +118,7 @@ internal fun WaitCard(
             Text(relativeTime(wait.createdAt, now), style = MetaStyle, color = colors.muted, maxLines = 1, modifier = Modifier.testTag("wait-age-${wait.id}"))
         }
         wait.sessionName?.let { Text(stringResource(Res.string.waits_from_session, it), style = MetaStyle, color = colors.muted, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.testTag("wait-session-${wait.id}")) }
-        Text(wait.title, color = colors.text, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+        Text(waitTitle(wait), color = colors.text, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
         wait.body?.takeIf { it.isNotBlank() }?.let { Text(it, color = colors.muted, fontSize = 13.sp, maxLines = 6, overflow = TextOverflow.Ellipsis) }
         if (wait.open && wait.source == WaitSource.WAIT) {
             wait.fields.forEach { WaitFieldInput(wait, it, draft.inputs[it.id], onInput) }
@@ -131,7 +131,7 @@ internal fun WaitCard(
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 wait.actions.forEachIndexed { index, action ->
                     TcButton(
-                        action.label, onClick = { onAnswer(wait, action.id) }, small = true, enabled = !draft.sending, busy = draft.sending && index == 0,
+                        waitActionLabel(wait, action), onClick = { onAnswer(wait, action.id) }, small = true, enabled = !draft.sending, busy = draft.sending && index == 0,
                         kind = when (action.style) { "primary" -> ButtonKind.PRIMARY; "danger" -> ButtonKind.DANGER; else -> ButtonKind.SECONDARY },
                         modifier = Modifier.testTag("wait-action-${action.id}"),
                     )
@@ -154,7 +154,7 @@ private fun WaitOutcome(wait: Wait, today: Long) {
         at?.let {
             Text(stringResource(if (wait.cancelled) Res.string.waits_cancelled_at else Res.string.waits_answered_at, formatEventTime(it, today)), style = MetaStyle, color = colors.muted)
         }
-        wait.answerActionLabel?.let { Text(stringResource(Res.string.waits_answer_action, it), color = colors.text, fontSize = 13.sp, fontWeight = FontWeight.Medium) }
+        wait.answer?.let { given -> wait.actions.firstOrNull { it.id == given.action }?.let { waitActionLabel(wait, it) } ?: wait.answerActionLabel }?.let { Text(stringResource(Res.string.waits_answer_action, it), color = colors.text, fontSize = 13.sp, fontWeight = FontWeight.Medium) }
         wait.answerLines().forEach { line ->
             val value = when (val v = line.value) {
                 is AnswerValue.Flag -> stringResource(if (v.value) Res.string.waits_yes else Res.string.waits_no)
