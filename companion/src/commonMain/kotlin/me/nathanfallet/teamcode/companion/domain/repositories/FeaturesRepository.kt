@@ -21,6 +21,8 @@ object Features {
     const val RENAME = "cloud.sessions.rename.v1"
     /** Permission requests relayed from Claude Code, answered with `POST …/permissions`. */
     const val PERMISSIONS = "cloud.permissions.v1"
+    /** The owner approves every tool use of a session in advance (`PUT …/permission-bypass`), and sessions say whether they did. */
+    const val PERMISSION_BYPASS = "cloud.permissions.bypass.v1"
     const val INITIAL_MESSAGE = "cloud.sessions.initial-message.v1"
     const val ARTIFACTS = "artifacts.v1"
     const val ARTIFACT_TICKETS = "artifacts.tickets.v1"

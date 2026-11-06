@@ -377,6 +377,9 @@
     <string name="permission_send">Send</string>
     <string name="permission_decline">Decline</string>
     <string name="permission_allow">Allow</string>
+    <string name="permission_bypass">Bypass</string>
+    <string name="session_bypass_on">Permissions bypassed</string>
+    <string name="session_menu_revoke_bypass">Ask for permissions again</string>
     <string name="permission_deny">Deny</string>
     <string name="permission_left_out">This request is too large to show in full, so it can only be declined. Its beginning:</string>
     <string name="permission_more_waiting">%1$d more waiting after this one</string>

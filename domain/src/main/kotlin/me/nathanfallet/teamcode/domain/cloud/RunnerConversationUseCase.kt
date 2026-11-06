@@ -1,6 +1,12 @@
 package me.nathanfallet.teamcode.domain.cloud
 
+import java.util.UUID
 import kotlinx.coroutines.delay
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.contentOrNull
 import me.nathanfallet.teamcode.domain.cloud.CloudSessionState.*
 import me.nathanfallet.teamcode.domain.team.TeamFailure
 
@@ -56,9 +62,12 @@ class RunnerConversationUseCase(
         if (events.any { it.type !in CloudEventType.fromRunner || it.sequence < 1 || it.data.encodeToByteArray().size > CloudConversationRules.MAX_EVENT_BYTES })
             throw TeamFailure("invalid_events", 400, "Send normalized events with positive sequence numbers.")
         if (events.zipWithNext().any { (a, b) -> b.sequence != a.sequence + 1 }) throw TeamFailure("invalid_events", 400, "Send consecutive sequence numbers.")
-        live(teamId, sessionId, epoch)
+        val session = live(teamId, sessionId, epoch)
         val ack = store.appendRunnerEvents(sessionId, epoch, events)
         val accepted = events.filter { it.sequence <= ack.acceptedThrough }
+        session.permissionBypass?.takeIf { it.memberId == session.ownerId }?.let { bypass ->
+            for (event in accepted) if (event.type == CloudEventType.PERMISSION_REQUEST) approve(session, bypass, event)
+        }
         val turn = accepted.lastOrNull { it.turn != null }?.turn
         val conversation = accepted.lastOrNull { it.conversation != null }?.conversation
         if (turn != null || conversation != null) transition(teamId, sessionId) { current ->
@@ -71,6 +80,34 @@ class RunnerConversationUseCase(
             if (next == current) null else CloudTransition(next.copy(updatedAt = now), CloudWrite())
         }
         return ack
+    }
+
+    /**
+     * The owner's standing approval ([PermissionBypass]): answers the tool use [event] asks for with an allow written by
+     * the owner, through the same checks and insert as a member's answer, so the runner receives it like one. A question
+     * to the user is never answered, and a request the checks refuse stays open for the owner. The idempotency key makes
+     * a batch the runner sends again answer once.
+     */
+    private suspend fun approve(session: CloudSession, bypass: PermissionBypass, event: RunnerEvent) {
+        val data = try { Json.parseToJsonElement(event.data) as? JsonObject } catch (_: IllegalArgumentException) { null } ?: return
+        val requestId = (data["requestId"] as? JsonPrimitive)?.contentOrNull?.takeIf(CloudConversationRules::isPermissionRequestId) ?: return
+        if ((data["question"] as? JsonPrimitive)?.booleanOrNull == true) return
+        val answer = PermissionAnswer(requestId, true, null, emptyList())
+        val text = CloudConversationRules.bypassAllowText(requestId)
+        val input = CloudInput(
+            id = UUID.randomUUID().toString(), teamId = session.teamId, sessionId = session.id, kind = CloudInputKind.PERMISSION, status = CloudInputStatus.QUEUED,
+            authorId = bypass.memberId, credentialId = bypass.credentialId, text = text, wake = false, clientKey = "bypass:$requestId",
+            requestDigest = "permission\n$text", createdAt = store.now(),
+        )
+        val check = { context: AnswerContext ->
+            if ((context.state != READY && context.state != ACTIVE) || context.desiredState != DesiredState.RUNNING)
+                throw TeamFailure("nothing_to_answer", 409, "The session has no running agent waiting for an answer.")
+            val asked = context.request ?: throw TeamFailure("unknown_permission_request", 409, "No permission request with this id waits in the session's recent transcript.")
+            CloudConversationRules.checkAnswer(asked, answer, approver = true, currentEpoch = context.currentEpoch, standing = true)
+        }
+        // A refusal leaves the request to the owner; it never fails the runner's upload.
+        try { store.insertInput(NewInput(input, null, session.ownerId, permissionRequestId = requestId, permissionCheck = check), CloudConversationRules.MAX_PENDING_INPUTS) }
+        catch (_: TeamFailure) { }
     }
 
     /**

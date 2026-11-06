@@ -32,6 +32,7 @@ internal fun CloudSession.view() = CloudSessionView(
     host = host?.let { CloudSessionHostView(it.deviceId, it.device?.name, it.device?.platform, it.device?.osVersion, it.directoryName, it.online, it.lastHeartbeatAt, it.permissionMode.wire, it.folderId) },
     waiting = waitingForHuman?.let { CloudWaitingView(it.reason.wire, it.requestId, it.since, it.eventSeq) },
     githubAccess = githubAccess.wire.takeIf { kind == CloudSessionKind.CLOUD },
+    permissionBypass = permissionBypass != null,
 )
 /** The profile id and image reference of a remote session, which has neither. */
 internal const val REMOTE_PLACEHOLDER = "remote"
@@ -237,6 +238,10 @@ internal fun Route.cloudRoutes(sessions: CloudSessionService, admin: CloudAdmini
             val input = call.jsonBody<CloudGitHubAccessRequest>()
             val access = CloudGitHubAccess.parse(input.access) ?: throw TeamFailure("invalid_github_access", 400, "Use access owner, shared or none.")
             call.respond(sessions.setGitHubAccess(call.principal, call.onBehalfOf(), call.id(), access).view())
+        }
+        put("/sessions/{id}/permission-bypass") {
+            val input = call.jsonBody<CloudPermissionBypassRequest>()
+            call.respond(sessions.setPermissionBypass(call.principal, call.onBehalfOf(), call.id(), input.enabled).view())
         }
         // A remote session's host (teamcode remote) starts its next execution here, from the session's device.
         post("/sessions/{id}/host") {

@@ -356,6 +356,9 @@ class TeamCodeClient(
     /** Chooses whose instructions the agent follows with the owner's GitHub token (`cloud.sessions.github-access.v1`); owner only. */
     suspend fun setCloudGitHubAccess(id: String, access: String): CloudSessionView =
         identifier(id).let { request("/api/v1/cloud/sessions/$id/github", HttpMethod.Put, CloudGitHubAccessRequest(access)) }
+    /** Approves every later tool use of the session in advance, or takes that back (`cloud.permissions.bypass.v1`); owner only. */
+    suspend fun setCloudPermissionBypass(id: String, enabled: Boolean): CloudSessionView =
+        identifier(id).let { request("/api/v1/cloud/sessions/$id/permission-bypass", HttpMethod.Put, CloudPermissionBypassRequest(enabled)) }
     /** Starts a remote session's next execution on this device (`cloud.sessions.remote.v1`); the host then uses the runner channel. */
     suspend fun hostCloudSession(id: String): CloudHostView = cloudAction("/api/v1/cloud/sessions/$id/host", id, null, null).body()
     suspend fun deleteCloudSession(id: String, onBehalfOf: String? = null) { cloudAction("/api/v1/cloud/sessions/$id", id, onBehalfOf, null, HttpMethod.Delete) }

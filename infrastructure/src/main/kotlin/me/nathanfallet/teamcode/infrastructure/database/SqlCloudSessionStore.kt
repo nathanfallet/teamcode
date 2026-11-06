@@ -341,6 +341,7 @@ internal fun readSessionRow(row: ResultRow, labels: Map<String, String>) = Cloud
     githubAccess = CloudGitHubAccess.parse(row[CloudSessions.githubAccess]) ?: CloudGitHubAccess.OWNER,
     automationId = row.getOrNull(CloudSessions.automationId),
     runId = row.getOrNull(CloudSessions.runId),
+    permissionBypass = row[CloudSessions.bypassBy]?.let { PermissionBypass(it, row[CloudSessions.bypassCredentialId].orEmpty(), row[CloudSessions.bypassAt] ?: 0) },
 )
 /**
  * The host of a remote session; the device's name and system, and the liveness of the current execution, only when
@@ -390,6 +391,7 @@ internal fun writeSessionMutable(it: UpdateBuilder<*>, s: CloudSession) {
     it[CloudSessions.claimDeletedAt] = w.claimDeletedAt; it[CloudSessions.volumeDeletedAt] = w.volumeDeletedAt
     it[CloudSessions.deletionCode] = w.deletionProblem?.code; it[CloudSessions.deletionMessage] = w.deletionProblem?.message?.take(512)
     it[CloudSessions.updatedAt] = s.updatedAt; it[CloudSessions.transferId] = s.transferId; it[CloudSessions.githubAccess] = s.githubAccess.wire
+    it[CloudSessions.bypassBy] = s.permissionBypass?.memberId; it[CloudSessions.bypassCredentialId] = s.permissionBypass?.credentialId; it[CloudSessions.bypassAt] = s.permissionBypass?.at
     // The wait is only ever cleared here, never set (only the conversation store sets it, under the row lock): leaving
     // the states that take an answer ends it, since a pausing runner denies its open requests without an event, and a
     // pause cancelled on the same execution must not bring back a request already denied.

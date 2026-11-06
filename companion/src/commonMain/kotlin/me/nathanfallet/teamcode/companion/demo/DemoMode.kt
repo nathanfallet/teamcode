@@ -132,6 +132,13 @@ internal class DemoStore(private val clock: Clock, account: Account) {
         return moved
     }
 
+    /** Records the owner's standing approval of [id]'s tool uses, or takes it back. */
+    fun setPermissionBypass(id: String, enabled: Boolean): CloudSession {
+        val changed = session(id).copy(permissionBypass = enabled, updatedAt = now())
+        _sessions.update { it + (id to changed) }
+        return changed
+    }
+
     /** Renames [id] at once and tells the feed. */
     fun rename(id: String, name: String): CloudSession {
         val renamed = session(id).copy(name = name, updatedAt = now())

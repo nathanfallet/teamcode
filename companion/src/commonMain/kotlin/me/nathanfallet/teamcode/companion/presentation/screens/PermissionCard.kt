@@ -20,6 +20,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -48,6 +50,7 @@ import me.nathanfallet.teamcode.companion.presentation.viewmodels.SessionViewMod
 import me.nathanfallet.teamcode.companion.resources.Res
 import me.nathanfallet.teamcode.companion.resources.permission_allow
 import me.nathanfallet.teamcode.companion.resources.permission_back
+import me.nathanfallet.teamcode.companion.resources.permission_bypass
 import me.nathanfallet.teamcode.companion.resources.permission_choose_one
 import me.nathanfallet.teamcode.companion.resources.permission_choose_several
 import me.nathanfallet.teamcode.companion.resources.permission_decline
@@ -77,6 +80,7 @@ internal fun PermissionCardView(card: PermissionCard, viewModel: SessionViewMode
     val colors = TeamCode.colors
     val id = card.requestId
     val request = card.request
+    val offerBypass = viewModel.uiState.collectAsState().value.bypassOffered
     TcCard(modifier.testTag("permission-card"), borderColor = colors.accentDim, spacing = 10.dp) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             val title = if (request.question) stringResource(Res.string.permission_question_title)
@@ -103,6 +107,8 @@ internal fun PermissionCardView(card: PermissionCard, viewModel: SessionViewMode
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End), modifier = Modifier.fillMaxWidth()) {
                     TcButton(stringResource(Res.string.permission_deny), onClick = { viewModel.deny(id) }, enabled = card.editable, kind = ButtonKind.DANGER, small = true,
                         modifier = Modifier.testTag("permission-deny"))
+                    if (offerBypass) TcButton(stringResource(Res.string.permission_bypass), onClick = { viewModel.bypass(id) }, enabled = card.editable, kind = ButtonKind.GHOST, small = true,
+                        modifier = Modifier.testTag("permission-bypass"))
                     TcButton(stringResource(Res.string.permission_allow), onClick = { viewModel.allowTool(id) }, enabled = card.editable, small = true,
                         modifier = Modifier.testTag("permission-allow"))
                 }

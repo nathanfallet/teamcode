@@ -80,6 +80,9 @@ class RemoteSessionRepository(private val calls: AccountCalls, private val polic
     override suspend fun rename(accountId: String, sessionId: String, name: String): CloudSession =
         calls.withAccount(accountId, resource = true) { it.renameCloudSession(sessionId, name).domain() }
 
+    override suspend fun setPermissionBypass(accountId: String, sessionId: String, enabled: Boolean): CloudSession =
+        calls.withAccount(accountId, resource = true) { it.setCloudPermissionBypass(sessionId, enabled).domain() }
+
     override suspend fun end(accountId: String, sessionId: String) {
         calls.withAccount(accountId, resource = true) { it.deleteCloudSession(sessionId) }
     }

@@ -84,6 +84,16 @@ class CloudConversationRulesTest {
         invalid(PermissionAnswer("r1", true, null, listOf(QuestionAnswer(0, listOf(CloudConversationRules.MAX_PERMISSION_INDEX)))))
     }
 
+    @Test fun aStandingApprovalMayAllowAnInputNobodyCouldReadButNeverAQuestion() {
+        val big = PermissionRequestRecord("t1", question = false, questions = null, inputLeftOut = true)
+        val allow = PermissionAnswer("t1", true, null, emptyList())
+        assertEquals("permission_input_unseen", assertFailsWith<TeamFailure> { CloudConversationRules.checkAnswer(big, allow, approver = true) }.code)
+        CloudConversationRules.checkAnswer(big, allow, approver = true, standing = true)
+        val question = PermissionRequestRecord("q1", question = true, questions = listOf(QuestionShape(2, false)))
+        assertEquals("invalid_permission_answer", assertFailsWith<TeamFailure> { CloudConversationRules.checkAnswer(question, PermissionAnswer("q1", true, null, emptyList()), approver = true, standing = true) }.code)
+        assertEquals("{\"requestId\":\"t\\\"1\",\"behavior\":\"allow\"}", CloudConversationRules.bypassAllowText("t\"1"))
+    }
+
     @Test fun onlyTheOwnerOrAnAdministratorDecidesAToolUse() {
         val tool = PermissionRequestRecord("t1", question = false, questions = null)
         val allow = PermissionAnswer("t1", true, null, emptyList())

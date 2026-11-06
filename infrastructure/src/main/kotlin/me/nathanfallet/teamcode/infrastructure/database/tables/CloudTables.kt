@@ -162,6 +162,10 @@ object CloudSessions : Table("cloud_sessions") {
     val kind = varchar("kind", 16).default("cloud")
     /** Whose instructions an agent holding the owner's GitHub token follows: `owner`, `shared` or `none` (audit M2). */
     val githubAccess = varchar("github_access", 16).default("owner")
+    /** The owner's standing approval of every tool use ([me.nathanfallet.teamcode.domain.cloud.PermissionBypass]): who chose it, with which credential, and when; all null when off. */
+    val bypassBy = varchar("bypass_by", 36).nullable()
+    val bypassCredentialId = varchar("bypass_credential_id", 36).nullable()
+    val bypassAt = long("bypass_at").nullable()
     /** The device a remote session runs on; null for cloud sessions. */
     val hostDeviceId = optReference("host_device_id", Devices.id, onDelete = ReferenceOption.NO_ACTION, onUpdate = ReferenceOption.NO_ACTION, fkName = "cloud_sessions_host_device")
     /** The last segment of a remote session's directory, never its full path. */

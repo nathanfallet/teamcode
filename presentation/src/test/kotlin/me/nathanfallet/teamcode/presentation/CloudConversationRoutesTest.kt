@@ -671,6 +671,77 @@ class CloudConversationRoutesTest {
         } finally { runner.close() }
     }
 
+    /**
+     * The owner's standing approval: while it is on, each tool use the runner posts is allowed by the server with an
+     * input written by the owner, and a question is left to the owner. Only the owner turns it on or off; it reads back
+     * on the session; a transfer ends it.
+     */
+    @Test fun theOwnersStandingApprovalAllowsToolUsesOnTheServer() = testApplication {
+        val store = Sessions(listOf(admin, colleague, other))
+        val conversations = Conversations().also { c -> c.sessionOf = { store.sessions[it] } }
+        val access = CloudAccessService(conversations, store)
+        val service = CloudConversationService(conversations, store, access, githubLinked = { _, _ -> false })
+        val sessions = CloudSessionService(store, access = access)
+        application {
+            configureGateway(gateway, team = team(), cloudSessions = sessions, cloudAdmin = CloudAdministrationService(object : CloudAdminStore {
+                override suspend fun clusters(actor: Principal) = emptyList<CloudCluster>()
+                override suspend fun saveCluster(actor: Principal, id: String?, expectedVersion: Int?, input: CloudClusterInput) = error("unused")
+                override suspend fun profiles(actor: Principal) = emptyList<CloudProfile>()
+                override suspend fun member(actor: Principal, memberId: String): Member? = null
+                override suspend fun saveProfile(actor: Principal, id: String?, expectedVersion: Int, name: String, spec: CloudProfileSpec, assignedMemberIds: Set<String>) = error("unused")
+                override suspend fun settings(actor: Principal) = CloudSettings()
+                override suspend fun saveSettings(actor: Principal, settings: CloudSettings) = settings
+            }, cluster), cloudRunner = CloudRunnerChannel(RunnerChannelUseCase(store), AuthenticateRunnerUseCase(store, cluster)),
+                cloudConversation = CloudConversation(service, access, RunnerConversationUseCase(store, conversations, sleep = { }, githubLinked = { _, _ -> false })), publicOrigin = "http://localhost")
+        }
+        val created = (sessions.create(Principal(colleague, "colleague-session", "default"), null, CloudSessionDraft("Run", "profile-id", null, null, null, emptyMap(), null), null) as CloudCreateOutcome.Created).session
+        store.sessions.clear()
+        store.sessions["s1"] = created.copy(id = "s1", currentEpoch = 1, generation = 1, state = CloudSessionState.READY)
+        store.runs["s1" to 1] = CloudExecution("s1", 1, "tc-s1-e1", ExecutionState.RUNNING, 1)
+        suspend fun bypass(token: String, enabled: Boolean) = client.put("/api/v1/cloud/sessions/s1/permission-bypass") { bearerAuth(token); contentType(ContentType.Application.Json); setBody("""{"enabled":$enabled}""") }
+        val runner = TeamCodeClient("http://localhost", { "projected-pod-token-1" }) { config -> createClient { config(this) } }
+        var sequence = 0L
+        suspend fun ask(requestId: String, question: Boolean = false) {
+            val record = PermissionRequestRecord(requestId, question, null, epoch = 1)
+            conversations.requests[requestId] = record
+            runner.runnerEvents(RunnerEventsRequest("default", "s1", 1, listOf(RunnerEventView(++sequence, "permission.request", buildJsonObject {
+                put("requestId", requestId); put("question", question)
+            }))))
+        }
+        fun allowed() = conversations.inputs.values.filter { it.kind == CloudInputKind.PERMISSION }
+        try {
+            ask("before")
+            assertTrue(allowed().isEmpty(), "Nothing is approved in advance by default")
+            assertFalse(Serialization.json.decodeFromString<CloudSessionView>(client.get("/api/v1/cloud/sessions/s1") { bearerAuth("colleague") }.bodyAsText()).permissionBypass!!)
+
+            assertEquals(HttpStatusCode.NotFound, bypass("other", true).status, "Not the owner's session")
+            assertEquals(HttpStatusCode.NotFound, bypass("admin", true).status, "A role decides nothing on a colleague's session")
+            val on = bypass("colleague", true)
+            assertEquals(HttpStatusCode.OK, on.status)
+            assertTrue(Serialization.json.decodeFromString<CloudSessionView>(on.bodyAsText()).permissionBypass!!)
+            assertEquals(HttpStatusCode.OK, bypass("colleague", true).status, "Turning it on twice changes nothing")
+
+            ask("tool-1")
+            val approved = allowed().single()
+            assertEquals(colleague.id, approved.authorId, "The allow is the owner's")
+            assertEquals(CloudConversationRules.bypassAllowText("tool-1"), approved.text)
+            assertEquals(CloudInputStatus.QUEUED, approved.status)
+            ask("question-1", question = true)
+            assertEquals(1, allowed().size, "A question is never answered for the owner")
+            assertEquals(1, runner.runnerInputs(RunnerInputsRequest("default", "s1", 1, 0)).inputs.count { it.kind == "permission" }, "The runner receives it like an answer from a member")
+
+            assertFalse(Serialization.json.decodeFromString<CloudSessionView>(bypass("colleague", false).bodyAsText()).permissionBypass!!)
+            ask("tool-2")
+            assertEquals(1, allowed().size, "The owner took it back")
+
+            // A transfer ends it: the recipient decides for themselves.
+            bypass("colleague", true)
+            store.sessions["s1"] = store.sessions.getValue("s1").copy(ownerId = other.id)
+            ask("tool-3")
+            assertEquals(1, allowed().size, "The former owner's approval does not follow the session")
+        } finally { runner.close() }
+    }
+
     @Test fun aServerWithoutFilesBehavesAsBefore() = testApplication {
         val store = Sessions(listOf(admin, colleague, other))
         val conversations = Conversations().also { c -> c.sessionOf = { store.sessions[it] } }

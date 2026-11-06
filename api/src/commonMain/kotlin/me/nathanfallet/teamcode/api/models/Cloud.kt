@@ -97,6 +97,11 @@ data class CloudSessionView(
      * `shared` or `none`. Null from a server without the feature.
      */
     val githubAccess: String? = null,
+    /**
+     * Whether the owner approved every tool use of this session in advance (`cloud.permissions.bypass.v1`): the server then
+     * allows each later `permission.request` itself, and none reaches a client. Null from a server without the feature.
+     */
+    val permissionBypass: Boolean? = null,
 )
 object CloudSessionKinds {
     const val CLOUD = "cloud"
@@ -199,6 +204,9 @@ data class RenameCloudSessionRequest(val name: String)
 /** `PUT /cloud/sessions/{id}/github` (`cloud.sessions.github-access.v1`): `owner`, `shared` or `none`. Owner only. */
 @Serializable
 data class CloudGitHubAccessRequest(val access: String)
+/** `PUT /cloud/sessions/{id}/permission-bypass` (`cloud.permissions.bypass.v1`): approve every later tool use of the session in advance, or stop. Owner only. */
+@Serializable
+data class CloudPermissionBypassRequest(val enabled: Boolean)
 
 @Serializable
 data class CloudExecutionView(

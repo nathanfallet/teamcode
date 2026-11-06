@@ -75,6 +75,7 @@ import me.nathanfallet.teamcode.companion.domain.usecases.sessions.ControlSessio
 import me.nathanfallet.teamcode.companion.presentation.components.Banner
 import me.nathanfallet.teamcode.companion.presentation.components.BusyRow
 import me.nathanfallet.teamcode.companion.presentation.components.ButtonKind
+import me.nathanfallet.teamcode.companion.presentation.components.Chip
 import me.nathanfallet.teamcode.companion.presentation.components.ConfirmingLinks
 import me.nathanfallet.teamcode.companion.presentation.components.EndSessionDialog
 import me.nathanfallet.teamcode.companion.presentation.components.RenameSessionDialog
@@ -177,6 +178,8 @@ import me.nathanfallet.teamcode.companion.resources.session_ended
 import me.nathanfallet.teamcode.companion.resources.session_live
 import me.nathanfallet.teamcode.companion.resources.session_load_older
 import me.nathanfallet.teamcode.companion.resources.session_menu_pause
+import me.nathanfallet.teamcode.companion.resources.session_menu_revoke_bypass
+import me.nathanfallet.teamcode.companion.resources.session_bypass_on
 import me.nathanfallet.teamcode.companion.resources.action_cancel
 import me.nathanfallet.teamcode.companion.resources.session_menu_end
 import me.nathanfallet.teamcode.companion.resources.session_end_title
@@ -353,6 +356,10 @@ private fun SessionMenu(state: SessionUiState, viewModel: SessionViewModel, onOp
                 DropdownMenuItem(text = { Text(stringResource(Res.string.session_menu_resume)) }, leadingIcon = { Icon(PhosphorIcons.Regular.Play, null, Modifier.size(18.dp)) },
                     enabled = !state.acting, onClick = { open = false; viewModel.resume() }, modifier = Modifier.testTag("resume"))
             }
+            if (session != null && state.canControl && state.bypassSupported && session.permissionBypass) {
+                DropdownMenuItem(text = { Text(stringResource(Res.string.session_menu_revoke_bypass)) }, leadingIcon = { Icon(PhosphorIcons.Regular.Play, null, Modifier.size(18.dp)) },
+                    enabled = !state.acting, onClick = { open = false; viewModel.revokeBypass() }, modifier = Modifier.testTag("revoke-bypass"))
+            }
             DropdownMenuItem(text = { Text(stringResource(Res.string.artifacts_session_title)) }, leadingIcon = { Icon(PhosphorIcons.Regular.Files, null, Modifier.size(18.dp)) },
                 onClick = { open = false; onOpenArtifacts() }, modifier = Modifier.testTag("session-artifacts"))
             if (session != null) menuItems(session) { open = false }
@@ -385,6 +392,7 @@ private fun Summary(session: CloudSession, state: SessionUiState) {
             ) {
                 StateChip(session.state)
                 if (session.remote) KindChips(session)
+                if (session.permissionBypass) Chip(stringResource(Res.string.session_bypass_on), modifier = Modifier.testTag("bypass-chip"))
                 LiveLabel(state)
             }
             Icon(
