@@ -88,7 +88,7 @@ class SessionActionUseCasesTest {
         val mine = cloudSession("s", ownerId = "m1"); val theirs = cloudSession("s", ownerId = "m2")
         assertTrue(ControlSessionUseCase.canControl(account(memberId = "m1"), mine))
         assertFalse(ControlSessionUseCase.canControl(account(memberId = "m1"), theirs))
-        assertTrue(ControlSessionUseCase.canControl(account(memberId = "m1").copy(role = "ADMIN"), theirs))
+        assertFalse(ControlSessionUseCase.canControl(account(memberId = "m1").copy(role = "ADMIN"), theirs), "A role opens nobody else's session")
         assertTrue(ControlSessionUseCase.canResume(cloudSession("p", SessionState.PAUSED)))
         assertFalse(ControlSessionUseCase.canMessage(cloudSession("t", SessionState.TERMINATED)))
     }

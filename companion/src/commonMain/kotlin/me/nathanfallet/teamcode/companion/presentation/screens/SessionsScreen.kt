@@ -60,7 +60,6 @@ import me.nathanfallet.teamcode.companion.domain.models.Account
 import me.nathanfallet.teamcode.companion.domain.models.CloudSession
 import me.nathanfallet.teamcode.companion.domain.models.SessionWaiting
 import me.nathanfallet.teamcode.companion.domain.models.SessionFilter
-import me.nathanfallet.teamcode.companion.domain.models.SessionScope
 import me.nathanfallet.teamcode.companion.domain.services.Clock
 import me.nathanfallet.teamcode.companion.presentation.components.KeepAtTopOnNewFirstRow
 import me.nathanfallet.teamcode.companion.presentation.components.phaseLabel
@@ -120,12 +119,9 @@ import me.nathanfallet.teamcode.companion.resources.sessions_filter_ended
 import me.nathanfallet.teamcode.companion.resources.sessions_filter_open
 import me.nathanfallet.teamcode.companion.resources.sessions_load_more
 import me.nathanfallet.teamcode.companion.resources.sessions_loading
-import me.nathanfallet.teamcode.companion.resources.sessions_mine
 import me.nathanfallet.teamcode.companion.resources.sessions_reconnecting
-import me.nathanfallet.teamcode.companion.resources.sessions_scope
 import me.nathanfallet.teamcode.companion.resources.sessions_signed_out_title
 import me.nathanfallet.teamcode.companion.resources.sessions_switch_account
-import me.nathanfallet.teamcode.companion.resources.sessions_team
 import me.nathanfallet.teamcode.companion.resources.sessions_title
 import me.nathanfallet.teamcode.companion.resources.sessions_turn_finished
 import me.nathanfallet.teamcode.companion.resources.sessions_waiting_permission
@@ -195,12 +191,6 @@ fun SessionsScreen(
             }
             // The sidebar lists the accounts on a wide window.
             if (!LocalWideLayout.current) account?.let { AccountPill(it, onSwitchAccount) }
-            if (account != null && account.signedIn && account.isAdministrator) Row(verticalAlignment = Alignment.CenterVertically) {
-                FilterPill(
-                    listOf(SessionScope.MINE to stringResource(Res.string.sessions_mine), SessionScope.TEAM to stringResource(Res.string.sessions_team)),
-                    state.scope, sessionsViewModel::setScope, stringResource(Res.string.sessions_scope), tag = "scope", optionTag = { "scope-${it.name.lowercase()}" },
-                )
-            }
         }
 
         val list = state.list

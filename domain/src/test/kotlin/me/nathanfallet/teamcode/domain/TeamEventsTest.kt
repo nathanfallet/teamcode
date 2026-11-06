@@ -57,15 +57,17 @@ class TeamEventsTest {
         assertTrue(own.sees(TeamEventType.CLOUD_TURN, "member") && !own.sees(TeamEventType.CLOUD_TURN, "colleague"))
         assertTrue(own.sees(TeamEventType.RUN_STALE, "member") && !own.sees(TeamEventType.RUN_STALE, "colleague"))
         val interactiveAdmin = principal(admin).teamEventAudience()
-        assertTrue(interactiveAdmin.sees(TeamEventType.CLOUD_TURN, "colleague") && interactiveAdmin.sees(TeamEventType.RUN_ENDED, "colleague"))
+        assertTrue(!interactiveAdmin.sees(TeamEventType.CLOUD_TURN, "colleague"), "No role sees another member's sessions")
+        assertTrue(interactiveAdmin.sees(TeamEventType.CLOUD_TURN, "admin") && interactiveAdmin.sees(TeamEventType.RUN_ENDED, "colleague"), "An administrator still sees the team's runs")
         val cloudKey = principal(admin, setOf(ServiceScope.ADMIN_CLOUD)).teamEventAudience()
-        assertTrue(cloudKey.sees(TeamEventType.SESSION_PAUSED, "colleague"), "admin:cloud sees every session")
+        assertFalse(cloudKey.sees(TeamEventType.SESSION_PAUSED, "colleague"), "admin:cloud sees no other member's session")
+        assertTrue(cloudKey.sees(TeamEventType.SESSION_PAUSED, "admin"))
         assertFalse(cloudKey.sees(TeamEventType.RUN_STARTED, "admin"), "but no run without usage:read")
         val ownerKey = principal(admin, setOf(ServiceScope.CLOUD_READ, ServiceScope.USAGE_READ)).teamEventAudience()
         assertTrue(ownerKey.sees(TeamEventType.CLOUD_TURN, "admin") && !ownerKey.sees(TeamEventType.CLOUD_TURN, "colleague"), "An administrator's plain key reads as its owner")
         assertTrue(ownerKey.sees(TeamEventType.RUN_STARTED, "admin") && !ownerKey.sees(TeamEventType.RUN_STARTED, "colleague"))
         val monitor = principal(admin, setOf(ServiceScope.TEAM_READ)).teamEventAudience()
-        assertTrue(monitor.sees(TeamEventType.CLOUD_TURN, "colleague") && monitor.sees(TeamEventType.RUN_STALE, "colleague"), "team:read sees the team's sessions and runs")
+        assertTrue(!monitor.sees(TeamEventType.CLOUD_TURN, "colleague") && monitor.sees(TeamEventType.RUN_STALE, "colleague"), "team:read sees the team's runs, no member's session")
         assertEquals("credential_scope", assertFailsWith<TeamFailure> { principal(member, setOf(ServiceScope.USAGE_READ)).teamEventAudience() }.code)
         assertEquals("credential_scope", assertFailsWith<TeamFailure> { principal(member, setOf(ServiceScope.INFERENCE)).teamEventAudience() }.code)
         assertEquals("password_change_required", assertFailsWith<TeamFailure> { principal(member.copy(passwordChangeRequired = true)).teamEventAudience() }.code)
@@ -96,14 +98,15 @@ class TeamEventsTest {
         val mine = collect(service.open(principal(member), 0, null), 3)
         assertEquals(listOf(1L, 4L, 5L), mine.map { it.seq })
         assertTrue(mine.all { it.ownerId == "member" }, "The colleague's events never reach the member")
-        val everything = collect(service.open(principal(admin), 0, null), 5)
-        assertEquals(listOf(1L, 2L, 3L, 4L, 5L), everything.map { it.seq })
+        // An administrator sees the team's runs, never another member's sessions.
+        val everything = collect(service.open(principal(admin), 0, null), 2)
+        assertEquals(listOf(3L, 5L), everything.map { it.seq })
         // Reconnecting after the last id received sees what came since, once, in order.
         val resumed = collect(service.open(principal(member), mine.last().seq, null), 2) { journal.add(TeamEventType.CLOUD_TURN, "colleague"); journal.add(TeamEventType.SESSION_PAUSED, "member"); journal.add(TeamEventType.SESSION_ENDED, "member") }
         assertEquals(listOf(7L, 8L), resumed.map { it.seq })
         assertEquals(listOf(TeamEventType.SESSION_PAUSED, TeamEventType.SESSION_ENDED), resumed.map { it.type })
-        val filtered = collect(service.open(principal(admin), 0, setOf(TeamEventType.CLOUD_TURN)), 2)
-        assertEquals(listOf(4L, 6L), filtered.map { it.seq })
+        val filtered = collect(service.open(principal(member), 0, setOf(TeamEventType.CLOUD_TURN)), 1)
+        assertEquals(listOf(4L), filtered.map { it.seq })
     }
 
     @Test fun pagesDoNotStallOnInvisibleEvents() = runBlocking {

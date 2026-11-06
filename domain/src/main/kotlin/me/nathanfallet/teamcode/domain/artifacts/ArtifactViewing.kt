@@ -145,7 +145,7 @@ class ArtifactViewing(
                 if (readable.currentVersion < 1) throw notFound()
                 val number = requested ?: readable.currentVersion
                 val version = artifacts.version(viewer, artifactId, number)
-                val manager = readable.relation in setOf("owner", "editor", "admin") || viewer.member.role.isAdministrator
+                val manager = readable.relation in setOf("owner", "editor")
                 val sharing = if (manager) artifacts.members(viewer, artifactId) else null
                 return ArtifactShell(readable, version, artifacts.versions(viewer, artifactId), sharing, memberTicket(viewer, artifactId, number, now).ticket, member = true)
             }

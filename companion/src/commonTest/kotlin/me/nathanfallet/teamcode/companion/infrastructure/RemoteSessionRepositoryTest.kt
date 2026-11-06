@@ -22,7 +22,6 @@ import me.nathanfallet.teamcode.companion.domain.models.SessionChange
 import me.nathanfallet.teamcode.companion.domain.models.SessionFilter
 import me.nathanfallet.teamcode.companion.domain.models.SessionHost
 import me.nathanfallet.teamcode.companion.domain.models.SessionKind
-import me.nathanfallet.teamcode.companion.domain.models.SessionScope
 import me.nathanfallet.teamcode.companion.domain.models.SessionState
 import me.nathanfallet.teamcode.companion.domain.models.TranscriptEvent
 import me.nathanfallet.teamcode.companion.domain.models.TurnPhase
@@ -75,18 +74,18 @@ class RemoteSessionRepositoryTest {
 
     @Test fun theListAsksForTheFiltersStatesAndMapsSessions() = runTest {
         json("""{"sessions":[$sessionJson],"nextBefore":"s0"}""")
-        val page = sessions.sessions("a1", SessionScope.TEAM, SessionFilter.OPEN, before = "s9")
+        val page = sessions.sessions("a1", SessionFilter.OPEN, before = "s9")
         val session = page.sessions.single()
         assertEquals(SessionState.ACTIVE, session.state); assertEquals("opus", session.model); assertEquals(listOf("github.com/team/app"), session.repositories)
         assertEquals("s0", page.nextBefore)
         val url = requests.single().url
-        assertEquals("all", url.parameters["owner"]); assertEquals("s9", url.parameters["before"])
+        assertNull(url.parameters["owner"], "Never another member's sessions"); assertEquals("s9", url.parameters["before"])
         assertEquals(listOf("creating", "preparing", "ready", "active", "pausing", "resuming", "transferring", "paused"), url.parameters.getAll("state"))
     }
 
     @Test fun theAllFilterAsksForEveryStateAndEndingDeletesTheSession() = runTest {
         json("""{"sessions":[]}""")
-        sessions.sessions("a1", SessionScope.MINE, SessionFilter.ALL, before = null)
+        sessions.sessions("a1", SessionFilter.ALL, before = null)
         assertEquals(listOf("creating", "preparing", "ready", "active", "pausing", "resuming", "transferring", "paused", "terminated", "failed"), requests.single().url.parameters.getAll("state"))
         assertEquals(listOf("terminated", "failed"), SessionFilter.ENDED.states.map { it.wire })
         requests.clear()
@@ -100,7 +99,7 @@ class RemoteSessionRepositoryTest {
         val remote = sessionJson.replace(""""future":{"x":1}}""", """"kind":"remote","host":{"deviceId":"d1","deviceName":"Ada's MacBook","platform":"macos","osVersion":"15.1",
             "directoryName":"app","online":false,"permissionMode":"bypass"},"failure":{"code":"host_offline","message":"Gone.","retryable":true}}""")
         json("""{"sessions":[$remote,$sessionJson]}""")
-        val page = sessions.sessions("a1", SessionScope.MINE, SessionFilter.ALL, before = null, kinds = setOf(SessionKind.REMOTE, SessionKind.CLOUD))
+        val page = sessions.sessions("a1", SessionFilter.ALL, before = null, kinds = setOf(SessionKind.REMOTE, SessionKind.CLOUD))
         val (onDevice, inPod) = page.sessions
         assertEquals(SessionKind.REMOTE, onDevice.kind)
         assertEquals(SessionHost("Ada's MacBook", "macos", "15.1", "app", online = false, removed = false, permissionMode = "bypass"), onDevice.host)
@@ -112,7 +111,7 @@ class RemoteSessionRepositoryTest {
 
     @Test fun withoutKindsTheListAndTheFeedAskAsBefore() = runTest {
         json("""{"sessions":[]}""")
-        sessions.sessions("a1", SessionScope.MINE, SessionFilter.OPEN, before = null)
+        sessions.sessions("a1", SessionFilter.OPEN, before = null)
         assertNull(requests.single().url.parameters.getAll("kind"))
         sse(teamEvent(1, "cloud.turn", data = """{"phase":"completed","kind":"remote"}""") + "event: denied\ndata: {}\n\n")
         val seen = mutableListOf<LiveUpdate<SessionChange>>()
@@ -185,7 +184,7 @@ class RemoteSessionRepositoryTest {
         assertNull(answered.waitingReason); assertEquals("r1", answered.requestId)
 
         json("""{"sessions":[${sessionJson.replace(""""future":{"x":1}}""", """"waiting":{"reason":"permission","requestId":"r2","since":7,"eventSeq":3}}""")},$sessionJson]}""")
-        val (waiting, idle) = sessions.sessions("a1", SessionScope.MINE, SessionFilter.OPEN, before = null).sessions
+        val (waiting, idle) = sessions.sessions("a1", SessionFilter.OPEN, before = null).sessions
         assertEquals(me.nathanfallet.teamcode.companion.domain.models.SessionWaiting("permission", "r2", 7), waiting.waiting)
         assertNull(idle.waiting)
     }
@@ -436,7 +435,7 @@ class RemoteSessionRepositoryTest {
         fun refused(message: String) = sessionJson.replace(""""future":{"x":1}}""", """"kind":"remote","host":{"deviceId":"d1","deviceName":"Mac","directoryName":"app","online":false},
             "failure":{"code":"host_refused","message":"$message","retryable":false}}""").replace(""""state":"active",""", """"state":"terminated",""")
         json("""{"sessions":[${refused("The device refused to start this session (folder_missing).")},${refused("Refused <b>(Not A Code)</b>.")}]}""")
-        val (worded, unreadable) = sessions.sessions("a1", SessionScope.MINE, SessionFilter.ENDED, before = null).sessions
+        val (worded, unreadable) = sessions.sessions("a1", SessionFilter.ENDED, before = null).sessions
         assertTrue(worded.hostRefused); assertEquals("folder_missing", worded.refusalReason)
         // Anything but a short code is the server's text, never shown.
         assertTrue(unreadable.hostRefused); assertNull(unreadable.refusalReason)

@@ -126,15 +126,15 @@ class CloudSessionPersistenceTest {
         assertEquals("After", read.name); assertEquals(created.generation + 1, read.generation)
         assertEquals(created.state, read.state); assertEquals(created.desiredState, read.desiredState)
         assertEquals("Sibling", ra.sessions.get(colleague, sibling.id).name)
-        assertEquals("By the admin", ra.sessions.rename(admin, null, created.id, "By the admin").name)
+        failure("not_found") { ra.sessions.rename(admin, null, created.id, "By the admin") }
         // The same name writes nothing: no new generation, no second event.
         val generation = ra.sessions.get(colleague, created.id).generation
-        rb.sessions.rename(admin, null, created.id, "By the admin")
+        rb.sessions.rename(colleague, null, created.id, "After")
         assertEquals(generation, ra.sessions.get(colleague, created.id).generation)
         val audited = ra.database.query { AuditEvents.selectAll().where { (AuditEvents.action eq "cloud.session.renamed") and (AuditEvents.subjectId eq created.id) }.orderBy(AuditEvents.id to SortOrder.ASC).toList() }
-        assertEquals(listOf(colleague.member.id, admin.member.id), audited.map { it[AuditEvents.actorId] })
+        assertEquals(listOf(colleague.member.id), audited.map { it[AuditEvents.actorId] })
         val events = ra.database.query { TeamEvents.selectAll().where { (TeamEvents.subjectId eq created.id) and (TeamEvents.type eq "cloud.session.renamed") }.orderBy(TeamEvents.seq to SortOrder.ASC).toList() }
-        assertEquals(listOf("After", "By the admin"), events.map { kotlinx.serialization.json.Json.parseToJsonElement(it[TeamEvents.data]).let { data -> (data as kotlinx.serialization.json.JsonObject)["name"]!!.toString().trim('"') } })
+        assertEquals(listOf("After"), events.map { kotlinx.serialization.json.Json.parseToJsonElement(it[TeamEvents.data]).let { data -> (data as kotlinx.serialization.json.JsonObject)["name"]!!.toString().trim('"') } })
         assertEquals(colleague.member.id, events.first()[TeamEvents.ownerId], "The feed event belongs to the session's owner")
         ra.sessions.delete(colleague, null, created.id); ra.sessions.delete(colleague, null, sibling.id)
     }
@@ -149,7 +149,8 @@ class CloudSessionPersistenceTest {
         val outcomes = coroutineScope { listOf(ra, rb).map { r -> async(Dispatchers.IO) { r.sessions.create(admin, colleague.member.id, draft, key) } }.awaitAll() }
         assertEquals(1, outcomes.count { it is CloudCreateOutcome.Created }, "Concurrent replays create one session")
         val ids = outcomes.map { (it as? CloudCreateOutcome.Created)?.session?.id ?: (it as CloudCreateOutcome.Replayed).session.id }.toSet()
-        val created = ra.sessions.get(admin, ids.single())
+        val created = ra.sessions.get(colleague, ids.single())
+        failure("not_found") { ra.sessions.get(admin, created.id) }
         assertEquals(colleague.member.id, created.ownerId)
         assertEquals(Attribution(admin.member.id, admin.tokenId, colleague.member.id), created.createdBy)
         assertEquals(45, created.idleTimeoutMinutes)
@@ -188,11 +189,12 @@ class CloudSessionPersistenceTest {
         assertEquals(created.id, ra.sessions.get(reader, created.id).id, "cloud:read sees the owner's session")
         failure("not_found") { ra.sessions.get(adminWriter, created.id) }
         failure("forbidden") { ra.sessions.list(adminWriter, CloudSessionQuery(owner = "*")) }
-        assertTrue(created.id in ra.sessions.list(orchestrator, CloudSessionQuery(owner = "*")).sessions.map { it.id })
+        failure("forbidden") { ra.sessions.list(orchestrator, CloudSessionQuery(owner = "*")) }
+        failure("not_found") { ra.sessions.get(orchestrator, created.id) }
         // Revocation on one replica stops the key on the other at its next call.
         keys.revoke(admin, orchestratorKey.metadata.id)
         failure("authentication_required") { rb.sessions.get(orchestrator, created.id) }
-        failure("authentication_required") { rb.sessions.delete(orchestrator, colleague.member.id, created.id) }
+        failure("not_found") { rb.sessions.delete(orchestrator, colleague.member.id, created.id) } // delegation opens no existing session of a member
         rb.sessions.delete(colleague, null, created.id)
         drain(ra) { ra.store.find(admin.teamId, created.id)!!.workspace.deletion == DeletionState.PROVEN }
     }
@@ -299,7 +301,7 @@ class CloudSessionPersistenceTest {
         val started = running.single { it.currentEpoch == 1 }
         rb.sessions.delete(if (started.ownerId == admin.member.id) admin else colleague, null, started.id)
         drain(ra) { ra.store.find(admin.teamId, waiting.id)!!.currentEpoch == 1 }
-        ra.sessions.delete(admin, null, waiting.id)
+        ra.sessions.delete(if (waiting.ownerId == admin.member.id) admin else colleague, null, waiting.id)
         drain(ra) { listOf(first, second).all { ra.store.find(admin.teamId, it.id)!!.workspace.deletion == DeletionState.PROVEN } }
         ra.admin.saveCluster(admin, connected.id, 3, CloudClusterInput(connected.name, connected.apiUrl, null, null, connected.allowedNamespaces, 10, connected.defaultStorageClass))
     }
@@ -350,9 +352,12 @@ class CloudSessionPersistenceTest {
         assertEquals("expired", ra.store.find(admin.teamId, lost.id)!!.terminatedReason)
         repeat(2) { rb.sessions.create(colleague, null, CloudSessionDraft("Slot $it", profile.id, null, null, null, emptyMap(), null), null) }
         failure("cloud_session_limit") { ra.sessions.create(admin, colleague.member.id, CloudSessionDraft("Over", profile.id, null, null, null, emptyMap(), null), null) }
-        assertEquals(1, ra.sessions.list(admin, CloudSessionQuery(owner = colleague.member.id, limit = 1)).sessions.size)
-        val page = ra.sessions.list(admin, CloudSessionQuery(owner = "*", limit = 2))
-        val next = ra.sessions.list(admin, CloudSessionQuery(owner = "*", limit = 50, beforeId = page.nextBeforeId))
+        // No role lists the team's sessions through the service; the store still pages them (keyset) for the workers.
+        failure("forbidden") { ra.sessions.list(admin, CloudSessionQuery(owner = colleague.member.id, limit = 1)) }
+        failure("forbidden") { ra.sessions.list(admin, CloudSessionQuery(owner = "*", limit = 2)) }
+        assertEquals(1, ra.sessions.list(colleague, CloudSessionQuery(limit = 1)).sessions.size)
+        val page = ra.store.list(admin.teamId, CloudSessionQuery(owner = null, limit = 2))
+        val next = ra.store.list(admin.teamId, CloudSessionQuery(owner = null, limit = 50, beforeId = page.nextBeforeId))
         assertTrue(next.sessions.none { it.id in page.sessions.map(CloudSession::id) })
         // Includes the deleted session created by the `cloud:*` keys step and the two of the renaming step.
         assertEquals(11, page.sessions.size + next.sessions.size)
@@ -609,7 +614,7 @@ class CloudSessionPersistenceTest {
         assertEquals(ids(), ids(CloudSessionKind.CLOUD, CloudSessionKind.REMOTE))
         assertTrue(cloud.id in ids() && remote.id in ids())
         assertEquals(read.host, rb.sessions.list(colleague, CloudSessionQuery(kinds = setOf(CloudSessionKind.REMOTE))).sessions.single().host)
-        assertEquals(listOf(remote.id), rb.sessions.list(admin, CloudSessionQuery(owner = "*", kinds = setOf(CloudSessionKind.REMOTE))).sessions.map { it.id })
+        failure("forbidden") { rb.sessions.list(admin, CloudSessionQuery(owner = "*", kinds = setOf(CloudSessionKind.REMOTE))) }
 
         // Removing the device ends its remote sessions in the same transaction; they keep their transcript and directory name.
         devices.revokeDevice(colleague, device.id)

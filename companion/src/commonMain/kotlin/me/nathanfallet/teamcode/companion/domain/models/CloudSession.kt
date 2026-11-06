@@ -37,8 +37,6 @@ enum class SessionFilter(val groups: Set<SessionGroup>) {
     operator fun contains(state: SessionState): Boolean = state.group in groups
 }
 
-/** Whose sessions the list shows: the member's own, or the whole team's (administrators). */
-enum class SessionScope { MINE, TEAM }
 
 /**
  * Where a session runs: a pod the server started, a member's device (`cloud.sessions.remote.v1`), or the terminal of a member's

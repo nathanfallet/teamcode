@@ -20,7 +20,7 @@ Select only the required scopes:
 | `hooks:publish` | Publish team hook versions (V2). Only an administrator's key can receive it. Unlike `skills:publish`, it never pins: a hook runs code on members' computers, so an interactive administrator approves each version |
 | `cloud:read` | Read the owner's [cloud sessions](cloud-sessions.md), executions, transcripts, inputs and transfers, and the profiles the owner can use (`GET` only, V2) |
 | `cloud:write` | `cloud:read`, plus creating and managing the owner's cloud sessions: pause, resume, delete, messages, interrupts, attachments and transfers (V2) |
-| `admin:cloud` | `cloud:write` with an administrator's rights over every team cloud session and transfer, including `TeamCode-On-Behalf-Of` (V2). Only an administrator's key can receive it. It also sees every member's sessions in the [event feed](cloud-conversations.md#event-feed) |
+| `admin:cloud` | `cloud:write` with an administrator's rights over every team cloud session and transfer, including `TeamCode-On-Behalf-Of` (V2). Only an administrator's key can receive it. It sees only its owner's sessions in the [event feed](cloud-conversations.md#event-feed) |
 | `artifacts:read` | List and read the [artifacts](artifacts.md#publication-api) the owner can read: details, versions, files (as attachments) and invited members (V2) |
 | `artifacts:write` | `artifacts:read`, plus uploading and committing versions, inviting and removing members (V2). Never changes an access level or deletes an artifact: those need an interactive sign-in |
 | `team:read` | Read-only operational view of the whole team, as an interactive administrator sees it, with no write and no `TeamCode-On-Behalf-Of`. Only an administrator's key can receive it. See [Team-wide read access](#team-wide-read-access) |
@@ -40,14 +40,14 @@ Keys share the member's existing daily ledger, weight, assigned pool, concurrenc
 | Agent launches | `GET /api/v1/runs` with `?all=true` or `?member=`, and `GET /api/v1/runs/{id}` of any member ([agent sessions](agent-sessions.md)) |
 | Capacity and usage | `GET /api/v1/members/{id}/capacity`, `GET /api/v1/pools/budgets`, `GET /api/v1/mcp/usage` and `GET /api/v1/usage/tokens?all=true` (or `member=`) for every member |
 | Accounts and quotas | `GET /api/v1/accounts`, `GET /api/v1/quotas`, and every account by name and email at `GET /api/v1/pools/accounts` (the data behind `teamcode status` for an administrator). No provider credential is ever returned |
-| Cloud sessions | `GET /api/v1/cloud/sessions?owner=all` or `owner=<member>`, a session's detail and executions, its transcript, inputs and live stream (`events`, `messages`, `events/stream`), and `GET /api/v1/cloud/transfers?scope=team` ([cloud sessions](cloud-sessions.md)) |
+| Cloud sessions | Nothing of another member's: sessions, transcripts and transfers are the owner's, whatever the role or the key ([cloud sessions](cloud-sessions.md)) |
 
 Rules:
 
 - Only a key owned by an administrator, and created by that administrator, can have this scope (`400 invalid_service_key` otherwise, also for an administrator creating a key for another member), like `admin:cloud`. The owner's role is rechecked in shared state on every call, so a demoted or disabled owner loses the key at once.
 - It never writes. Every other action, including run policies, capacity and pool settings, account changes, key management and all cloud writes, stays interactive or behind its own scope. `team:read` does not carry `TeamCode-On-Behalf-Of` and does not turn a `cloud:write` key into a cloud administrator: combined with `cloud:write`, writes still act as the owner alone.
 - A `usage:read` key stays limited to its owner, even for an administrator.
-- Transcripts are other members' private content: keep a `team:read` key in a secret store, prefer an expiring key and revoke it as soon as it is not needed. Reads are not written to the audit journal, as for interactive administrators.
+- A `team:read` key reads no member's sessions, transcripts or artifacts. Keep it in a secret store, prefer an expiring key and revoke it as soon as it is not needed. Reads are not written to the audit journal, as for interactive administrators.
 - Servers that accept the scope advertise `team.read-key.v1`.
 
 ```sh

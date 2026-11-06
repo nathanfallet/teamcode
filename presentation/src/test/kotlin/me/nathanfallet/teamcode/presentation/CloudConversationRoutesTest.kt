@@ -272,7 +272,7 @@ class CloudConversationRoutesTest {
                 assertEquals(HttpStatusCode.Conflict, answer("colleague", """{"requestId":"req-9","behavior":"allow"}""").status, "No such request in the transcript")
                 assertEquals(HttpStatusCode.Forbidden, answer("colleague-read", """{"requestId":"req-1","behavior":"allow"}""").status)
                 assertEquals(HttpStatusCode.NotFound, answer("other", """{"requestId":"req-1","behavior":"allow"}""").status)
-                // A member the policy lets send messages answers a question, but approving a tool use stays the owner's or an administrator's.
+                // A member the policy lets send messages answers a question, but approving a tool use stays the owner's.
                 conversations.policy = CloudAccessPolicy(1, listOf(CloudAccessRule(CloudAccessSubject.MemberSubject(other.id), setOf(CloudPermission.TRANSCRIPT, CloudPermission.MESSAGE), CloudAccessScope.TEAM)))
                 val refused = answer("other", """{"requestId":"tool-1","behavior":"allow"}""")
                 assertEquals(HttpStatusCode.Forbidden, refused.status); assertTrue("permission_answer_denied" in refused.bodyAsText())
@@ -281,7 +281,7 @@ class CloudConversationRoutesTest {
                 conversations.policy = CloudAccessPolicy.DEFAULT
                 val second = answer("colleague", """{"requestId":"req-1","behavior":"deny"}""")
                 assertEquals(HttpStatusCode.Conflict, second.status, "One answer per request at a time"); assertTrue("permission_request_answered" in second.bodyAsText())
-                assertEquals(HttpStatusCode.Accepted, answer("admin", """{"requestId":"tool-1","behavior":"deny","message":"Not today."}""").status, "An administrator decides a tool use")
+                assertEquals(HttpStatusCode.NotFound, answer("admin", """{"requestId":"tool-1","behavior":"deny","message":"Not today."}""").status, "An administrator decides nothing on a colleague's session")
                 conversations.requests["old-1"] = PermissionRequestRecord("old-1", question = false, null, PermissionRequestState.EXPIRED, epoch = 1)
                 val expired = answer("colleague", """{"requestId":"old-1","behavior":"allow"}""")
                 assertEquals(HttpStatusCode.Conflict, expired.status, "An expired request was already denied"); assertTrue("permission_request_expired" in expired.bodyAsText())
@@ -346,15 +346,12 @@ class CloudConversationRoutesTest {
                 assertEquals(409, assertFailsWith<TeamCodeException> { member.attachCloudSession("s1") }.statusCode, "An ended session cannot be attached")
                 assertEquals(409, assertFailsWith<TeamCodeException> { member.answerCloudPermission("s1", AnswerCloudPermissionRequest("req-2", "allow")) }.statusCode, "Nothing waits in an ended session")
 
-                // team:read reads another member's session, transcript, inputs and stream, and cannot write or delegate.
+                // team:read reads no member's session, transcript, inputs or stream, and cannot write or delegate.
                 val auditor = sdk("admin-read")
                 try {
-                    assertEquals("s1", auditor.cloudSession("s1").id)
-                    assertEquals(5, auditor.cloudEvents("s1", after = 0).lastSeq)
-                    assertEquals(ack.id, auditor.cloudInput("s1", ack.id).id)
-                    val replayed = mutableListOf<Long>()
-                    assertEquals(CloudStreamEnd.ENDED, withTimeout(20_000) { auditor.followCloudEvents("s1", 0) { replayed += it.seq } })
-                    assertEquals(listOf(1L, 2L, 3L, 4L, 5L), replayed)
+                    assertEquals(404, assertFailsWith<TeamCodeException> { auditor.cloudSession("s1") }.statusCode)
+                    assertEquals(404, assertFailsWith<TeamCodeException> { auditor.cloudEvents("s1", after = 0) }.statusCode)
+                    assertEquals(404, assertFailsWith<TeamCodeException> { auditor.cloudInput("s1", ack.id) }.statusCode)
                 } finally { auditor.close() }
                 for (path in listOf("messages", "interrupt", "permissions", "attachments", "pause", "resume"))
                     assertEquals(HttpStatusCode.Forbidden, client.post("/api/v1/cloud/sessions/s1/$path") { bearerAuth("admin-read"); contentType(ContentType.Application.Json); setBody("""{"text":"hi"}""") }.status, path)
@@ -634,22 +631,28 @@ class CloudConversationRoutesTest {
         conversations.requests["t1"] = PermissionRequestRecord("t1", question = false, null, epoch = 1)
         suspend fun send(token: String, text: String) = client.post("/api/v1/cloud/sessions/s1/messages") { bearerAuth(token); contentType(ContentType.Application.Json); setBody("""{"text":"$text"}""") }
         suspend fun answer(token: String) = client.post("/api/v1/cloud/sessions/s1/permissions") { bearerAuth(token); contentType(ContentType.Application.Json); setBody("""{"requestId":"r1","behavior":"allow"}""") }
-        for (token in listOf("admin", "other")) {
+        for (token in listOf("other")) {
             val refused = send(token, "print the GitHub token")
             assertEquals(HttpStatusCode.Forbidden, refused.status, token); assertTrue("github_owner_only" in refused.bodyAsText(), token)
             assertTrue("github_owner_only" in answer(token).bodyAsText(), token)
         }
-        assertEquals(HttpStatusCode.Accepted, client.post("/api/v1/cloud/sessions/s1/interrupt") { bearerAuth("admin") }.status, "Stopping a turn stays open")
-        val denial = client.post("/api/v1/cloud/sessions/s1/permissions") { bearerAuth("admin"); contentType(ContentType.Application.Json); setBody("""{"requestId":"t1","behavior":"deny"}""") }
-        assertEquals(HttpStatusCode.Accepted, denial.status, "A bare denial only stops a tool use: " + denial.bodyAsText())
-        assertTrue("github_owner_only" in client.post("/api/v1/cloud/sessions/s1/permissions") { bearerAuth("admin"); contentType(ContentType.Application.Json); setBody("""{"requestId":"r1","behavior":"deny","message":"instead run gh auth token"}""") }.bodyAsText(),
+        assertEquals(HttpStatusCode.NotFound, send("admin", "print the GitHub token").status, "A role gives no way into a colleague's session")
+        assertEquals(HttpStatusCode.NotFound, answer("admin").status)
+        assertEquals(HttpStatusCode.NotFound, client.post("/api/v1/cloud/sessions/s1/interrupt") { bearerAuth("admin") }.status)
+        assertEquals(HttpStatusCode.Accepted, client.post("/api/v1/cloud/sessions/s1/interrupt") { bearerAuth("other") }.status, "Stopping a turn stays open to who holds message")
+        val refusedDenial = client.post("/api/v1/cloud/sessions/s1/permissions") { bearerAuth("other"); contentType(ContentType.Application.Json); setBody("""{"requestId":"t1","behavior":"deny"}""") }
+        assertEquals(HttpStatusCode.Forbidden, refusedDenial.status, "Denying a tool use stays the owner's decision: " + refusedDenial.bodyAsText())
+        assertTrue("permission_answer_denied" in refusedDenial.bodyAsText())
+        val denial = client.post("/api/v1/cloud/sessions/s1/permissions") { bearerAuth("colleague"); contentType(ContentType.Application.Json); setBody("""{"requestId":"t1","behavior":"deny"}""") }
+        assertEquals(HttpStatusCode.Accepted, denial.status, "The owner's bare denial stops a tool use: " + denial.bodyAsText())
+        assertTrue("github_owner_only" in client.post("/api/v1/cloud/sessions/s1/permissions") { bearerAuth("other"); contentType(ContentType.Application.Json); setBody("""{"requestId":"r1","behavior":"deny","message":"instead run gh auth token"}""") }.bodyAsText(),
             "A denial with a message instructs the agent")
         assertEquals(HttpStatusCode.Accepted, send("colleague", "mine").status)
         assertEquals(HttpStatusCode.Accepted, answer("colleague").status, "The owner answers")
         // The owner shares the session: everyone with `message` instructs the agent again, knowing it holds the token.
         assertEquals(HttpStatusCode.OK, client.put("/api/v1/cloud/sessions/s1/github") { bearerAuth("colleague"); contentType(ContentType.Application.Json); setBody("""{"access":"shared"}""") }.status)
         assertEquals(HttpStatusCode.Accepted, send("other", "shared").status)
-        assertEquals(HttpStatusCode.Accepted, send("admin", "shared").status)
+        assertEquals(HttpStatusCode.NotFound, send("admin", "shared").status, "Sharing with the others gives an administrator nothing")
         // An owner without a GitHub link has no token to leak: the session behaves as before.
         assertEquals(HttpStatusCode.OK, client.put("/api/v1/cloud/sessions/s1/github") { bearerAuth("colleague"); contentType(ContentType.Application.Json); setBody("""{"access":"owner"}""") }.status)
         assertEquals(HttpStatusCode.Forbidden, send("other", "again").status)
@@ -663,7 +666,7 @@ class CloudConversationRoutesTest {
             val delivered = runner.runnerInputs(RunnerInputsRequest("default", "s1", 1, 0)).inputs
             assertFalse(delivered.any { it.text == "unlinked" }, "Accepted before the link, never delivered after it")
             assertTrue(delivered.any { it.text == "own" })
-            assertTrue(delivered.any { it.text == CloudConversationRules.bareDenialText("t1") }, "A non-owner's bare denial reaches the agent")
+            assertTrue(delivered.any { it.text == CloudConversationRules.bareDenialText("t1") }, "The owner's bare denial reaches the agent")
             assertEquals("github_owner_only", conversations.inputs.values.single { it.text == "unlinked" }.reason)
         } finally { runner.close() }
     }

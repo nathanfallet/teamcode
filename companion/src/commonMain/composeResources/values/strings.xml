@@ -29,8 +29,6 @@
     <string name="sessions_filter_all">All</string>
     <string name="sessions_filter_open">Active + Paused</string>
     <string name="sessions_filter_ended">Ended</string>
-    <string name="sessions_mine">Mine</string>
-    <string name="sessions_team">Team</string>
     <string name="sessions_empty_active">No active session</string>
     <string name="sessions_empty_all">No session</string>
     <string name="sessions_empty_ended">No ended session</string>
@@ -279,7 +277,6 @@
     <string name="sessions_empty_all_body">Start one from a profile, then follow the agent from here.</string>
     <string name="sessions_empty_ended_body">Sessions show up here once they ended.</string>
     <string name="sessions_switch_account">Switch account</string>
-    <string name="sessions_scope">Whose sessions</string>
     <string name="sessions_filter">Filter sessions</string>
     <string name="sessions_signed_out_title">Signed out</string>
     <string name="sessions_loading">Loading sessions</string>

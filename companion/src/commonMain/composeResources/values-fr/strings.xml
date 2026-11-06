@@ -29,8 +29,6 @@
     <string name="sessions_filter_all">Toutes</string>
     <string name="sessions_filter_open">Actives + en pause</string>
     <string name="sessions_filter_ended">Terminées</string>
-    <string name="sessions_mine">Les miennes</string>
-    <string name="sessions_team">Équipe</string>
     <string name="sessions_empty_active">Aucune session active</string>
     <string name="sessions_empty_all">Aucune session</string>
     <string name="sessions_empty_ended">Aucune session terminée</string>
@@ -279,7 +277,6 @@
     <string name="sessions_empty_all_body">Lances-en une depuis un profil, puis suis l'agent d'ici.</string>
     <string name="sessions_empty_ended_body">Les sessions apparaissent ici une fois terminées.</string>
     <string name="sessions_switch_account">Changer de compte</string>
-    <string name="sessions_scope">Sessions de qui</string>
     <string name="sessions_filter">Filtrer les sessions</string>
     <string name="sessions_signed_out_title">Déconnecté</string>
     <string name="sessions_loading">Chargement des sessions</string>

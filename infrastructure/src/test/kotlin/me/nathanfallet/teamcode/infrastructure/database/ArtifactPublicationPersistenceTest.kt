@@ -180,14 +180,15 @@ class ArtifactPublicationPersistenceTest {
             val reviewer = f.team.login("reviewer", "artifact reviewer replacement password", "artifact-test").principal
 
             val id = publish(a.service, owner, null, mapOf("index.html" to bytes("<p>private</p>")), 0).artifact.id
-            // A personal artifact does not exist for another member; an administrator reads it, audited.
+            // A personal artifact does not exist for another member, an administrator included.
             assertEquals("not_found", assertFailsWith<TeamFailure> { b.service.artifact(reviewer, id) }.code)
             assertTrue(b.service.list(reviewer, ArtifactQuery()).artifacts.isEmpty())
-            assertEquals("admin", b.service.artifact(admin, id).relation)
-            assertTrue(b.service.list(admin, ArtifactQuery()).artifacts.isEmpty(), "The team scope is what the administrator can read as a member")
-            assertEquals(listOf(id), b.service.list(admin, ArtifactQuery(ArtifactScope.ALL)).artifacts.map { it.id })
-            b.service.version(admin, id, 1)
-            assertEquals(1, f.a.query { AuditEvents.selectAll().where { AuditEvents.action eq "artifact.admin_viewed" }.count() })
+            assertEquals("not_found", assertFailsWith<TeamFailure> { b.service.artifact(admin, id) }.code)
+            assertEquals("not_found", assertFailsWith<TeamFailure> { b.service.version(admin, id, 1) }.code)
+            assertEquals("not_found", assertFailsWith<TeamFailure> { b.service.setAccess(admin, id, "team", true, null) }.code)
+            assertEquals("not_found", assertFailsWith<TeamFailure> { b.service.delete(admin, id) }.code)
+            assertTrue(b.service.list(admin, ArtifactQuery()).artifacts.isEmpty(), "No scope lists another member's personal artifact")
+            assertEquals(0, f.a.query { AuditEvents.selectAll().where { AuditEvents.action eq "artifact.admin_viewed" }.count() })
 
             // Sharing: by username; a viewer reads, an editor also publishes and invites; neither changes access or deletes.
             a.service.share(owner, id, "reviewer", "viewer")
@@ -219,7 +220,7 @@ class ArtifactPublicationPersistenceTest {
             // Team access: every member reads it; public follows the team's public sharing, interactively.
             assertEquals("team", a.service.setAccess(owner, id, "team", true, null).access.wire)
             assertEquals("team", b.service.artifact(reviewer, id).relation)
-            assertEquals("artifact_public_forbidden", assertFailsWith<TeamFailure> { a.service.setAccess(admin, id, "public", true, null) }.code, "Owners make their artifacts public by default")
+            assertEquals("artifact_access_forbidden", assertFailsWith<TeamFailure> { a.service.setAccess(admin, id, "public", true, null) }.code, "Only the owner changes access, an administrator included")
             val pinned = a.service.setAccess(owner, id, "public", false, 1)
             assertEquals(ArtifactAccess.PUBLIC, pinned.access); assertEquals(1, pinned.publicVersion); assertFalse(pinned.publicFollowsLatest)
             a.admin.saveSettings(admin, a.admin.settings(admin).copy(publicSharing = PublicSharing.OFF))
@@ -415,8 +416,8 @@ class ArtifactPublicationPersistenceTest {
             a.service.setAccess(owner, id, "personal", true, null)
             assertNull(a.store.publicArtifact(id))
 
-            // An administrator reads a personal artifact; artifacts turned off stop every ticket, then come back.
-            assertEquals(2, a.store.viewable(id, 2, admin.member.id, admin.tokenId).number())
+            // An administrator reads no personal artifact; artifacts turned off stop every ticket, then come back.
+            assertNull(a.store.viewable(id, 2, admin.member.id, admin.tokenId))
             assertEquals(ArtifactAvailability(true, null), a.store.availability(admin.teamId))
             a.admin.saveSettings(admin, a.admin.settings(admin).copy(enabled = false))
             assertFalse(a.store.availability(admin.teamId).active)
@@ -478,8 +479,8 @@ class ArtifactPublicationPersistenceTest {
             assertEquals(listOf(fromRun.id), ids(owner, ArtifactQuery(originKind = "local_run")))
             assertEquals(listOf(fromRun.id), ids(owner, ArtifactQuery(runId = mine)))
             assertEquals(emptyList(), ids(owner, ArtifactQuery(originKind = "api")), "Another member's personal artifact stays out")
-            assertEquals(listOf(direct.id), ids(admin, ArtifactQuery(ArtifactScope.ALL, originKind = "api")))
-            assertEquals(listOf(fromRun.id), ids(admin, ArtifactQuery(ArtifactScope.ALL, access = ArtifactAccess.TEAM)))
+            assertEquals(listOf(direct.id), ids(admin, ArtifactQuery(originKind = "api")))
+            assertEquals(listOf(fromRun.id), ids(admin, ArtifactQuery(access = ArtifactAccess.TEAM)))
             assertEquals(listOf(direct.id), ids(admin, ArtifactQuery(ArtifactScope.MINE, access = ArtifactAccess.PERSONAL)))
             assertEquals("invalid_artifact_query", assertFailsWith<TeamFailure> { a.service.list(owner, ArtifactQuery(originKind = "elsewhere")) }.code)
             val report = b.admin.usage(admin)

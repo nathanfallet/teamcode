@@ -150,7 +150,8 @@ class CloudTransferPersistenceTest {
         assertEquals(offer.id, current.transferId); assertEquals(DesiredState.PAUSED, current.desiredState)
         assertEquals(from, current.ownerId, "The owner changes only at the paused boundary")
         failure("session_transferring") { ra.sessions.resume(t.owner, null, s.id) }
-        failure("transfer_pending") { ra.transfers.request(t.admin, null, s.id, CloudTransferRequest(t.admin.member.id, false, false), key("admin-race", "d8")) }
+        failure("not_found") { ra.transfers.request(t.admin, null, s.id, CloudTransferRequest(t.admin.member.id, false, false), key("admin-race", "d8")) }
+        failure("transfer_pending") { ra.transfers.request(t.owner, null, s.id, CloudTransferRequest(t.admin.member.id, false, false), key("owner-race", "d8")) }
         failure("transfer_forbidden") { ra.transfers.cancel(t.owner, null, offer.id) }
 
         // The drain: pausing, the runner's checkpoint, the pod deleted, paused, then transferring.
@@ -166,7 +167,7 @@ class CloudTransferPersistenceTest {
         assertEquals(emptySet(), cluster(ra).podNames().filter { it.startsWith("tc-${s.id}-") }.toSet(), "No pod runs for the former owner")
         pass(ra)
         assertEquals(TRANSFERRING, ra.store.find(teamId, s.id)!!.state)
-        failure("transfer_in_progress") { ra.transfers.cancel(t.admin, null, offer.id) }
+        failure("not_found") { ra.transfers.cancel(t.admin, null, offer.id) }
         pass(rb)
 
         current = ra.store.find(teamId, s.id)!!
@@ -258,37 +259,40 @@ class CloudTransferPersistenceTest {
         return SessionArtifacts(ids[0], ids[1], ids[2], ids[3], ids[4], ids[5])
     }
 
-    /** An administrator transfers at once, with `TeamCode-On-Behalf-Of` recorded; a pending offer is superseded. */
+    /** An administrator transfers their own session at once, and has no way into a member's: a member's pending offer stays theirs. */
     private suspend fun administratorTransfer(ra: Replica, rb: Replica, t: Team, profile: CloudProfile) {
         val teamId = t.admin.teamId
-        val s = ready(ra, rb, t.owner, profile, "Administrator")
-        val offer = ra.transfers.request(t.owner, null, s.id, CloudTransferRequest(t.recipient.member.id, false, false), key("offer-admin", "d9")).transfer
-        ra.sessions.pause(t.owner, null, s.id, false); pass(ra); rb.runner.checkpoint(teamId, s.id, 1, completed = true); pass(ra)
+        val others = ready(ra, rb, t.owner, profile, "Not the administrator's")
+        failure("not_found") { rb.transfers.request(t.admin, null, others.id, CloudTransferRequest(t.admin.member.id, false, false), key("admin-peek", "d9")) }
+        failure("not_found") { rb.transfers.request(t.admin, t.owner.member.id, others.id, CloudTransferRequest(t.admin.member.id, false, false), key("admin-peek-obo", "d9")) }
+        ra.sessions.delete(t.owner, null, others.id)
+        val s = ready(ra, rb, t.admin, profile, "Administrator")
+        ra.sessions.pause(t.admin, null, s.id, false); pass(ra); rb.runner.checkpoint(teamId, s.id, 1, completed = true); pass(ra)
         assertEquals(PAUSED, ra.store.find(teamId, s.id)!!.state)
         ra.admin.saveSettings(t.admin, CloudSettings(transferPendingInputs = TransferPendingInputs.KEEP))
-        val kept = (ra.conversation.send(t.owner, s.id, InputRequest("Keep me", false, null, null, null)) as InputOutcome.Accepted).input
+        val kept = (ra.conversation.send(t.admin, s.id, InputRequest("Keep me", false, null, null, null)) as InputOutcome.Accepted).input
         val answerAt = ra.store.now()
-        ra.conversations.insertInput(NewInput(CloudInput("kept-answer", teamId, s.id, CloudInputKind.PERMISSION, CloudInputStatus.QUEUED, t.owner.member.id, t.owner.tokenId,
+        ra.conversations.insertInput(NewInput(CloudInput("kept-answer", teamId, s.id, CloudInputKind.PERMISSION, CloudInputStatus.QUEUED, t.admin.member.id, t.admin.tokenId,
             """{"requestId":"r1","behavior":"deny"}""", false, clientKey = null, requestDigest = null, createdAt = answerAt), null), CloudConversationRules.MAX_PENDING_INPUTS)
-        val direct = rb.transfers.request(t.admin, t.owner.member.id, s.id, CloudTransferRequest(t.admin.member.id, false, false), key("admin-1", "d10")).transfer
-        assertEquals(CloudTransferState.ACCEPTED, direct.state)
-        assertEquals(Attribution(t.admin.member.id, t.admin.tokenId, t.owner.member.id), direct.initiatedBy)
-        assertEquals(CloudTransferState.CANCELLED to "superseded", ra.transfers.get(t.owner, offer.id).let { it.state to it.failure?.code })
+        val direct = rb.transfers.request(t.admin, null, s.id, CloudTransferRequest(t.owner.member.id, false, false), key("admin-1", "d10")).transfer
+        assertEquals(CloudTransferState.ACCEPTED, direct.state, "An administrator's own session goes at once")
+        assertEquals(Attribution(t.admin.member.id, t.admin.tokenId, t.admin.member.id), direct.initiatedBy)
         pass(ra); pass(rb)
         val current = ra.store.find(teamId, s.id)!!
-        assertEquals(t.admin.member.id, current.ownerId)
+        assertEquals(t.owner.member.id, current.ownerId)
         assertEquals(PAUSED to DesiredState.PAUSED, current.state to current.desiredState, "Without resume the session stays paused")
         assertNotNull(current.expiresAt, "The recipient gets the full paused retention")
-        assertEquals(CloudInputStatus.QUEUED, ra.conversation.input(t.admin, s.id, kept.id).status, "The team kept unconsumed messages")
-        assertEquals(CloudInputStatus.CANCELLED to "transferred", ra.conversation.input(t.admin, s.id, "kept-answer").let { it.status to it.reason }, "but never a permission answer: the process that asked is gone")
+        assertEquals(CloudInputStatus.QUEUED, ra.conversation.input(t.owner, s.id, kept.id).status, "The team kept unconsumed messages")
+        assertEquals(CloudInputStatus.CANCELLED to "transferred", ra.conversation.input(t.owner, s.id, "kept-answer").let { it.status to it.reason }, "but never a permission answer: the process that asked is gone")
+        failure("not_found") { ra.sessions.delete(t.admin, null, s.id) }
         ra.admin.saveSettings(t.admin, CloudSettings())
-        ra.sessions.delete(t.admin, null, s.id)
+        ra.sessions.delete(t.owner, null, s.id)
     }
 
     /** The recipient is checked again right before the owner changes: one who lost access fails the transfer. */
     private suspend fun recheckAtTheBoundary(ra: Replica, rb: Replica, t: Team, profile: CloudProfile) {
         val teamId = t.admin.teamId
-        val s = ready(ra, rb, t.owner, profile, "Recheck")
+        val s = ready(ra, rb, t.admin, profile, "Recheck")
         failure("recipient_ineligible") { ra.transfers.request(t.admin, null, s.id, CloudTransferRequest(t.outsider.member.id, false, true), key("recheck", "d11")) }
         // Assigned when requested, unassigned before the boundary.
         val reassigned = ra.admin.saveProfile(t.admin, profile.id, ra.admin.profiles(t.admin).single { it.id == profile.id }.version, profile.name, profile.spec,
@@ -301,10 +305,10 @@ class CloudTransferPersistenceTest {
         val failed = ra.transfers.get(t.admin, accepted.id)
         assertEquals(CloudTransferState.FAILED to "profile_unassigned", failed.state to failed.failure?.code)
         val current = ra.store.find(teamId, s.id)!!
-        assertEquals(Triple(PAUSED, t.owner.member.id, null), Triple(current.state, current.ownerId, current.transferId), "The session stays with its owner")
+        assertEquals(Triple(PAUSED, t.admin.member.id, null), Triple(current.state, current.ownerId, current.transferId), "The session stays with its owner")
         assertEquals(WorkspaceResume.CRASH_CONSISTENT, current.resumeWorkspace)
         assertEquals(1, ra.database.query { AuditEvents.selectAll().where { (AuditEvents.action eq "cloud.transfer.failed") and (AuditEvents.subjectId eq accepted.id) }.count() })
-        ra.sessions.resume(t.owner, null, s.id)
+        ra.sessions.resume(t.admin, null, s.id)
 
         // The retained cap is the recipient's, checked in the owner-change transaction.
         ra.admin.saveSettings(t.admin, CloudSettings(maxRetainedSessionsPerMember = 2, maxRunningSessionsPerMember = 2))
@@ -312,11 +316,11 @@ class CloudTransferPersistenceTest {
         repeat(10) { if (ra.store.find(teamId, s.id)!!.state == PAUSING) rb.runner.checkpoint(teamId, s.id, ra.store.find(teamId, s.id)!!.currentEpoch, true); pass(ra) }
         val outcome = ra.transfers.get(t.admin, capped.id)
         assertEquals(CloudTransferState.COMPLETED, outcome.state, "The recipient holds one session: under the cap of 2")
-        val third = ready(ra, rb, t.owner, profile, "Third")
+        val third = ready(ra, rb, t.admin, profile, "Third")
         val over = ra.transfers.request(t.admin, null, third.id, CloudTransferRequest(t.recipient.member.id, false, true), key("cap-2", "d14")).transfer
         repeat(10) { if (ra.store.find(teamId, third.id)!!.state == PAUSING) rb.runner.checkpoint(teamId, third.id, 1, true); pass(ra) }
         assertEquals(CloudTransferState.FAILED to "cloud_session_limit", ra.transfers.get(t.admin, over.id).let { it.state to it.failure?.code })
-        assertEquals(t.owner.member.id, ra.store.find(teamId, third.id)!!.ownerId)
+        assertEquals(t.admin.member.id, ra.store.find(teamId, third.id)!!.ownerId)
         ra.admin.saveSettings(t.admin, CloudSettings())
         ra.sessions.delete(t.admin, null, third.id)
     }
@@ -324,21 +328,21 @@ class CloudTransferPersistenceTest {
     /** Deleting a session cancels its accepted transfer; an ended session cannot be transferred. */
     private suspend fun endedSessions(ra: Replica, rb: Replica, t: Team, profile: CloudProfile) {
         val teamId = t.admin.teamId
-        val s = ready(ra, rb, t.owner, profile, "Deleted")
+        val s = ready(ra, rb, t.admin, profile, "Deleted")
         val accepted = ra.transfers.request(t.admin, null, s.id, CloudTransferRequest(t.recipient.member.id, false, false), key("deleted", "d15")).transfer
-        ra.sessions.delete(t.owner, null, s.id)
+        ra.sessions.delete(t.admin, null, s.id)
         repeat(40) { if (ra.store.find(teamId, s.id)!!.state == TERMINATED && ra.store.find(teamId, s.id)!!.transferId == null) return@repeat; pass(rb) }
         assertEquals(CloudTransferState.CANCELLED to "session_not_running", ra.transfers.get(t.admin, accepted.id).let { it.state to it.failure?.code })
-        assertEquals(t.owner.member.id, ra.store.find(teamId, s.id)!!.ownerId)
+        assertEquals(t.admin.member.id, ra.store.find(teamId, s.id)!!.ownerId)
         failure("session_not_running") { ra.transfers.request(t.admin, null, s.id, CloudTransferRequest(t.recipient.member.id, false, false), key("deleted-2", "d16")) }
-        val creating = (ra.sessions.create(t.owner, null, CloudSessionDraft("Creating", profile.id, null, null, null, emptyMap(), null), null) as CloudCreateOutcome.Created).session
+        val creating = (ra.sessions.create(t.admin, null, CloudSessionDraft("Creating", profile.id, null, null, null, emptyMap(), null), null) as CloudCreateOutcome.Created).session
         failure("session_preparing") { ra.transfers.request(t.admin, null, creating.id, CloudTransferRequest(t.recipient.member.id, false, false), key("creating", "d17")) }
     }
 
     /** `transferring` is bounded: past the deadline the transfer fails and the session returns to its owner, paused. */
     private suspend fun stalledBoundary(ra: Replica, rb: Replica, t: Team, profile: CloudProfile) {
         val teamId = t.admin.teamId
-        val s = ready(ra, rb, t.owner, profile, "Stalled")
+        val s = ready(ra, rb, t.admin, profile, "Stalled")
         val accepted = ra.transfers.request(t.admin, null, s.id, CloudTransferRequest(t.recipient.member.id, false, true), key("stalled", "d18")).transfer
         pass(ra); rb.runner.checkpoint(teamId, s.id, 1, completed = false)
         repeat(10) { if (ra.store.find(teamId, s.id)!!.state != TRANSFERRING) pass(ra) }
@@ -348,7 +352,7 @@ class CloudTransferPersistenceTest {
         pass(rb)
         assertEquals(CloudTransferState.FAILED to "transfer_timeout", ra.transfers.get(t.admin, accepted.id).let { it.state to it.failure?.code })
         val current = ra.store.find(teamId, s.id)!!
-        assertEquals(Triple(PAUSED, t.owner.member.id, null), Triple(current.state, current.ownerId, current.transferId))
+        assertEquals(Triple(PAUSED, t.admin.member.id, null), Triple(current.state, current.ownerId, current.transferId))
         ra.sessions.delete(t.admin, null, s.id)
     }
 
@@ -389,11 +393,14 @@ class CloudTransferPersistenceTest {
         ra.cluster.start(pod); pass(ra)
         ra.runner.register(teamId, s.id, 1, pod); rb.runner.heartbeat(teamId, s.id, 1, ready = true)
         assertEquals(READY, ra.store.find(teamId, s.id)!!.state)
-        ra.sessions.pause(orchestrator, owner, s.id, false); pass(ra); rb.runner.checkpoint(teamId, s.id, 1, completed = true); pass(ra)
+        // Delegation creates; it opens nothing of the member's afterwards: the owner pauses and offers it, the recipient accepts.
+        failure("not_found") { ra.sessions.pause(orchestrator, owner, s.id, false) }
+        failure("not_found") { rb.transfers.request(orchestrator, owner, s.id, CloudTransferRequest(recipient, false, false), key("orchestrated-peek", "e3")) }
+        failure("not_found") { ra.sessions.get(orchestrator, s.id) }
+        ra.sessions.pause(t.owner, null, s.id, false); pass(ra); rb.runner.checkpoint(teamId, s.id, 1, completed = true); pass(ra)
         assertEquals(PAUSED, ra.store.find(teamId, s.id)!!.state)
-        val moved = rb.transfers.request(orchestrator, owner, s.id, CloudTransferRequest(recipient, false, false), key("orchestrated", "e3")).transfer
-        assertEquals(CloudTransferState.ACCEPTED, moved.state, "An admin:cloud transfer is immediate")
-        assertEquals(attribution, moved.initiatedBy)
+        val offered = rb.transfers.request(t.owner, null, s.id, CloudTransferRequest(recipient, false, false), key("orchestrated", "e4")).transfer
+        val moved = rb.transfers.accept(t.recipient, null, offered.id, null)
         pass(ra); pass(rb)
         assertEquals(recipient, ra.store.find(teamId, s.id)!!.ownerId)
         assertEquals(CloudTransferState.COMPLETED, ra.transfers.get(t.recipient, moved.id).state)
@@ -401,9 +408,6 @@ class CloudTransferPersistenceTest {
             fun row(action: String, subject: String) = AuditEvents.selectAll().where { (AuditEvents.action eq action) and (AuditEvents.subjectId eq subject) }.single()
                 .let { listOf(it[AuditEvents.actorId], it[AuditEvents.credentialId], it[AuditEvents.effectiveMemberId], it[AuditEvents.relatedMemberId]) }
             assertEquals(listOf(t.admin.member.id, orchestratorKey.metadata.id, owner, null), row("cloud.session.created", s.id), "Created by the key, for the owner")
-            assertEquals(listOf(t.admin.member.id, orchestratorKey.metadata.id, owner, null), row("cloud.transfer.requested", moved.id))
-            assertEquals(listOf(t.admin.member.id, orchestratorKey.metadata.id, recipient, owner), row("cloud.session.transferred", s.id),
-                "The initiator stays the key's owner, distinct from both members")
         }
         failure("not_found") { ra.sessions.get(personal, s.id) }
 

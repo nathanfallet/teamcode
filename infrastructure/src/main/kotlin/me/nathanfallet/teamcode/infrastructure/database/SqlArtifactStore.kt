@@ -276,7 +276,6 @@ class SqlArtifactStore(private val database: Database) : ArtifactStore {
             ArtifactScope.MINE -> Artifacts.ownerId eq me
             ArtifactScope.SHARED -> Artifacts.id inSubQuery invited
             ArtifactScope.TEAM -> (Artifacts.ownerId eq me) or (Artifacts.access inList listOf(ArtifactAccess.TEAM.wire, ArtifactAccess.PUBLIC.wire)) or (Artifacts.id inSubQuery invited)
-            ArtifactScope.ALL -> Op.TRUE
         }
         query.ownerId?.let { condition = condition and (Artifacts.ownerId eq it) }
         query.sessionId?.let { condition = condition and (Artifacts.originSessionId eq it) }
@@ -306,10 +305,8 @@ class SqlArtifactStore(private val database: Database) : ArtifactStore {
     override suspend fun version(actor: Principal, artifactId: String, number: Int): ArtifactVersion = database.query {
         requireCurrent(this, actor); requireActive(actor.teamId)
         val row = artifactRow(actor, artifactId, lock = false)
-        val relation = requireReadable(actor, row)
+        requireReadable(actor, row)
         val version = versionRow(artifactId, number) ?: throw TeamFailure("not_found", 404, "Version not found.")
-        // An administrator reading another member's personal artifact leaves a trace.
-        if (relation == "admin") audit(actor.teamId, actor.member.id, "artifact.admin_viewed", "$artifactId/$number", row[Artifacts.ownerId], actor.tokenId)
         readVersion(version, withFiles = true)
     }
 
@@ -320,7 +317,7 @@ class SqlArtifactStore(private val database: Database) : ArtifactStore {
         val relation = requireReadable(actor, row)
         val owner = relation == "owner"
         val administrator = actor.member.role.isAdministrator && actor.serviceScopes == null
-        if (!owner && !administrator) throw TeamFailure("artifact_access_forbidden", 403, "Only the owner or an administrator changes who can see this artifact.")
+        if (!owner) throw TeamFailure("artifact_access_forbidden", 403, "Only the owner changes who can see this artifact.")
         if (row[Artifacts.state] != ACTIVE) throw TeamFailure("not_found", 404, "Artifact not found.")
         if (access == ArtifactAccess.PUBLIC) when (settings.publicSharing) {
             PublicSharing.OFF -> throw TeamFailure("artifact_public_sharing_off", 403, "Public links are turned off for this team.")
@@ -381,8 +378,7 @@ class SqlArtifactStore(private val database: Database) : ArtifactStore {
         requireCurrent(this, actor)
         val row = artifactRow(actor, artifactId, lock = true)
         val relation = requireReadable(actor, row)
-        if (relation != "owner" && !(actor.member.role.isAdministrator && actor.serviceScopes == null))
-            throw TeamFailure("artifact_delete_forbidden", 403, "Only the owner or an administrator deletes an artifact.")
+        if (relation != "owner") throw TeamFailure("artifact_delete_forbidden", 403, "Only the owner deletes an artifact.")
         val now = nowMillis()
         Artifacts.update({ Artifacts.id eq artifactId }) { it[state] = DELETED; it[deletedAt] = now; it[updatedAt] = now; it[expiresAt] = null; it[generation] = row[Artifacts.generation] + 1 }
         ArtifactUploads.deleteWhere { ArtifactUploads.artifactId eq artifactId }
@@ -570,7 +566,6 @@ class SqlArtifactStore(private val database: Database) : ArtifactStore {
         row[Artifacts.ownerId] == actor.member.id -> "owner"
         invitedRole != null -> invitedRole
         row[Artifacts.access] != ArtifactAccess.PERSONAL.wire -> "team"
-        actor.canReadTeam -> "admin"
         else -> null
     }
 

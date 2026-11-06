@@ -222,7 +222,7 @@ class CloudConversationPersistenceTest {
         val plain = Json.parseToJsonElement(oneBatch.first().data).jsonObject
         assertEquals("permission", plain["reason"]!!.jsonPrimitive.content); assertNull(plain["requestId"])
 
-        // A tool use gated by an `ask` rule: the request is found in the transcript, an administrator decides it, and
+        // A tool use gated by an `ask` rule: the request is found in the transcript, the owner decides it (an administrator has no way in), and
         // one that expired without an answer, was answered already or whose turn ended is refused.
         failure("permission_request_answered") { ra.conversation.answer(colleague, s.id, PermissionAnswer("req-1", false, null, emptyList()), InputRequest("""{"requestId":"req-1","behavior":"deny"}""", false, null, null, null)) }
         ra.agent.events(team, s.id, 1, listOf(
@@ -246,7 +246,8 @@ class CloudConversationPersistenceTest {
         assertEquals(PermissionRequestState.OPEN, ra.conversations.permissionRequest(s.id, "tool-1")?.state)
         assertNull(ra.conversations.permissionRequest(s.id, "nobody-asked"))
         failure("permission_request_expired") { ra.conversation.answer(colleague, s.id, PermissionAnswer("tool-2", true, null, emptyList()), InputRequest("""{"requestId":"tool-2","behavior":"allow"}""", false, null, null, null)) }
-        val denied = ra.conversation.answer(admin, s.id, PermissionAnswer("tool-1", false, "Not today.", emptyList()), InputRequest("""{"requestId":"tool-1","behavior":"deny","message":"Not today."}""", false, null, null, null))
+        failure("not_found") { ra.conversation.answer(admin, s.id, PermissionAnswer("tool-1", false, "Not today.", emptyList()), InputRequest("""{"requestId":"tool-1","behavior":"deny","message":"Not today."}""", false, null, null, null)) }
+        val denied = ra.conversation.answer(colleague, s.id, PermissionAnswer("tool-1", false, "Not today.", emptyList()), InputRequest("""{"requestId":"tool-1","behavior":"deny","message":"Not today."}""", false, null, null, null))
         assertIs<InputOutcome.Accepted>(denied)
         assertEquals(listOf(denied.input.id), rb.agent.inputs(team, s.id, 1, 0).map { it.id })
         ra.agent.acknowledge(team, s.id, 1, listOf(RunnerInputAck(denied.input.id, true, null)))
@@ -257,7 +258,7 @@ class CloudConversationPersistenceTest {
             RunnerEvent(13, CloudEventType.TURN, """{"phase":"started"}""", turn = TurnMarker.STARTED),
             RunnerEvent(14, CloudEventType.TURN, """{"phase":"interrupted"}""", turn = TurnMarker.ENDED),
         ))
-        failure("permission_request_ended") { ra.conversation.answer(admin, s.id, PermissionAnswer("tool-3", true, null, emptyList()), InputRequest("""{"requestId":"tool-3","behavior":"allow"}""", false, null, null, null)) }
+        failure("permission_request_ended") { ra.conversation.answer(colleague, s.id, PermissionAnswer("tool-3", true, null, emptyList()), InputRequest("""{"requestId":"tool-3","behavior":"allow"}""", false, null, null, null)) }
         assertNull(ra.store.find(team, s.id)!!.humanWait, "Messages queued during the turn add started markers; its end still ends the wait")
 
         // Live text deltas are stored like any other event, and a later status write never clears a wait.
@@ -320,12 +321,12 @@ class CloudConversationPersistenceTest {
         groups.members["operators"] = emptySet()
         failure("not_found") { ra.conversation.attach(other, s.id) }
 
-        // Removing create from members refuses creation, also on their behalf; administrators keep every right.
+        // Removing create from members refuses creation, also on their behalf; an administrator reads no session of a member.
         ra.access.savePolicy(admin, 2, listOf(CloudAccessRule(CloudAccessSubject.Everyone, setOf(CloudPermission.ATTACH, CloudPermission.MESSAGE, CloudPermission.TRANSCRIPT), CloudAccessScope.OWN)))
         val draft = CloudSessionDraft("Refused", profile.id, null, null, null, emptyMap(), null)
         failure("cloud_permission_denied") { ra.sessions.create(colleague, null, draft, null) }
         failure("cloud_permission_denied") { ra.sessions.create(admin, colleague.member.id, draft, null) }
-        assertTrue(rb.conversation.events(admin, s.id, null, null, 1).events.isNotEmpty())
+        failure("not_found") { rb.conversation.events(admin, s.id, null, null, 1) }
         ra.access.savePolicy(admin, 3, CloudAccessPolicy.DEFAULT.rules)
         assertEquals(4, ra.database.query { AuditEvents.selectAll().where { AuditEvents.action eq "cloud.access.updated" }.count() })
         assertEquals(team, s.teamId)

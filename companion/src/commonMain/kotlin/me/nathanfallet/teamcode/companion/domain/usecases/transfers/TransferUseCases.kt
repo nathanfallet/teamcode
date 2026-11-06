@@ -31,16 +31,15 @@ object TransferRules {
      * or prepared (it runs with the owner's recipe), not ended, not already changing owner.
      */
     fun canTransfer(account: Account, session: CloudSession): Boolean =
-        (account.isAdministrator || session.ownerId == account.memberId) && ControlSessionUseCase.canTransfer(session) && session.state in TRANSFERABLE
+        session.ownerId == account.memberId && ControlSessionUseCase.canTransfer(session) && session.state in TRANSFERABLE
 
     private val TRANSFERABLE = setOf(SessionState.READY, SessionState.ACTIVE, SessionState.PAUSING, SessionState.PAUSED, SessionState.RESUMING)
 
-    /** What [account] may do with [transfer]: the recipient decides an offer, its owner withdraws it, administrators do both. */
+    /** What [account] may do with [transfer]: the recipient decides an offer and its owner withdraws it; a role opens nobody else's transfer. */
     fun actions(account: Account, transfer: SessionTransfer): Set<TransferAction> = buildSet {
         val me = account.memberId
-        if (transfer.state == TransferState.OFFERED && (transfer.toMemberId == me || account.isAdministrator)) { add(TransferAction.ACCEPT); add(TransferAction.DECLINE) }
-        // An administrator can also stop an accepted transfer before the owner change starts.
-        if ((transfer.state == TransferState.OFFERED && transfer.fromMemberId == me) || (transfer.state.open && account.isAdministrator)) add(TransferAction.CANCEL)
+        if (transfer.state == TransferState.OFFERED && transfer.toMemberId == me) { add(TransferAction.ACCEPT); add(TransferAction.DECLINE) }
+        if (transfer.state == TransferState.OFFERED && transfer.fromMemberId == me) add(TransferAction.CANCEL)
     }
 }
 

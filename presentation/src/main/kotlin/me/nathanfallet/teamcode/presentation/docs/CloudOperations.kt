@@ -233,10 +233,10 @@ private fun ApiCatalog.cloudSessions() {
     get("/api/v1/cloud/sessions") {
         operationId = "listCloudSessions"; tag(ApiTags.CLOUD_SESSIONS)
         summary = "List cloud sessions"
-        description = "The caller's sessions, newest first, 50 per page by default. `owner` reads another member's " +
-            "(or `all`) where the caller may: an administrator, or a `team:read` key (read-only). Page with `before` = `nextBefore`."
+        description = "The caller's sessions, newest first, 50 per page by default. Only the caller's own " +
+            "sessions are listed: `owner` naming another member, or `all`, is `403`, administrators included. Page with `before` = `nextBefore`."
         parameters {
-            queryText("owner", "A member's identifier, or `all`.")
+            queryText("owner", "The caller's own identifier (the default).")
             queryList("state", "Only these states: `creating`, `preparing`, `ready`, `active`, `pausing`, `paused`, `resuming`, `transferring`, `terminated`, `failed`.")
             queryList("label", "Only sessions with these labels, each as `key=value`.")
             queryList("kind", "Only these kinds: `cloud` (a pod), `remote` (a member's device) or `local` (a member's `teamcode run`). Without it, `cloud` only, so a client that predates remote sessions never receives one.")
@@ -398,9 +398,8 @@ private fun ApiCatalog.cloudConversation() {
             "Each event has `id` = `seq` (the team's own gap-free sequence), `event` = its type and `data` = a " +
             "`TeamEventView`. Without `Last-Event-ID` or `after` the stream starts at the newest event; `after=0` " +
             "starts at the oldest retained one (7 days). A reconnecting `EventSource` resumes after the last `id`; if " +
-            "events after that cursor were purged, `event: gap` with `{oldestSeq}` comes first. Sessions and runs are " +
-            "the caller's own; an administrator, or an administrator's `admin:cloud` key for sessions, sees the whole " +
-            "team. Runs need an interactive login or a `usage:read` key. The stream ends with `event: denied` if " +
+            "events after that cursor were purged, `event: gap` with `{oldestSeq}` comes first. Sessions are " +
+            "the caller's own, administrators included; an administrator also sees the team's runs. Runs need an interactive login or a `usage:read` key. The stream ends with `event: denied` if " +
             "access is lost, and otherwise only when the client leaves. Transcript text never appears in it."
         parameters {
             queryNumber("after", "Start after this sequence number; 0 for the oldest retained event.")
@@ -606,7 +605,7 @@ private fun ApiCatalog.cloudTransfers() {
     post("/api/v1/cloud/sessions/{id}/transfer") {
         operationId = "transferCloudSession"; tag(ApiTags.CLOUD_TRANSFERS)
         summary = "Give a session to another member"
-        description = "An owner offers the session (the recipient accepts within the offer delay); an administrator " +
+        description = "An owner offers the session (the recipient accepts within the offer delay); an owner who is an administrator " +
             "transfers it at once. The session pauses, changes owner, then resumes for the recipient if `resume`."
         parameters {
             sessionId()
@@ -637,11 +636,10 @@ private fun ApiCatalog.cloudTransfers() {
     get("/api/v1/cloud/transfers") {
         operationId = "listCloudTransfers"; tag(ApiTags.CLOUD_TRANSFERS)
         summary = "List transfers"
-        description = "The caller's incoming and outgoing transfers, newest first; administrators can read the team's " +
-            "(`scope=team`). Page with `before` = `nextBefore`."
+        description = "The caller's incoming and outgoing transfers, newest first; `scope=team` is `403`, administrators included. Page with `before` = `nextBefore`."
         parameters {
             queryText("direction", "`incoming`, `outgoing` or `all` (default).")
-            queryText("scope", "`mine` (default) or `team`.")
+            queryText("scope", "`mine` (default).")
             queryList("state", "Only these states: `offered`, `accepted`, `completed`, `declined`, `cancelled`, `expired`, `failed`.")
             queryText("session", "Only this session's transfers.")
             queryText("before", "The `nextBefore` of the previous page.")

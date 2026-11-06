@@ -11,7 +11,6 @@ import me.nathanfallet.teamcode.companion.domain.models.LiveUpdate
 import me.nathanfallet.teamcode.companion.domain.models.SessionChange
 import me.nathanfallet.teamcode.companion.domain.models.SessionKinds
 import me.nathanfallet.teamcode.companion.domain.models.SessionPage
-import me.nathanfallet.teamcode.companion.domain.models.SessionScope
 import me.nathanfallet.teamcode.companion.domain.repositories.Features
 import me.nathanfallet.teamcode.companion.domain.repositories.FeaturesRepository
 import me.nathanfallet.teamcode.companion.domain.repositories.SessionRepository
@@ -22,12 +21,12 @@ import me.nathanfallet.teamcode.companion.domain.usecases.auth.AccountGuard
  * asked as before and answers its cloud sessions.
  */
 class LoadSessionsUseCase(private val sessions: SessionRepository, private val features: FeaturesRepository, private val guard: AccountGuard) {
-    suspend operator fun invoke(accountId: String, scope: SessionScope, filter: SessionFilter, before: String? = null): SessionPage = guard(accountId) {
+    suspend operator fun invoke(accountId: String, filter: SessionFilter, before: String? = null): SessionPage = guard(accountId) {
         val announced = features.features(accountId)
         if (Features.SESSIONS !in announced) throw CompanionException.Unsupported(Features.SESSIONS)
         when {
-            Features.REMOTE_SESSIONS in announced -> sessions.sessions(accountId, scope, filter, before, SessionKinds.announced(announced))
-            else -> sessions.sessions(accountId, scope, filter, before)
+            Features.REMOTE_SESSIONS in announced -> sessions.sessions(accountId, filter, before, SessionKinds.announced(announced))
+            else -> sessions.sessions(accountId, filter, before)
         }
     }
 }

@@ -32,13 +32,14 @@ class TransferUseCasesTest {
 
     private fun guard(accounts: InMemoryAccountRepository) = AccountGuard(RefreshAccountUseCase(FakeAuthRepository(), accounts, credentials(), FixedClock()))
 
-    @Test fun theOwnerOrAnAdministratorTransfersACloudSessionThatIsNeitherPreparingNorEnded() {
+    @Test fun onlyTheOwnerTransfersACloudSessionThatIsNeitherPreparingNorEnded() {
         val owner = account(memberId = "m1")
         val other = account(memberId = "m9")
         assertTrue(TransferRules.canTransfer(owner, cloudSession("s1", SessionState.ACTIVE, ownerId = "m1")))
         assertTrue(TransferRules.canTransfer(owner, cloudSession("s1", SessionState.PAUSED, ownerId = "m1")))
         assertFalse(TransferRules.canTransfer(other, cloudSession("s1", ownerId = "m1")))
-        assertTrue(TransferRules.canTransfer(admin(memberId = "m9"), cloudSession("s1", ownerId = "m1")))
+        assertFalse(TransferRules.canTransfer(admin(memberId = "m9"), cloudSession("s1", ownerId = "m1")), "A role opens nobody else's session")
+        assertTrue(TransferRules.canTransfer(admin(memberId = "m1"), cloudSession("s1", ownerId = "m1")))
         // A session on a member's device stays theirs: the action is not offered at all.
         assertFalse(TransferRules.canTransfer(owner, cloudSession("s1", ownerId = "m1").copy(kind = SessionKind.REMOTE)))
         for (state in listOf(SessionState.CREATING, SessionState.PREPARING, SessionState.TRANSFERRING, SessionState.TERMINATED, SessionState.FAILED, SessionState.UNKNOWN)) {
@@ -57,14 +58,15 @@ class TransferUseCasesTest {
         assertFalse(TransferAvailabilityUseCase(InMemoryAccountRepository(listOf(account(signedIn = false))), FakeFeatures(setOf("cloud.transfer.v1"))).available("a1"))
     }
 
-    @Test fun theRecipientDecidesAnOfferItsOwnerWithdrawsItAndAnAdministratorDoesBoth() {
+    @Test fun theRecipientDecidesAnOfferAndItsOwnerWithdrawsItWhateverTheirRole() {
         val offer = transfer("t1", from = "m1", to = "m2")
         assertEquals(setOf(TransferAction.ACCEPT, TransferAction.DECLINE), TransferRules.actions(account(memberId = "m2"), offer))
         assertEquals(setOf(TransferAction.CANCEL), TransferRules.actions(account(memberId = "m1"), offer))
         assertEquals(emptySet(), TransferRules.actions(account(memberId = "m3"), offer))
-        assertEquals(TransferAction.entries.toSet(), TransferRules.actions(admin(memberId = "m3"), offer))
-        // Accepted: only an administrator can still stop it before the owner change; a finished one has no action.
-        assertEquals(setOf(TransferAction.CANCEL), TransferRules.actions(admin(memberId = "m3"), offer.copy(state = TransferState.ACCEPTED)))
+        assertEquals(emptySet(), TransferRules.actions(admin(memberId = "m3"), offer), "An administrator outside the transfer has no action")
+        assertEquals(setOf(TransferAction.ACCEPT, TransferAction.DECLINE), TransferRules.actions(admin(memberId = "m2"), offer))
+        // Accepted: nobody stops it from the app; a finished one has no action.
+        assertEquals(emptySet(), TransferRules.actions(admin(memberId = "m3"), offer.copy(state = TransferState.ACCEPTED)))
         assertEquals(emptySet(), TransferRules.actions(account(memberId = "m1"), offer.copy(state = TransferState.ACCEPTED)))
         assertEquals(emptySet(), TransferRules.actions(admin(memberId = "m3"), offer.copy(state = TransferState.COMPLETED)))
     }

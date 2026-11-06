@@ -28,7 +28,7 @@ class WaitServiceTest {
     @Test fun onlyTheSessionsOwnerAsksAndTheAssigneeMustBeActive() {
         val service = WaitService(WaitFixtures.FakeStore())
         assertEquals("not_found", code { service.create(principal(bob), review, null) }, "bob does not see ada's session")
-        assertEquals("wait_session_owner_only", code { service.create(principal(admin), review, null) })
+        assertEquals("not_found", code { service.create(principal(admin), review, null) }, "nor does an administrator")
         assertEquals("invalid_assignee", code { service.create(principal(ada), review.copy(assigneeId = "gone"), null) })
         assertEquals("invalid_assignee", code { service.create(principal(ada), review.copy(assigneeId = "nobody"), null) })
         assertEquals("credential_scope", code { service.create(principal(ada, setOf(ServiceScope.CLOUD_READ)), review, null) })

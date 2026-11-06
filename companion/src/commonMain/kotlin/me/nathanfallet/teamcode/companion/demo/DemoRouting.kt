@@ -12,7 +12,6 @@ import me.nathanfallet.teamcode.companion.domain.models.PermissionAnswer
 import me.nathanfallet.teamcode.companion.domain.models.PickedFile
 import me.nathanfallet.teamcode.companion.domain.models.SessionFilter
 import me.nathanfallet.teamcode.companion.domain.models.SessionKind
-import me.nathanfallet.teamcode.companion.domain.models.SessionScope
 import me.nathanfallet.teamcode.companion.domain.models.SubscriptionAccountType
 import me.nathanfallet.teamcode.companion.domain.models.TransferDirection
 import me.nathanfallet.teamcode.companion.domain.models.TransferRequest
@@ -130,8 +129,8 @@ class DemoAwareFeaturesRepository(private val real: FeaturesRepository, private 
 
 class DemoAwareSessionRepository(private val real: SessionRepository, private val demo: SessionRepository) : SessionRepository {
     private fun of(accountId: String) = if (isDemo(accountId)) demo else real
-    override suspend fun sessions(accountId: String, scope: SessionScope, filter: SessionFilter, before: String?, kinds: Set<SessionKind>) =
-        of(accountId).sessions(accountId, scope, filter, before, kinds)
+    override suspend fun sessions(accountId: String, filter: SessionFilter, before: String?, kinds: Set<SessionKind>) =
+        of(accountId).sessions(accountId, filter, before, kinds)
     override suspend fun session(accountId: String, sessionId: String) = of(accountId).session(accountId, sessionId)
     override suspend fun profiles(accountId: String) = of(accountId).profiles(accountId)
     override suspend fun create(accountId: String, session: NewSession, idempotencyKey: String) = of(accountId).create(accountId, session, idempotencyKey)

@@ -32,7 +32,6 @@ import me.nathanfallet.teamcode.companion.domain.models.SessionChange
 import me.nathanfallet.teamcode.companion.domain.models.SessionFilter
 import me.nathanfallet.teamcode.companion.domain.models.WaitSource
 import me.nathanfallet.teamcode.companion.domain.models.WaitStatus
-import me.nathanfallet.teamcode.companion.domain.models.SessionScope
 import me.nathanfallet.teamcode.companion.domain.models.SessionState
 import me.nathanfallet.teamcode.companion.domain.models.TranscriptEvent
 import me.nathanfallet.teamcode.companion.domain.repositories.AccountRepository
@@ -112,7 +111,7 @@ class DemoModeTest {
         assertEquals(DemoContent.ACCOUNT_ID, accounts.activeAccountId.value)
         // Everything a member does in the demo, through the app's own use cases.
         assertEquals(account, koin.get<RefreshAccountUseCase>()(account.id))
-        val sessions = koin.get<LoadSessionsUseCase>()(account.id, SessionScope.MINE, SessionFilter.OPEN).sessions
+        val sessions = koin.get<LoadSessionsUseCase>()(account.id, SessionFilter.OPEN).sessions
         assertEquals(9, sessions.size)
         assertEquals("Fix the flaky login test", sessions.first().name)
         assertTrue(koin.get<LoadTranscriptUseCase>()(account.id, "s0").events.isNotEmpty())
@@ -170,7 +169,7 @@ class DemoModeTest {
         assertEquals("Add a dark mode", created.name)
         assertEquals("codex", created.agentKind)
         assertEquals(SessionState.READY, created.state)
-        assertEquals(created.id, koin.get<LoadSessionsUseCase>()(account.id, SessionScope.MINE, SessionFilter.OPEN).sessions.first().id)
+        assertEquals(created.id, koin.get<LoadSessionsUseCase>()(account.id, SessionFilter.OPEN).sessions.first().id)
         // Without a first message, the session opens on the reply alone.
         val events = koin.get<LoadTranscriptUseCase>()(account.id, created.id).events
         assertEquals(DemoContent.SCRIPTED_REPLY, events.filterIsInstance<TranscriptEvent.AgentMessage>().single().text)

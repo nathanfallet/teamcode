@@ -132,10 +132,9 @@ class TeamEventRoutesTest {
             assertEquals(listOf("session", "run", "session"), mine.map { it.second.subject })
             assertTrue(mine.all { it.second.memberId == "colleague-id" }, "Nothing of another member")
             assertEquals("completed", mine.last().second.data["phase"]!!.jsonPrimitive.content)
-            // An interactive administrator and an admin:cloud key (sessions only) see the team; an administrator's plain key only itself.
-            assertEquals(listOf(1L, 2L, 3L, 4L, 5L), client.read("admin", 5, query = "?after=0").map { it.second.seq })
-            assertEquals(listOf(1L, 2L, 4L), client.read("admin-cloud", 3, query = "?after=0").map { it.second.seq }, "admin:cloud has no usage:read, so no runs")
-            assertEquals(listOf(1L, 2L, 3L, 4L, 5L), client.read("monitor", 5, query = "?after=0").map { it.second.seq }, "team:read sees sessions and runs of the team")
+            // No role opens another member's sessions in the feed: an interactive administrator and a team:read key see the team's runs only.
+            assertEquals(listOf(3L, 5L), client.read("admin", 2, query = "?after=0").map { it.second.seq })
+            assertEquals(listOf(3L, 5L), client.read("monitor", 2, query = "?after=0").map { it.second.seq }, "team:read sees the runs of the team, no member's session")
             // Resume: Last-Event-ID wins over ?after, and the missed events arrive once, in order, then the new ones.
             val resumed = async { client.read("colleague", 3, query = "?after=0", lastEventId = 3) }
             delay(300)

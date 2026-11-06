@@ -42,7 +42,7 @@ private fun size(bytes: Long) = when {
 private fun summary(artifact: ArtifactView) = "${artifact.id}  v${artifact.currentVersion}  ${artifact.access}  ${artifact.title}  (${artifact.ownerName}, ${artifact.relation})"
 
 private class ArtifactList : SuspendingCliktCommand(name = "list") {
-    private val scope by option(help = "mine, shared, team (everything you can read, the default) or all (administrators).").choice("mine", "shared", "team", "all").default("team")
+    private val scope by option(help = "mine, shared, or team (everything you can read, the default).").choice("mine", "shared", "team").default("team")
     private val member by option("--member", help = "Only artifacts owned by this member id.")
     private val session by option("--session", help = "Only artifacts published from this cloud session.")
     private val run by option("--run", help = "Only artifacts published from this agent run.")

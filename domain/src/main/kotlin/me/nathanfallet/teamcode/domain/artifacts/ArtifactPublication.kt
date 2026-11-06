@@ -19,8 +19,8 @@ data class ArtifactPolicy(val canPublish: Boolean, val reason: String?)
 data class ArtifactFile(val path: String, val sha256: String, val size: Long, val contentType: String, val role: String)
 
 /**
- * An artifact as one caller sees it. [relation] is `owner`, `editor`, `viewer`, `team` (a team or public artifact) or
- * `admin` (an administrator reading another member's personal artifact).
+ * An artifact as one caller sees it. [relation] is `owner`, `editor`, `viewer` or `team` (a team or public artifact).
+ * A role opens nobody's personal artifact: an administrator reads one as any member does, when invited.
  */
 data class Artifact(
     val id: String, val teamId: String, val ownerId: String, val ownerName: String, val title: String, val description: String, val icon: String,
@@ -56,9 +56,9 @@ data class Published(val artifact: Artifact, val version: ArtifactVersion, val r
 
 data class ArtifactPage(val artifacts: List<Artifact>, val nextBefore: String?)
 
-/** `mine` (owned), `shared` (invited), `team` (everything the caller can read) or `all` (administrators). */
+/** `mine` (owned), `shared` (invited), or `team` (everything the caller can read). */
 enum class ArtifactScope(val wire: String) {
-    MINE("mine"), SHARED("shared"), TEAM("team"), ALL("all");
+    MINE("mine"), SHARED("shared"), TEAM("team");
     companion object { fun parse(value: String) = entries.singleOrNull { it.wire == value } }
 }
 
@@ -255,7 +255,6 @@ class ArtifactService(private val store: ArtifactStore, private val admin: Artif
     suspend fun list(actor: Principal, query: ArtifactQuery): ArtifactPage {
         actor.requireArtifactRead()
         if (query.limit !in 1..ArtifactRules.MAX_LIST) throw ArtifactRules.failure("invalid_artifact_query", "Use a limit of 1–${ArtifactRules.MAX_LIST}.")
-        if (query.scope == ArtifactScope.ALL && !actor.canReadTeam) throw TeamFailure("forbidden", 403, "Only administrators list every artifact.")
         if (listOfNotNull(query.ownerId, query.sessionId, query.runId).any { !FILTER.matches(it) })
             throw ArtifactRules.failure("invalid_artifact_query", "Filter by a member, session or run id: up to 36 letters, digits and dashes.")
         if (query.originKind != null && query.originKind !in ORIGIN_KINDS) throw ArtifactRules.failure("invalid_artifact_query", "The origin is local_run, cloud_session or api.")

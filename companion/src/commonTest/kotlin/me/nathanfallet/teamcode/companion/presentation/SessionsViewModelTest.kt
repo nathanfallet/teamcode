@@ -111,7 +111,7 @@ class SessionsViewModelTest {
         settle()
         // The answer was read before the turn started: the change applies on top of it.
         assertEquals(SessionState.ACTIVE, model.uiState.value.list!!.sessions.single().state)
-        assertEquals(listOf("feed", "list MINE OPEN null"), sessions.calls)
+        assertEquals(listOf("feed", "list OPEN null"), sessions.calls)
         model.stop()
     }
 
@@ -174,7 +174,7 @@ class SessionsViewModelTest {
         assertEquals(1, sessions.calls.count { it == "get n" })
         model.setFilter(SessionFilter.ENDED)
         settle()
-        assertEquals("list MINE ENDED null", sessions.calls.last())
+        assertEquals("list ENDED null", sessions.calls.last())
         assertTrue(model.uiState.value.list!!.sessions.isEmpty())
         model.stop()
         // Stopped: the feed is closed and nothing more is read.
@@ -217,7 +217,7 @@ class SessionsViewModelTest {
         assertTrue(model.uiState.value.following)
         feed.send(LiveUpdate.Opened(false))
         settle()
-        assertEquals("list MINE ENDED null", sessions.calls.last())
+        assertEquals("list ENDED null", sessions.calls.last())
         assertFalse(model.uiState.value.loading)
         model.stop()
     }
@@ -229,10 +229,10 @@ class SessionsViewModelTest {
         feed.send(LiveUpdate.Opened(false))
         settle()
         assertTrue(model.uiState.value.remoteSessions)
-        assertEquals(listOf("feed cloud,remote", "list MINE OPEN null cloud,remote"), sessions.calls)
+        assertEquals(listOf("feed cloud,remote", "list OPEN null cloud,remote"), sessions.calls)
         model.setFilter(SessionFilter.ALL)
         settle()
-        assertEquals(listOf("feed cloud,remote", "list MINE OPEN null cloud,remote", "list MINE ALL null cloud,remote"), sessions.calls)
+        assertEquals(listOf("feed cloud,remote", "list OPEN null cloud,remote", "list ALL null cloud,remote"), sessions.calls)
         assertEquals(SessionFilter.ALL, model.uiState.value.filter)
         // The same filter again reads nothing.
         model.setFilter(SessionFilter.ALL)
@@ -247,7 +247,7 @@ class SessionsViewModelTest {
         feed.send(LiveUpdate.Opened(false))
         settle()
         assertFalse(model.uiState.value.remoteSessions)
-        assertEquals(listOf("feed", "list MINE OPEN null"), sessions.calls)
+        assertEquals(listOf("feed", "list OPEN null"), sessions.calls)
         model.stop()
     }
 
@@ -262,7 +262,7 @@ class SessionsViewModelTest {
         model.loadMore(); model.loadMore(); settle(); model.loadMore()
         gate.complete(Unit)
         settle()
-        assertEquals(listOf("list MINE OPEN c1"), sessions.calls.filter { it.endsWith(" c1") || it.endsWith(" c2") })
+        assertEquals(listOf("list OPEN c1"), sessions.calls.filter { it.endsWith(" c1") || it.endsWith(" c2") })
         assertEquals(listOf("a", "b"), model.uiState.value.list!!.sessions.map { it.id })
         model.stop()
     }
