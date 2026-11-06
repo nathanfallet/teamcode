@@ -42,7 +42,7 @@ class RunnerInferenceUseCase(private val sessions: CloudSessionStore, private va
         val session = sessions.find(teamId, sessionId) ?: throw fenced()
         if (session.currentEpoch != epoch || session.state.terminal || session.desiredState == DesiredState.TERMINATED) throw fenced()
         // A remote host's inference goes through its own member login, never through an execution credential.
-        if (session.kind == CloudSessionKind.REMOTE) throw TeamFailure("inference_unavailable", 409, "A remote session's host runs inference with its member login.")
+        if (session.kind != CloudSessionKind.CLOUD) throw TeamFailure("inference_unavailable", 409, "A remote or local session runs inference with its member login.")
         val execution = sessions.execution(sessionId, epoch) ?: throw fenced()
         if (execution.state != ExecutionState.RUNNING) throw fenced()
         // A draining execution still finishes its turn, so `pausing` keeps its inference until the pod stops.
@@ -59,7 +59,7 @@ class RunnerInferenceUseCase(private val sessions: CloudSessionStore, private va
     suspend fun issueRemote(teamId: String, sessionId: String, epoch: Int): IssuedInferenceCredential {
         val session = sessions.find(teamId, sessionId) ?: throw fenced()
         if (session.currentEpoch != epoch || session.state.terminal || session.desiredState == DesiredState.TERMINATED) throw fenced()
-        if (session.kind != CloudSessionKind.REMOTE) throw TeamFailure("session_credential_unavailable", 409, "Only a remote session's host asks for a session credential.")
+        if (session.kind == CloudSessionKind.CLOUD) throw TeamFailure("session_credential_unavailable", 409, "Only a remote or local session's host asks for a session credential.")
         val execution = sessions.execution(sessionId, epoch) ?: throw fenced()
         if (execution.state != ExecutionState.RUNNING) throw fenced()
         if (session.state !in INFERENCE_STATES) throw TeamFailure("session_credential_unavailable", 409, "The session cannot hold a credential in its current state.")

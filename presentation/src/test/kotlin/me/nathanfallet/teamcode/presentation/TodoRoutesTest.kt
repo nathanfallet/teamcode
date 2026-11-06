@@ -128,17 +128,18 @@ class TodoRoutesTest {
         assertTrue(context()!!.startsWith("[TeamCode todo] Your todo: 0 of 2 items done.\nPlan reference:\n  The plan"), context())
         assertEquals(HttpStatusCode.Forbidden, client.request("/api/v1/todos/session/context") { bearerAuth("exec-old") }.status)
         assertEquals("verify", stop("""{"phase":"begin"}""").action)
+        // The Stop hook of a local run asks what a wait has to say: the route answers from the session of its credential, and a reader cannot.
+        val wokeCall = call("/api/v1/todos/session/wake", "exec-token", """{"waitMillis":0}""")
+        val woke = Serialization.json.decodeFromString<TodoWakeView>(wokeCall.bodyAsText().also { assertEquals(HttpStatusCode.OK, wokeCall.status, it) })
+        assertEquals(false to emptyList(), woke.open to woke.messages, "A server without local sessions never holds the hook")
+        assertEquals(HttpStatusCode.Forbidden, call("/api/v1/todos/session/wake", "reader", """{}""").status)
         assertEquals("invalid_todo", code(call("/api/v1/todos/session/stop", "exec-token", """{"phase":"later"}""")))
         val first = stop("""{"phase":"verify","items":[{"itemId":"a","checks":[{"index":0,"passed":true,"observed":"PR #1 MERGED"}]}],"orphans":["https://github.com/acme/backend/pull/5"],"lastMessage":"done"}""")
         assertEquals("block", first.action)
         assertTrue(first.reason!!.startsWith("[TeamCode todo] 1 of 3 items done."), first.reason)
         assertEquals(listOf("a", "finish-pr-5", "b").sorted(), first.todo!!.items.map { it.id }.sorted())
-        // Observation: the same stop is recorded and passes.
-        val observed = stop("""{"phase":"verify","observe":true}""")
-        assertEquals(listOf("allow", true), listOf(observed.action, observed.wouldBlock))
-        assertEquals("would_block", observed.todo!!.hookEvents.single().kind)
         val failed = Serialization.json.decodeFromString<TodoSessionView>(call("/api/v1/todos/session/hook-error", "exec-token", """{"text":"The stop hook ran out of time (140 s)."}""").bodyAsText())
-        assertEquals(listOf("would_block", "hook_error"), failed.todo!!.hookEvents.map { it.kind })
+        assertEquals(listOf("hook_error"), failed.todo!!.hookEvents.map { it.kind })
         // Another credential (the reader, a key without todo:session) never reaches them.
         assertEquals(HttpStatusCode.Forbidden, call("/api/v1/todos/session/stop", "reader", """{}""").status)
         assertEquals(HttpStatusCode.Forbidden, call("/api/v1/todos/session/hook-error", "reader", """{"text":"x"}""").status)

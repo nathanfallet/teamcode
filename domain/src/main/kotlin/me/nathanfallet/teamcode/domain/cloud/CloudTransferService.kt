@@ -198,6 +198,8 @@ class CloudTransferService(
                 // It runs on its owner's own device, in a directory of theirs: nobody else could resume it.
                 session.kind == CloudSessionKind.REMOTE ->
                     throw TeamFailure("remote_not_transferable", 409, "A remote session runs on its owner's device and cannot be transferred.")
+                session.kind == CloudSessionKind.LOCAL ->
+                    throw TeamFailure("local_not_transferable", 409, "A local session lives as long as its owner's teamcode run and cannot be transferred.")
                 session.state.terminal || session.desiredState == DesiredState.TERMINATED -> throw ended()
                 session.state == CREATING || session.state == PREPARING ->
                     throw TeamFailure("session_preparing", 409, "The session is still being prepared. Transfer it once it is ready.")

@@ -12,10 +12,11 @@ enum class CloudSessionState(val wire: String) {
 }
 /**
  * Where a session's agent runs: `cloud` in a pod the server starts, `remote` on a member's own device (started by the
- * desktop app or the CLI). Fixed at creation.
+ * desktop app or the CLI), `local` in the terminal of a member's `teamcode run`: attached to that launch, it lives as long as
+ * the launch does and takes no message (docs/cloud-sessions.md, "Local sessions"). Fixed at creation.
  */
 enum class CloudSessionKind(val wire: String) {
-    CLOUD("cloud"), REMOTE("remote");
+    CLOUD("cloud"), REMOTE("remote"), LOCAL("local");
     companion object { fun parse(value: String) = entries.single { it.wire == value } }
 }
 /**
@@ -180,6 +181,8 @@ data class CloudSession(
      * retained session caps (docs/automations.md).
      */
     val automationId: String? = null,
+    /** The `teamcode run` launch a local session is attached to ([CloudSessionKind.LOCAL]); null for every other kind. */
+    val runId: String? = null,
 ) {
     /** Whether a permission answer can reach the agent now: `ready` or `active`, desired running. */
     val takesAnswers: Boolean get() = desiredState == DesiredState.RUNNING && (state == CloudSessionState.READY || state == CloudSessionState.ACTIVE)
@@ -370,6 +373,9 @@ data class CloudSessionDraft(
     /** The automation that creates the session (docs/automations.md); set by the server only, never from a request. */
     val automationId: String? = null,
 )
+
+/** The local session of a `teamcode run` launch ([CloudSessionKind.LOCAL]): the launch it is attached to, its agent and its name. */
+data class LocalSessionDraft(val runId: String, val name: String, val agentKind: String, val labels: Map<String, String> = emptyMap())
 
 /** A session on the caller's own device: no profile, the agent and the directory's name come from the request. */
 data class RemoteSessionDraft(

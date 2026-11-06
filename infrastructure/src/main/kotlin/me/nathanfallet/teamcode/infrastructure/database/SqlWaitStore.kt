@@ -1,6 +1,7 @@
 package me.nathanfallet.teamcode.infrastructure.database
 
 import kotlinx.serialization.json.*
+import me.nathanfallet.teamcode.domain.cloud.CloudSessionKind
 import me.nathanfallet.teamcode.domain.team.*
 import me.nathanfallet.teamcode.domain.waits.*
 import me.nathanfallet.teamcode.infrastructure.database.tables.*
@@ -28,9 +29,9 @@ class SqlWaitStore(private val database: Database, private val cipher: Credentia
         CloudInferenceCredentials.select(CloudInferenceCredentials.sessionId).where { CloudInferenceCredentials.tokenId eq tokenId }.singleOrNull()?.get(CloudInferenceCredentials.sessionId)
     }
     override suspend fun session(teamId: String, sessionId: String): WaitSession? = database.query {
-        CloudSessions.select(CloudSessions.id, CloudSessions.teamId, CloudSessions.ownerId, CloudSessions.name, CloudSessions.agentKind)
+        CloudSessions.select(CloudSessions.id, CloudSessions.teamId, CloudSessions.ownerId, CloudSessions.name, CloudSessions.agentKind, CloudSessions.kind)
             .where { (CloudSessions.id eq sessionId) and (CloudSessions.teamId eq teamId) }.singleOrNull()
-            ?.let { WaitSession(it[CloudSessions.id], it[CloudSessions.teamId], it[CloudSessions.ownerId], it[CloudSessions.name], it[CloudSessions.agentKind]) }
+            ?.let { WaitSession(it[CloudSessions.id], it[CloudSessions.teamId], it[CloudSessions.ownerId], it[CloudSessions.name], it[CloudSessions.agentKind], it[CloudSessions.kind] == CloudSessionKind.LOCAL.wire) }
     }
 
     override suspend fun create(actor: Principal, wait: Wait, idempotencyKey: String?, limit: Int): WaitChange = database.query {

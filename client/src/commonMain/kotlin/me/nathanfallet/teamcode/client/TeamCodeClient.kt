@@ -599,7 +599,7 @@ class TeamCodeClient(
     ): CloudStreamEnd {
         require(after == null || after >= 0)
         require(types.size <= MAX_TEAM_EVENT_TYPES && types.all { TEAM_EVENT_TYPE.matches(it) && it != "gap" && it != "denied" }) { "Invalid event type." }
-        require(kinds.all { it == "cloud" || it == "remote" }) { "Invalid session kind." }
+        require(kinds.all { it == "cloud" || it == "remote" || it == "local" }) { "Invalid session kind." }
         val parameters = (if (types.isEmpty()) emptyList() else listOf("types=" + types.sorted().joinToString(",").encodeURLQueryComponent())) +
             kinds.sorted().map { "kind=$it" }
         val query = if (parameters.isEmpty()) "" else "?" + parameters.joinToString("&")
@@ -847,10 +847,10 @@ class TeamCodeClient(
     }
     /**
      * Relays one todo call received by the local proxy (`teamcode mcp todo`), with this client's credential: only
-     * `/api/v1/todos/session` and its item routes (the proxy narrows each to its method), and a bounded answer.
+     * `/api/v1/todos/session` and the routes below it (items, stop, wake, context, hook-error; the proxy narrows each to its method), and a bounded answer.
      */
     suspend fun forwardTodo(method: HttpMethod, path: String, query: String, body: ByteArray, contentType: ContentType?, runId: String?): ArtifactRelayResponse {
-        require(path == "/api/v1/todos/session" || path.startsWith("/api/v1/todos/session/items")) { "Only the session todo is relayed." }
+        require(path == "/api/v1/todos/session" || path.startsWith("/api/v1/todos/session/")) { "Only the session todo is relayed." }
         return forwardApi(method, path, query, body, contentType, runId, emptyMap(), TODO_RELAY_LIMIT, WAIT_RELAYED_HEADERS)
     }
     /** The reminder block of the session's todo (after a compaction, on resume); its text is null without an active list. */
@@ -860,6 +860,8 @@ class TeamCodeClient(
     }
     /** One stop of the agent for the Stop hook (`teamcode cloud todo-stop`): what to run next, whether the stop passes, or the message to block with. */
     suspend fun todoStop(request: TodoStopRequest): TodoStopView = coded(HttpMethod.Post, "/api/v1/todos/session/stop", request)
+    /** The Stop hook of a local run, holding the agent for a wait: the answers that arrived, and whether a wait is still open. */
+    suspend fun todoWake(request: TodoWakeRequest): TodoWakeView = coded(HttpMethod.Post, "/api/v1/todos/session/wake", request)
     /** Records a failure of the Stop hook on the session's list. */
     suspend fun todoHookError(request: TodoHookErrorRequest): TodoSessionView = coded(HttpMethod.Post, "/api/v1/todos/session/hook-error", request)
     /** Asks the session's owner to drop an item; nothing is deleted until they say yes. */

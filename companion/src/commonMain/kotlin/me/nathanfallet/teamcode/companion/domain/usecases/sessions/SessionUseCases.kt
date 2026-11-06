@@ -9,7 +9,7 @@ import me.nathanfallet.teamcode.companion.domain.models.CompanionException
 import me.nathanfallet.teamcode.companion.domain.models.SessionFilter
 import me.nathanfallet.teamcode.companion.domain.models.LiveUpdate
 import me.nathanfallet.teamcode.companion.domain.models.SessionChange
-import me.nathanfallet.teamcode.companion.domain.models.SessionKind
+import me.nathanfallet.teamcode.companion.domain.models.SessionKinds
 import me.nathanfallet.teamcode.companion.domain.models.SessionPage
 import me.nathanfallet.teamcode.companion.domain.repositories.Features
 import me.nathanfallet.teamcode.companion.domain.repositories.FeaturesRepository
@@ -25,7 +25,7 @@ class LoadSessionsUseCase(private val sessions: SessionRepository, private val f
         val announced = features.features(accountId)
         if (Features.SESSIONS !in announced) throw CompanionException.Unsupported(Features.SESSIONS)
         when {
-            Features.REMOTE_SESSIONS in announced -> sessions.sessions(accountId, filter, before, SessionKind.entries.toSet())
+            Features.REMOTE_SESSIONS in announced -> sessions.sessions(accountId, filter, before, SessionKinds.announced(announced))
             else -> sessions.sessions(accountId, filter, before)
         }
     }

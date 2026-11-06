@@ -177,6 +177,7 @@
     <string name="composer_hint">Écrire à l'agent</string>
     <string name="composer_send">Envoyer</string>
     <string name="composer_ended">Cette session est terminée : elle n'accepte plus de messages.</string>
+    <string name="composer_local">Cette session tourne dans un terminal (teamcode run) : parlez-lui là-bas. Répondez à ses attentes depuis l'onglet En attente.</string>
     <string name="composer_unsupported">Ce serveur n'accepte pas les messages envoyés depuis l'app.</string>
     <string name="composer_dictate">Dicter</string>
     <string name="composer_dictate_stop">Arrêter la dictée</string>
@@ -392,6 +393,7 @@
     <string name="notice_permission_rejected">L'agent n'a pas pris la réponse en compte (%1$s). Réponds à nouveau.</string>
     <string name="session_kind_cloud">Cloud</string>
     <string name="session_kind_remote">À distance · %1$s</string>
+    <string name="session_kind_local">Lancement local (teamcode run)</string>
     <string name="session_host_unnamed">appareil sans nom</string>
     <string name="session_host_removed">appareil supprimé</string>
     <string name="session_host_offline_chip">Hors ligne</string>

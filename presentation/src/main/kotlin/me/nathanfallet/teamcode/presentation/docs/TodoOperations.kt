@@ -90,9 +90,17 @@ internal fun ApiCatalog.todoOperations() {
         summary = "Decide what a stop of the agent leads to"
         description = "Asked by the Stop hook (`teamcode cloud todo-stop`) of a session, up to three times per stop: `begin` answers `allow` (no list, a finished list, a background agent still running or any open wait of the session) or `verify`; " +
             "`verify` carries the outcome of the cheap checks and the pull requests the session opened, ticks what passed and answers `settle` (everything is closed), `block` (with the message for the agent) or `allow`; `settle` carries every check of the done items and finishes the list or reopens an item. " +
-            "A stop with no progress since the last blocked one adds to a counter kept here; at 3 a wait asks the owner and the stop passes. With `observe` nothing is refused: the decision is recorded as `would_block`. $TODO_TEXT"
+            "A stop with no progress since the last blocked one adds to a counter kept here; at 3 a wait asks the owner and the stop passes. $TODO_TEXT"
         body<TodoStopRequest>("The phase and what the hook observed.")
         responses { ok<TodoStopView>("What to do next."); badRequest("An unknown phase, a position outside a condition or an oversized proof."); notFound("No such session.") }
+    }
+    post("/api/v1/todos/session/wake") {
+        operationId = "wakeTodoSession"; tag(ApiTags.TODOS)
+        summary = "What the waits of a local run's session have to say"
+        description = "Asked by the Stop hook of a local `teamcode run` (`teamcode cloud todo-stop --wake`, `cloud.sessions.local.v1`), after the stop passed because a wait of the session is open: it holds the request for up to `waitMillis` (at most 30 000) and answers as soon as the answer to a wait arrives, which it hands over once (`messages`, oldest first, each a `[TeamCode wait answered]` message). " +
+            "`open` says a wait of the session is still open, so the hook goes on holding the agent. A session that is not a local session, has ended or has no open wait answers `open: false` at once. $TODO_TEXT"
+        body<TodoWakeRequest>("How long the server may hold the answer back.")
+        responses { ok<TodoWakeView>("The answers that arrived, and whether a wait is still open."); notFound("No such session.") }
     }
     post("/api/v1/todos/session/hook-error") {
         operationId = "recordTodoHookError"; tag(ApiTags.TODOS)

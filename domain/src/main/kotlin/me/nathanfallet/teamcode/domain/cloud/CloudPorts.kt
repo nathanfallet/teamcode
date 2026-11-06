@@ -30,6 +30,9 @@ sealed interface CloudCreateOutcome {
 }
 
 /** Persistence of sessions and executions. Every mutation is a conditional update on `generation`. */
+/** A `teamcode run` launch as a local session sees it: who started it and whether it still runs. */
+data class LocalRun(val memberId: String, val running: Boolean)
+
 interface CloudSessionStore {
     /** The database clock, shared by every replica. */
     suspend fun now(): Long
@@ -73,6 +76,15 @@ interface CloudSessionStore {
      * remote session runs on this device.
      */
     suspend fun deviceOf(principal: Principal): String? = null
+
+    /**
+     * The `teamcode run` launch [runId] of the team, for a local session to attach to: its member and whether it still runs. Null
+     * for an unknown launch.
+     */
+    suspend fun localRun(teamId: String, runId: String): LocalRun? = null
+
+    /** The local session attached to the launch [runId], if one was already opened (`unique(team, run)`). */
+    suspend fun findLocal(teamId: String, runId: String): CloudSession? = null
 
     /**
      * Starts the next epoch of a remote session on its host, in one transaction: the compare-and-set that advances

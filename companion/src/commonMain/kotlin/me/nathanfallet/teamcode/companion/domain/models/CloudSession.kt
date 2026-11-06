@@ -38,13 +38,24 @@ enum class SessionFilter(val groups: Set<SessionGroup>) {
 }
 
 
-/** Where a session runs: a pod the server started, or a member's device (`cloud.sessions.remote.v1`). */
+/**
+ * Where a session runs: a pod the server started, a member's device (`cloud.sessions.remote.v1`), or the terminal of a member's
+ * `teamcode run` ([LOCAL], `cloud.sessions.local.v1`): it takes no message and lives as long as the run.
+ */
 enum class SessionKind(val wire: String) {
-    CLOUD("cloud"), REMOTE("remote");
+    CLOUD("cloud"), REMOTE("remote"), LOCAL("local");
 
     companion object {
         /** A server without remote sessions sends no kind: its sessions are cloud sessions. */
-        fun of(wire: String?): SessionKind = if (wire == REMOTE.wire) REMOTE else CLOUD
+        fun of(wire: String?): SessionKind = entries.firstOrNull { it.wire == wire } ?: CLOUD
+    }
+}
+
+/** The kinds a server knows: a server that announces remote sessions knows cloud and remote ones, local ones only when it says so. */
+object SessionKinds {
+    fun announced(features: Set<String>): Set<SessionKind> = buildSet {
+        add(SessionKind.CLOUD); add(SessionKind.REMOTE)
+        if ("cloud.sessions.local.v1" in features) add(SessionKind.LOCAL)
     }
 }
 
@@ -99,6 +110,8 @@ data class CloudSession(
     val waiting: SessionWaiting? = null,
 ) {
     val remote: Boolean get() = kind == SessionKind.REMOTE
+    /** The session of a `teamcode run` in a terminal: no pause, resume, transfer or message from the app. */
+    val local: Boolean get() = kind == SessionKind.LOCAL
 
     /** A remote session paused because its device stopped answering (the server's `host_offline`). */
     val hostOffline: Boolean get() = remote && problemCode == HOST_OFFLINE

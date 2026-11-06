@@ -236,9 +236,10 @@ class TodoMcpServerTest {
     }
 
     @Test fun theRelayAllowsTheTodoRoutesAndNothingElse() {
-        assertEquals(mapOf(HttpMethod.Get to 2, HttpMethod.Post to 5), TODO_RELAY_ROUTES.mapValues { it.value.size })
+        assertEquals(mapOf(HttpMethod.Get to 2, HttpMethod.Post to 6), TODO_RELAY_ROUTES.mapValues { it.value.size })
         assertTrue(TODO_RELAY_ROUTES.getValue(HttpMethod.Get).any { it.matches("/api/v1/todos/session/context") })
         val posts = TODO_RELAY_ROUTES.getValue(HttpMethod.Post)
+        assertTrue(posts.any { it.matches("/api/v1/todos/session/wake") }, "the Stop hook of a local run holds through the relay")
         for (path in listOf("/api/v1/todos/session", "/api/v1/todos/session/items", "/api/v1/todos/session/items/a/start", "/api/v1/todos/session/items/a-b/proof", "/api/v1/todos/session/items/a/link", "/api/v1/todos/session/items/a/drop", "/api/v1/todos/session/stop", "/api/v1/todos/session/hook-error"))
             assertTrue(posts.any { it.matches(path) }, path)
         for (path in listOf("/api/v1/todos", "/api/v1/todos/session/items/A/start", "/api/v1/todos/session/items/a/delete", "/api/v1/waits/x/answer", "/api/v1/todos/session/../waits"))

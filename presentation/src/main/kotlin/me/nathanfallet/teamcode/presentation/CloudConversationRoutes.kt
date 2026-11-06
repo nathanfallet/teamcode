@@ -110,7 +110,7 @@ private fun ApplicationCall.eventTypes(): Set<TeamEventType>? = request.queryPar
  * cloud sessions', so a client written before remote sessions never hears of one it cannot show. Run events pass.
  */
 private fun ApplicationCall.sessionKinds(): Set<String> = request.queryParameters.getAll("kind")?.map { value ->
-    CloudSessionKind.entries.find { it.wire == value }?.wire ?: throw TeamFailure("invalid_kind", 400, "Use kind=cloud or kind=remote.")
+    CloudSessionKind.entries.find { it.wire == value }?.wire ?: throw TeamFailure("invalid_kind", 400, "Use kind=cloud, kind=remote or kind=local.")
 }?.toSet() ?: setOf(CloudSessionKind.CLOUD.wire)
 
 /** Whether a session event belongs to one of [kinds]; events from before kinds existed are cloud sessions'. */

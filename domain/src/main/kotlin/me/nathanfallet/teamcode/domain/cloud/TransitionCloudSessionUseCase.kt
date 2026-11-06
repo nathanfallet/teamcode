@@ -29,9 +29,9 @@ class TransitionCloudSessionUseCase(private val store: CloudSessionStore) {
         return store.startExecution(expected, next, execution, leaseOwner, memberRunningLimit)
     }
 
-    /** Advances the epoch of a remote session by exactly one on its host, ending the execution it replaces. */
+    /** Advances the epoch of a remote or local session by exactly one on its host, ending the execution it replaces. */
     suspend fun startHost(expected: CloudSession, next: CloudSession, execution: CloudExecution, ended: CloudExecution?, actor: CloudActor): CloudSession? {
-        require(expected.kind == CloudSessionKind.REMOTE && next.id == expected.id && next.generation == expected.generation) { "Only a remote session starts on its host." }
+        require(expected.kind != CloudSessionKind.CLOUD && next.id == expected.id && next.generation == expected.generation) { "Only a remote or local session starts on its host." }
         CloudStateMachine.require(expected.state, next.state)
         require(next.currentEpoch == expected.currentEpoch + 1 && execution.epoch == next.currentEpoch && execution.sessionId == expected.id) { "The epoch advances by one with its execution." }
         require(next.ownerId == expected.ownerId && execution.ownerId == expected.ownerId) { "An execution runs for the session's current owner." }

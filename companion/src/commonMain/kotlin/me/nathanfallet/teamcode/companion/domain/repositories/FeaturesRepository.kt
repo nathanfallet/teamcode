@@ -26,6 +26,8 @@ object Features {
     const val ARTIFACT_TICKETS = "artifacts.tickets.v1"
     /** Sessions on a member's device: the list and the feed take `kind`, sessions carry their host. */
     const val REMOTE_SESSIONS = "cloud.sessions.remote.v1"
+    /** The session of a `teamcode run` (`kind=local`): listed and followed beside the others, with its todo and waits, and no message of its own. */
+    const val LOCAL_SESSIONS = "cloud.sessions.local.v1"
     /** Sessions started on one of the member's online devices by its daemon, in a folder it published (`GET /devices/{id}/folders`). */
     const val DEVICE_SESSIONS = "cloud.sessions.remote.daemon.v1"
     /** A session on a device continues one of the folder's Claude Code conversations, listed by the device's daemon. */

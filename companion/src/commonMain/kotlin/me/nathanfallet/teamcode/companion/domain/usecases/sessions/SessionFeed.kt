@@ -20,7 +20,7 @@ import kotlinx.coroutines.withContext
 import me.nathanfallet.teamcode.companion.domain.models.CompanionException
 import me.nathanfallet.teamcode.companion.domain.models.LiveUpdate
 import me.nathanfallet.teamcode.companion.domain.models.SessionChange
-import me.nathanfallet.teamcode.companion.domain.models.SessionKind
+import me.nathanfallet.teamcode.companion.domain.models.SessionKinds
 import me.nathanfallet.teamcode.companion.domain.repositories.Features
 import me.nathanfallet.teamcode.companion.domain.repositories.FeaturesRepository
 import me.nathanfallet.teamcode.companion.domain.repositories.SessionRepository
@@ -123,7 +123,7 @@ class SessionFeed(
         val error: Exception? = try {
             // Read by the follower just before (refreshed), so from the cache here.
             val announced = features.features(accountId)
-            val kinds = if (Features.REMOTE_SESSIONS in announced) SessionKind.entries.toSet() else emptySet()
+            val kinds = if (Features.REMOTE_SESSIONS in announced) SessionKinds.announced(announced) else emptySet()
             sessions.sessionChanges(accountId, kinds, waiting = Features.WAITING in announced, waits = Features.WAITS in announced, renames = Features.RENAME in announced, workflows = Features.WORKFLOWS_LIVE in announced, todos = Features.TODOS_LIVE in announced).collect { update ->
                 when (update) {
                     is LiveUpdate.Opened -> connection.open = true

@@ -13,7 +13,7 @@ data class TodoCheckReport(val index: Int, val passed: Boolean?, val observed: S
  * for a read, names the session. No method deletes an item, rewrites a condition or marks an item done without its checks.
  */
 /** What [TodoService.remind] did with a turn end. */
-enum class TodoReminderOutcome { NONE, SKIPPED, OBSERVED, REMINDED, ESCALATED }
+enum class TodoReminderOutcome { NONE, SKIPPED, REMINDED, ESCALATED }
 
 enum class TodoStopPhase { BEGIN, VERIFY, SETTLE }
 enum class TodoStopAction(val wire: String) { ALLOW("allow"), VERIFY("verify"), SETTLE("settle"), BLOCK("block") }
@@ -21,21 +21,23 @@ enum class TodoStopAction(val wire: String) { ALLOW("allow"), VERIFY("verify"), 
 /** The outcome of the checks the hook ran for one item, by position in the item's stored checks. */
 data class TodoStopItemReport(val itemId: String, val checks: List<TodoCheckReport>)
 
-/** What the Stop hook tells the server: [background] a background agent of the session still runs, [observe] the profile is in observation (nothing is refused), [orphans] the PRs the session opened. */
+/** What the Stop hook tells the server: [background] a background agent of the session still runs, [orphans] the PRs the session opened. */
 data class TodoStopInput(
-    val phase: TodoStopPhase, val background: Boolean = false, val observe: Boolean = false,
+    val phase: TodoStopPhase, val background: Boolean = false,
     val items: List<TodoStopItemReport> = emptyList(), val orphans: List<String> = emptyList(), val lastMessage: String? = null,
 )
 
-/** [why] says why a stop passes (`no_list`, `finished`, `background_task`, `wait_open`, `observation`, `escalated`, `settled`). [reason] is the message of a block. */
+/** [why] says why a stop passes (`no_list`, `finished`, `background_task`, `wait_open`, `escalated`, `settled`). [reason] is the message of a block. */
 data class TodoStopDecision(
     val action: TodoStopAction, val list: TodoList?, val reason: String? = null, val why: String? = null,
-    val wouldBlock: Boolean = false, val escalated: Boolean = false,
+    val escalated: Boolean = false,
 )
 
 private const val MAX_ORPHANS = 5
 
-class TodoService(private val store: TodoStore, private val drops: TodoDropWaits? = null) {
+class TodoService(private val store: TodoStore, private val drops: TodoDropWaits? = null,
+    /** Hands the answers of a wait to the Stop hook of a local session; null where local sessions do not exist (the hook then never holds). */
+    private val wake: me.nathanfallet.teamcode.domain.cloud.LocalWake? = null) {
     private fun missing() = TeamFailure("not_found", 404, "Session not found.")
 
     private suspend fun session(actor: Principal, sessionId: String?, write: Boolean): String {
@@ -179,6 +181,15 @@ class TodoService(private val store: TodoStore, private val drops: TodoDropWaits
     }
 
     /**
+     * What the Stop hook of a local session hears while it holds the agent for a wait (docs/waits.md, "A local run"): the answers that
+     * arrived, and whether a wait is still open. A session that is not local, has no open wait or is gone answers `open = false` at once.
+     */
+    suspend fun wake(actor: Principal, sessionId: String?, waitMillis: Long): me.nathanfallet.teamcode.domain.cloud.LocalWakeResult {
+        val id = session(actor, sessionId, write = true)
+        return wake?.poll(actor.teamId, id, waitMillis) ?: me.nathanfallet.teamcode.domain.cloud.LocalWakeResult(false, emptyList())
+    }
+
+    /**
      * One stop of the agent (`teamcode cloud todo-stop`, docs/todos.md "The Stop hook"). It is asked up to three times, each answer
      * telling the hook what to run next: [TodoStopPhase.BEGIN] (nothing to hold back? else which checks to run), then
      * [TodoStopPhase.VERIFY] with the outcome of the cheap checks and the pull requests the session opened, then, when everything is
@@ -219,7 +230,7 @@ class TodoService(private val store: TodoStore, private val drops: TodoDropWaits
                 changed = TodoRules.settle(changed, results, now)
                 settled = changed.status == TodoListStatus.DONE
             }
-            if (!settled && !changed.allClosed && !input.observe) {
+            if (!settled && !changed.allClosed) {
                 val stop = TodoRules.stop(changed)
                 counted = stop
                 // At the limit the counter starts again right here: the replica that sees it asks the owner, another one counts from zero.
@@ -229,11 +240,6 @@ class TodoService(private val store: TodoStore, private val drops: TodoDropWaits
         }
         if (settled) return TodoStopDecision(TodoStopAction.ALLOW, after, why = "settled")
         if (after.allClosed && input.phase == TodoStopPhase.VERIFY) return TodoStopDecision(TodoStopAction.SETTLE, after)
-        if (input.observe) {
-            val line = "Would block: ${after.doneCount} of ${after.items.size} items done, next ${TodoRules.next(after)?.id ?: "none ready"}."
-            val recorded = store.mutate(actor.teamId, id) { current -> TodoRules.recordEvent(current, "would_block", line, now).copy(updatedAt = now).let { it to it } }
-            return TodoStopDecision(TodoStopAction.ALLOW, recorded, why = "observation", wouldBlock = true)
-        }
         if (counted?.escalate != true) return TodoStopDecision(TodoStopAction.BLOCK, after, reason = TodoMessages.resume(after))
         return escalate(actor, id, after, input.lastMessage, now)
     }
@@ -282,10 +288,9 @@ class TodoService(private val store: TodoStore, private val drops: TodoDropWaits
      * session whose turn [turn] ended normally. Judges each turn end once, across replicas and restarts (the turn's sequence is marked
      * under the list's lock, first); lets it go when the hook already judged this turn, when a wait of the session is open, or when no item
      * remains open. Otherwise it counts the stop like the hook does (same counter, same limit and wait) and, below the limit, hands the
-     * resume message to [deliver]; a delivery that fails puts the counter back so the next pass tries again. Without [enforce] it only
-     * records `would_block`. The server reads no GitHub: it goes by the last proof, so it ticks nothing.
+     * resume message to [deliver]; a delivery that fails puts the counter back so the next pass tries again. The server reads no GitHub: it goes by the last proof, so it ticks nothing.
      */
-    suspend fun remind(teamId: String, owner: Principal, sessionId: String, turn: TodoTurnEnd, enforce: Boolean, deliver: suspend (text: String, key: String) -> Unit): TodoReminderOutcome {
+    suspend fun remind(teamId: String, owner: Principal, sessionId: String, turn: TodoTurnEnd, deliver: suspend (text: String, key: String) -> Unit): TodoReminderOutcome {
         val now = store.now()
         val before = store.find(teamId, sessionId) ?: return TodoReminderOutcome.NONE
         if (before.status != TodoListStatus.ACTIVE || before.allClosed || (before.reminderSeq ?: -1) >= turn.seq) return TodoReminderOutcome.NONE
@@ -299,11 +304,6 @@ class TodoService(private val store: TodoStore, private val drops: TodoDropWaits
             var changed = current.copy(reminderSeq = turn.seq)
             val hookRan = current.lastHookAt != null && turn.startedAt != null && current.lastHookAt >= turn.startedAt
             if (hookRan || openWait) { outcome = TodoReminderOutcome.SKIPPED; return@mutate changed to changed }
-            if (!enforce) {
-                outcome = TodoReminderOutcome.OBSERVED
-                changed = TodoRules.recordEvent(changed, "would_block", "Would remind: ${changed.doneCount} of ${changed.items.size} items done, next ${TodoRules.next(changed)?.id ?: "none ready"}.", now)
-                return@mutate changed.copy(updatedAt = now) to changed.copy(updatedAt = now)
-            }
             val stop = TodoRules.stop(changed)
             counted = stop
             outcome = if (stop.escalate) TodoReminderOutcome.ESCALATED else TodoReminderOutcome.REMINDED

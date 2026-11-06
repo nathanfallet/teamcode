@@ -3,6 +3,7 @@ package me.nathanfallet.teamcode.cli.todo
 import com.github.ajalt.clikt.command.SuspendingCliktCommand
 import com.github.ajalt.clikt.core.Context
 import com.github.ajalt.clikt.parameters.options.default
+import com.github.ajalt.clikt.parameters.options.flag
 import com.github.ajalt.clikt.parameters.options.option
 import com.github.ajalt.clikt.parameters.options.required
 import kotlinx.coroutines.CancellationException
@@ -12,6 +13,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.*
 import me.nathanfallet.teamcode.api.models.*
+import me.nathanfallet.teamcode.cli.cloud.agent.LOCAL_STOP_TIMEOUT_SECONDS
 import me.nathanfallet.teamcode.cli.launch.AgentEnvironment
 import me.nathanfallet.teamcode.cli.mcp.relayClient
 import me.nathanfallet.teamcode.client.TeamCodeClient
@@ -20,7 +22,7 @@ import okio.FileSystem
 import okio.Path.Companion.toPath
 
 /**
- * `teamcode cloud todo-stop --relay URL --session ID [--run ID] [--mode observe|block]`: the `Stop` hook of an agent that keeps a todo
+ * `teamcode cloud todo-stop --relay URL --session ID [--run ID]`: the `Stop` hook of an agent that keeps a todo
  * (docs/todos.md, "The Stop hook"). Reads the hook input on standard input (at most 8 MiB), decides ([TodoStop.decide]) and prints Claude
  * Code's `{"decision":"block","reason":"..."}` when the turn must go on. Anything else prints nothing and exits 0: a failure of TeamCode never
  * keeps the agent from stopping, but it is recorded on the list (`hook_error`). The input's content is not kept or logged; only the last
@@ -32,20 +34,26 @@ internal class CloudTodoStop : SuspendingCliktCommand(name = "todo-stop") {
     private val relay by option("--relay", help = "The launcher's loopback relay, http://127.0.0.1:<port>.").required()
     private val session by option("--session", help = "The session whose todo this is.").required()
     private val run by option("--run", help = "The agent run this hook belongs to.")
-    private val mode by option("--mode", help = "observe (the default: record what would be blocked, never block) or block.").default(TodoStop.OBSERVE)
+    private val wake by option("--wake", help = "Hold the agent while a wait of the session is open, and give it the answer (a local teamcode run).").flag()
     override suspend fun run() {
         val input = StringBuilder()
         for (line in generateSequence(::readlnOrNull)) {
             if (input.length + line.length > MAX_INPUT_CHARS) break
             input.append(line).append('\n')
         }
-        if (!SESSION_ID.matches(session) || (run?.let { RunIdentifiers.isValid(it) } == false) || mode !in setOf(TodoStop.OBSERVE, TodoStop.BLOCK)) return
+        if (!SESSION_ID.matches(session) || (run?.let { RunIdentifiers.isValid(it) } == false)) return
         val answer = try {
             relayClient("TEAMCODE_TODO", run, relay).use { client ->
-                TodoStop.decide(input.toString(), mode == TodoStop.OBSERVE, ClientTodoStopApi(client, session), TodoChecks(ProcessRunner, session))
+                TodoStop.decide(input.toString(), ClientTodoStopApi(client, session), TodoChecks(ProcessRunner, session))
             }
         } catch (error: CancellationException) { throw error } catch (_: Exception) { null }
-        if (answer != null) echo(answer)
+        if (answer != null) { echo(answer); return }
+        if (!wake) return
+        // The stop passes: a wait that is open keeps the agent here until it is answered (a local run has nothing else to wake it).
+        val held = try {
+            relayClient("TEAMCODE_TODO", run, relay).use { client -> TodoStop.hold(ClientTodoWakeApi(client, session)) }
+        } catch (error: CancellationException) { throw error } catch (_: Exception) { null }
+        if (held != null) echo(held)
     }
     private companion object { const val MAX_INPUT_CHARS = 8 * 1_048_576; val SESSION_ID = Regex("[a-zA-Z0-9-]{1,36}") }
 }
@@ -90,9 +98,53 @@ internal class ClientTodoStopApi(private val client: TeamCodeClient, private val
     override suspend fun hookError(text: String) { client.todoHookError(TodoHookErrorRequest(null, text)) }
 }
 
+/** What the hold asks of the server, so it can be tested without one. */
+internal interface TodoWakeApi {
+    suspend fun wake(request: TodoWakeRequest): TodoWakeView
+}
+
+internal class ClientTodoWakeApi(private val client: TeamCodeClient, private val session: String) : TodoWakeApi {
+    override suspend fun wake(request: TodoWakeRequest) = client.todoWake(request.copy(sessionId = null))
+}
+
 internal object TodoStop {
-    const val OBSERVE = "observe"
-    const val BLOCK = "block"
+    /** How long the Stop hook of a local run may hold the agent for a wait: its own timeout in the settings, less a minute. */
+    const val HOLD_MILLIS = LOCAL_STOP_TIMEOUT_SECONDS * 1_000L - 60_000L
+    /** One question of the hold: the server answers as soon as something arrives, or after this long. */
+    const val WAKE_MILLIS = 20_000L
+    private const val WAKE_CALL_MILLIS = WAKE_MILLIS + 15_000L
+    /** Failures in a row (a server that cannot be reached) after which the hold lets the agent stop. */
+    private const val WAKE_FAILURES = 6
+    private const val WAKE_RETRY_MILLIS = 5_000L
+
+    /**
+     * The Stop hook of a local run, after the todo let the stop pass (docs/waits.md, "A local run"): while a wait of the session is open
+     * it asks the server for its answer, up to [budgetMillis], and returns the block that gives the agent the message (`reason`), so
+     * the agent goes on in the same session. Null when no wait is open (the stop stands), when the budget is spent, or when the server
+     * cannot be reached for [WAKE_FAILURES] calls in a row or refuses (the answer then stays on the wait, in the apps).
+     */
+    suspend fun hold(api: TodoWakeApi, budgetMillis: Long = HOLD_MILLIS, sleep: suspend (Long) -> Unit = { kotlinx.coroutines.delay(it) },
+        now: () -> Long = { kotlin.time.Clock.System.now().toEpochMilliseconds() }): String? {
+        val deadline = now() + budgetMillis
+        var failures = 0
+        while (now() < deadline) {
+            val view = try {
+                withTimeoutOrNull(WAKE_CALL_MILLIS) { api.wake(TodoWakeRequest(null, WAKE_MILLIS)) }
+            } catch (error: CancellationException) { throw error }
+            catch (error: TeamCodeException) { if (error.statusCode in setOf(400, 401, 403, 404, 409)) return null else null }
+            catch (_: Exception) { null }
+            if (view == null) {
+                if (++failures >= WAKE_FAILURES) return null
+                sleep(WAKE_RETRY_MILLIS)
+                continue
+            }
+            failures = 0
+            if (view.messages.isNotEmpty()) return buildJsonObject { put("decision", "block"); put("reason", view.messages.joinToString("\n\n")) }.toString()
+            if (!view.open) return null
+        }
+        return null
+    }
+
     /** The whole decision, inside the hook's own timeout of 150 s ([me.nathanfallet.teamcode.cli.cloud.agent.cloudHookSettings]). */
     const val TIMEOUT_MILLIS = 140_000L
     /** One question to the server may take: a slower one is an infrastructure problem, never a reason to hold the agent. */
@@ -106,7 +158,7 @@ internal object TodoStop {
      * reached, answers late, is older than `todos.v1`, or fails: that is recorded (best effort) and the stop passes. It never relaxes on
      * `stop_hook_active`: the bound is the server's counter of stops without progress.
      */
-    suspend fun decide(input: String, observe: Boolean, api: TodoStopApi, checks: TodoChecks, transcripts: (String) -> List<String> = ::pullRequestsOf): String? {
+    suspend fun decide(input: String, api: TodoStopApi, checks: TodoChecks, transcripts: (String) -> List<String> = ::pullRequestsOf): String? {
         val body = try { Json.parseToJsonElement(input) as? JsonObject } catch (_: Exception) { null } ?: return null
         val event = (body["hook_event_name"] as? JsonPrimitive)?.contentOrNull
         if (event != null && event != "Stop") return null
@@ -116,7 +168,7 @@ internal object TodoStop {
         val transcript = (body["transcript_path"] as? JsonPrimitive)?.contentOrNull
         return try {
             // A null output is "let it stop"; only a missing outcome is a timeout.
-            val outcome = withTimeoutOrNull(TIMEOUT_MILLIS) { Output(run(background, observe, last, transcript, api, checks, transcripts)) }
+            val outcome = withTimeoutOrNull(TIMEOUT_MILLIS) { Output(run(background, last, transcript, api, checks, transcripts)) }
             if (outcome == null) { failed(api, "The stop hook ran out of time (${TIMEOUT_MILLIS / 1000} s)."); null } else outcome.text
         } catch (error: CancellationException) { throw error }
         catch (error: TeamCodeException) { failed(api, "The server answered ${error.code} to the stop hook."); null }
@@ -129,20 +181,20 @@ internal object TodoStop {
         try { withTimeoutOrNull(CALL_MILLIS) { api.hookError(text) } } catch (error: CancellationException) { throw error } catch (_: Exception) { }
     }
 
-    private suspend fun run(background: Boolean, observe: Boolean, last: String?, transcript: String?, api: TodoStopApi, checks: TodoChecks, transcripts: (String) -> List<String>): String? {
-        var answer = call(api, TodoStopRequest(phase = "begin", background = background, observe = observe))
+    private suspend fun run(background: Boolean, last: String?, transcript: String?, api: TodoStopApi, checks: TodoChecks, transcripts: (String) -> List<String>): String? {
+        var answer = call(api, TodoStopRequest(phase = "begin", background = background))
         if (answer.action == "verify") {
             val list = answer.todo ?: return null
             val reports = verification(list, api, checks) { item -> item.status == "doing" || (item.status == "todo" && item.doneWhen.checks.all { it.type in CHEAP }) }
             val orphans = transcript?.let { try { transcripts(it) } catch (_: Exception) { emptyList() } }.orEmpty().filter { url -> list.items.none { item -> item.links.any { it.ref == url } } }.take(5)
-            answer = call(api, TodoStopRequest(phase = "verify", background = background, observe = observe, items = reports, orphans = orphans, lastMessage = last))
+            answer = call(api, TodoStopRequest(phase = "verify", background = background, items = reports, orphans = orphans, lastMessage = last))
         }
         if (answer.action == "settle") {
             val list = answer.todo ?: return null
             val reports = verification(list, api, checks) { it.status == "done" }
-            answer = call(api, TodoStopRequest(phase = "settle", background = background, observe = observe, items = reports, lastMessage = last))
+            answer = call(api, TodoStopRequest(phase = "settle", background = background, items = reports, lastMessage = last))
         }
-        if (answer.action == "block" && !observe) answer.reason?.let { return buildJsonObject { put("decision", "block"); put("reason", it) }.toString() }
+        if (answer.action == "block") answer.reason?.let { return buildJsonObject { put("decision", "block"); put("reason", it) }.toString() }
         return null
     }
 
@@ -163,12 +215,12 @@ internal object TodoStop {
     }
 
     /**
-     * The hook as a shell command, for the agent's settings: the binary, the relay of this launch, the session and the run. [mode] is
-     * `observe` (the default of every profile until the observation has been read: the decision is recorded, never enforced) or `block`.
+     * The hook as a shell command, for the agent's settings: the binary, the relay of this launch, the session and the run. [wake]:
+     * the session is a local run's, so the hook also holds the agent for an open wait ([hold]).
      */
-    fun hookCommand(binary: String, port: Int, sessionId: String, runId: String?, mode: String = OBSERVE): String {
-        require(port in 1..65535 && Regex("[a-zA-Z0-9-]{1,36}").matches(sessionId) && (runId == null || RunIdentifiers.isValid(runId)) && mode in setOf(OBSERVE, BLOCK))
-        return "${AgentEnvironment.quote(binary)} cloud todo-stop --relay http://127.0.0.1:$port --session $sessionId --mode $mode" + (runId?.let { " --run $it" } ?: "")
+    fun hookCommand(binary: String, port: Int, sessionId: String, runId: String?, wake: Boolean = false): String {
+        require(port in 1..65535 && Regex("[a-zA-Z0-9-]{1,36}").matches(sessionId) && (runId == null || RunIdentifiers.isValid(runId)))
+        return "${AgentEnvironment.quote(binary)} cloud todo-stop --relay http://127.0.0.1:$port --session $sessionId" + (runId?.let { " --run $it" } ?: "") + (if (wake) " --wake" else "")
     }
 
     /** The `SessionStart` hook as a shell command, for the agent's settings. */
@@ -176,9 +228,6 @@ internal object TodoStop {
         require(port in 1..65535 && Regex("[a-zA-Z0-9-]{1,36}").matches(sessionId) && (runId == null || RunIdentifiers.isValid(runId)))
         return "${AgentEnvironment.quote(binary)} cloud todo-context --relay http://127.0.0.1:$port --session $sessionId" + (runId?.let { " --run $it" } ?: "")
     }
-
-    /** The mode a launch uses: `TEAMCODE_TODO_STOP_MODE` (observe or block) when the operator set it, else observation. */
-    fun modeOf(value: String?) = value?.trim()?.lowercase()?.takeIf { it == BLOCK } ?: OBSERVE
 
     /** The `SessionStart` sources that get the reminder: a compaction loses the list from the context, a resume starts without it. */
     val CONTEXT_SOURCES = setOf("compact", "resume")
