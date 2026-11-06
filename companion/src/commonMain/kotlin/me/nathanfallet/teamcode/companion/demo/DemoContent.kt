@@ -3,6 +3,7 @@ package me.nathanfallet.teamcode.companion.demo
 import me.nathanfallet.teamcode.companion.domain.models.Account
 import me.nathanfallet.teamcode.companion.domain.models.Artifact
 import me.nathanfallet.teamcode.companion.domain.models.CloudSession
+import me.nathanfallet.teamcode.companion.domain.models.ModelOption
 import me.nathanfallet.teamcode.companion.domain.models.Profile
 import me.nathanfallet.teamcode.companion.domain.models.RunStatus
 import me.nathanfallet.teamcode.companion.domain.models.RunVisit
@@ -65,8 +66,11 @@ object DemoContent {
     /** What the demo server announces: waits, workflows and one automation, but no transfers, devices, files, GitHub link or MCP gateway, so their screens stay quiet. */
     val features = setOf(
         Features.SESSIONS, Features.TRANSCRIPT, Features.MESSAGES, Features.EVENTS, Features.INITIAL_MESSAGE, Features.ARTIFACTS, Features.RENAME, Features.WAITS,
-        Features.WORKFLOWS, Features.WORKFLOWS_LIVE, Features.AUTOMATIONS, Features.TODOS, Features.TODOS_LIVE,
+        Features.WORKFLOWS, Features.WORKFLOWS_LIVE, Features.AUTOMATIONS, Features.TODOS, Features.TODOS_LIVE, Features.MODEL,
     )
+
+    /** The models the demo's picker offers. */
+    val models = listOf(ModelOption("claude-opus-5-5", "Opus 5.5"), ModelOption("claude-sonnet-5-5", "Sonnet 5.5"), ModelOption("claude-haiku-5-5", "Haiku 5.5"))
 
     /**
      * The agent's only answer in the demo, to every message and every new session: no AI is connected, and nothing the

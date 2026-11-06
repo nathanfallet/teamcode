@@ -3,13 +3,23 @@ package me.nathanfallet.teamcode.presentation
 import io.ktor.http.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
+import io.ktor.server.request.*
+import me.nathanfallet.teamcode.api.models.CloudModelOptionView
+import me.nathanfallet.teamcode.api.models.CloudModelsView
 import me.nathanfallet.teamcode.api.models.ModelPolicyView
+import me.nathanfallet.teamcode.domain.cloud.CloudModelCatalog
 import me.nathanfallet.teamcode.domain.policy.*
 import me.nathanfallet.teamcode.domain.team.*
 
 private fun ModelPolicy.view() = ModelPolicyView(allowedModels, deniedModels, allowedEfforts, maximumThinkingTokens, experimentalCrossProviderTranslation)
 internal fun Route.modelPolicyRoutes(policies: ModelPolicyStore, origin: String) {
     get("/api/v1/policy/models") { call.principal.requireReady(); call.respond(policies.get(call.principal.teamId).view()) }
+    get("/api/v1/cloud/models") {
+        call.principal.requireReady()
+        val agent = call.request.queryParameters["agent"] ?: "claude"
+        if (agent != "claude" && agent != "codex") throw TeamFailure("invalid_agent", 400, "Use the agent claude or codex.")
+        call.respond(CloudModelsView(agent, CloudModelCatalog.options(agent, policies.get(call.principal.teamId)).map { CloudModelOptionView(it.id, it.label) }))
+    }
     put("/api/v1/policy/models") {
         val input = call.jsonBody<ModelPolicyView>()
         call.respond(policies.save(call.principal, ModelPolicy(input.allowedModels, input.deniedModels, input.allowedEfforts, input.maximumThinkingTokens, input.experimentalCrossProviderTranslation)).view())

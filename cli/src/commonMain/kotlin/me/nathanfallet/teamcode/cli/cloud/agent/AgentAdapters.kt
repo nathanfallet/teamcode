@@ -88,6 +88,12 @@ interface AgentAdapter {
     val canStopTasks: Boolean get() = false
     /** Lines stopping the live background task [taskId]; empty when no such task runs (or this agent cannot stop one). */
     fun stopTask(taskId: String): List<String> = emptyList()
+    /**
+     * Lines switching the agent to [model] from its next turn on (Claude Code's `set_model` control request; Codex takes
+     * the model with its next `turn/start`, so it needs none). Always remembers [model], so the agent's later requests
+     * use it; a turn in flight keeps the model it started with.
+     */
+    fun setModel(model: String): List<String> = emptyList()
     /** The empty `tasks` event to upload when the process stops while it still listed tasks; null when there is nothing to clear. */
     fun tasksEnded(): AgentEvent? = null
     /** Records [count] scheduled wake-ups (the `Stop` hook's `session_crons`); the `tasks` event to upload when that changed it. */
@@ -195,6 +201,17 @@ class ClaudeStreamJsonAdapter(private val settings: AgentSettings, private val n
         put("type", "control_request"); put("request_id", Uuid.random().toString()); putJsonObject("request") { put("subtype", "stop_task"); put("task_id", taskId) }
     }.toString())
 
+    /** The model the agent runs with: the session's, then the member's choice. */
+    private var model = settings.model
+
+    override fun setModel(model: String): List<String> {
+        this.model = model
+        return listOf(buildJsonObject {
+            // The control request the Agent SDK's `setModel` sends (`SDKControlSetModelRequest`): the next turn uses it.
+            put("type", "control_request"); put("request_id", Uuid.random().toString()); putJsonObject("request") { put("subtype", "set_model"); put("model", model) }
+        }.toString())
+    }
+
     override fun tasksEnded(): AgentEvent? {
         if (!settings.backgroundTasks || (reportedTasks.isNullOrEmpty() && reportedScheduled == 0)) return null
         // Wake-ups fire only while the process runs; `--resume` restores them, and the next `Stop` reports them again.
@@ -213,7 +230,7 @@ class ClaudeStreamJsonAdapter(private val settings: AgentSettings, private val n
         if (settings.permissionRelay) addAll(listOf("--permission-prompt-tool", "stdio"))
         if (settings.liveText) add("--include-partial-messages")
         readableDirectories.forEach { addAll(listOf("--add-dir", it)) }
-        settings.model?.let { addAll(listOf("--model", it)) }
+        model?.let { addAll(listOf("--model", it)) }
         settings.effort?.let { addAll(listOf("--effort", it)) }
         resume?.let { addAll(listOf("--resume", it)) }
         if (fork && resume != null) add("--fork-session")
@@ -533,6 +550,10 @@ class CodexAppServerAdapter(private val settings: AgentSettings, private val cli
 
     /** `danger-full-access` in a pod or in bypass mode; on a member's device otherwise, writes stay inside the session's directory. */
     private val sandbox = if (settings.bypass) "danger-full-access" else "workspace-write"
+    /** The model the agent runs with: the session's, then the member's choice, which a `turn/start` carries (Codex keeps it for the next turns). */
+    private var model = settings.model
+    private var modelChanged = false
+    override fun setModel(model: String): List<String> { this.model = model; modelChanged = true; return emptyList() }
     override fun command(resume: String?, fork: Boolean) = AgentCommand("codex", listOf("app-server", "-c", "approval_policy=\"never\"", "-c", "sandbox_mode=\"$sandbox\""))
 
     private fun request(method: String, params: JsonObject): String {
@@ -542,7 +563,7 @@ class CodexAppServerAdapter(private val settings: AgentSettings, private val cli
     }
     private fun threadParams(extra: JsonObjectBuilder.() -> Unit) = buildJsonObject {
         put("approvalPolicy", "never"); put("sandbox", sandbox); put("cwd", workingDirectory)
-        settings.model?.let { put("model", it) }
+        model?.let { put("model", it) }
         extra()
     }
 
@@ -570,6 +591,8 @@ class CodexAppServerAdapter(private val settings: AgentSettings, private val cli
             turnStarting = true
             listOf(request("turn/start", buildJsonObject {
                 put("threadId", thread); put("input", input(text)); settings.effort?.let { put("effort", it) }
+                // Only after a change: the thread already runs with the session's model, and a turn that names it again is the same.
+                if (modelChanged) model?.let { put("model", it) }
             }))
         }
     }

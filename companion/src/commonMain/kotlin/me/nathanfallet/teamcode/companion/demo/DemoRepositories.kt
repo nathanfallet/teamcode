@@ -1,5 +1,6 @@
 package me.nathanfallet.teamcode.companion.demo
 
+import me.nathanfallet.teamcode.companion.domain.models.ModelOption
 import me.nathanfallet.teamcode.companion.domain.models.SessionTodo
 import me.nathanfallet.teamcode.companion.domain.repositories.TodoRepository
 import kotlinx.coroutines.flow.Flow
@@ -143,6 +144,9 @@ class DemoSessionRepository(private val demo: DemoMode) : SessionRepository {
     override suspend fun rename(accountId: String, sessionId: String, name: String): CloudSession = demo.store().rename(sessionId, name)
 
     override suspend fun setPermissionBypass(accountId: String, sessionId: String, enabled: Boolean): CloudSession = demo.store().setPermissionBypass(sessionId, enabled)
+    override suspend fun setModel(accountId: String, sessionId: String, model: String): CloudSession = demo.store().setModel(sessionId, model)
+
+    override suspend fun models(accountId: String, agent: String): List<ModelOption> = DemoContent.models
 
     override suspend fun end(accountId: String, sessionId: String) { demo.store().move(sessionId, SessionState.TERMINATED) }
 

@@ -303,6 +303,27 @@ private fun ApiCatalog.cloudSessions() {
             conflict("The session is terminated or being deleted (`session_not_running`), or changed concurrently (`session_busy`).")
         }
     }
+    put("/api/v1/cloud/sessions/{id}/model") {
+        operationId = "setCloudSessionModel"; tag(ApiTags.CLOUD_SESSIONS)
+        summary = "Change the model of a session's agent"
+        description = "Like `/model` in a terminal, for a cloud or remote session (`cloud.sessions.model.v1`). The owner only, " +
+            "signed in or with a `cloud:write` key (a role, an administrator's included, opens nobody else's session); the model must pass the team's model policy (an alias such as `opus` stands for " +
+            "`claude-opus`). The recorded model changes at once and is audited as `cloud.session.model_changed`; a running agent takes " +
+            "it for its next turn (a turn in flight ends with the old model), and a session that is not running starts with it. " +
+            "Choosing the current model changes nothing."
+        parameters {
+            sessionId()
+            onBehalfOf()
+        }
+        body<SetCloudSessionModelRequest>("`model`: the model id or alias.")
+        responses {
+            ok<CloudSessionView>("The session with its new `agent.model`.")
+            badRequest("An invalid model (`invalid_agent`).")
+            error(HttpStatusCode.Forbidden, "The model is not allowed by the team's model policy (`model_not_allowed`).")
+            notFound("No such session (`not_found`).")
+            conflict("The session is terminated or being deleted (`session_not_running`), or changed concurrently (`session_busy`).")
+        }
+    }
     put("/api/v1/cloud/sessions/{id}/github") {
         operationId = "setCloudSessionGitHubAccess"; tag(ApiTags.CLOUD_SESSIONS)
         summary = "Choose who instructs an agent that holds your GitHub token"

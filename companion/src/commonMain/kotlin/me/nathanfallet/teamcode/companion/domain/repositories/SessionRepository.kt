@@ -4,6 +4,7 @@ import kotlinx.coroutines.flow.Flow
 import me.nathanfallet.teamcode.companion.domain.models.CloudSession
 import me.nathanfallet.teamcode.companion.domain.models.InputReceipt
 import me.nathanfallet.teamcode.companion.domain.models.LiveUpdate
+import me.nathanfallet.teamcode.companion.domain.models.ModelOption
 import me.nathanfallet.teamcode.companion.domain.models.NewDeviceSession
 import me.nathanfallet.teamcode.companion.domain.models.NewSession
 import me.nathanfallet.teamcode.companion.domain.models.PermissionAnswer
@@ -47,6 +48,10 @@ interface SessionRepository {
     suspend fun rename(accountId: String, sessionId: String, name: String): CloudSession
     /** Approves every later tool use of the session in advance, or takes that back (`cloud.permissions.bypass.v1`); owner only. */
     suspend fun setPermissionBypass(accountId: String, sessionId: String, enabled: Boolean): CloudSession
+    /** Changes the model of the session's agent (`cloud.sessions.model.v1`); the server checks it against the team's model policy. */
+    suspend fun setModel(accountId: String, sessionId: String, model: String): CloudSession
+    /** The models of [agent] (`claude` or `codex`) the team's policy lets the member pick (`cloud.sessions.model.v1`), best first. */
+    suspend fun models(accountId: String, agent: String): List<ModelOption>
     /** Ends the session and deletes its workspace (`DELETE /cloud/sessions/{id}`); idempotent. */
     suspend fun end(accountId: String, sessionId: String)
 

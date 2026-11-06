@@ -23,7 +23,16 @@ class CloudConversationService(
     private val githubLinked: suspend (teamId: String, memberId: String) -> Boolean,
     private val transition: TransitionCloudSessionUseCase = TransitionCloudSessionUseCase(sessions),
     private val sleep: suspend (Long) -> Unit = { delay(it) },
-) : CloudInitialMessages {
+) : CloudInitialMessages, CloudModelChanges {
+    override suspend fun announce(principal: Principal, session: CloudSession, model: String) {
+        if ((session.state != READY && session.state != ACTIVE) || session.desiredState != DesiredState.RUNNING) return
+        // Keyed by the row's write, so choosing a model twice in a row queues one input and A, then B, then A queues three.
+        val key = "set_model:${session.updatedAt}:$model"
+        val digest = java.security.MessageDigest.getInstance("SHA-256").digest(key.encodeToByteArray()).joinToString("") { "%02x".format(it) }
+        val input = newInput(principal, session, CloudInputKind.SET_MODEL, model, InputRequest(model, false, key, digest, null))
+        store.insertInput(NewInput(input, null, session.ownerId), CloudConversationRules.MAX_PENDING_INPUTS)
+    }
+
     override suspend fun queue(principal: Principal, session: CloudSession, text: String) {
         if (session.state.terminal || session.desiredState == DesiredState.TERMINATED) return
         val digest = java.security.MessageDigest.getInstance("SHA-256").digest("initial\n$text".encodeToByteArray()).joinToString("") { "%02x".format(it) }

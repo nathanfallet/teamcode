@@ -19,6 +19,8 @@ object Features {
     const val WAITING = "cloud.sessions.waiting.v1"
     /** A session can be renamed (`PATCH /cloud/sessions/{id}`), and the feed takes `cloud.session.renamed`. */
     const val RENAME = "cloud.sessions.rename.v1"
+    /** The owner changes the model of a session's agent (`PUT /cloud/sessions/{id}/model`) from the list of `GET /cloud/models`. */
+    const val MODEL = "cloud.sessions.model.v1"
     /** Permission requests relayed from Claude Code, answered with `POST …/permissions`. */
     const val PERMISSIONS = "cloud.permissions.v1"
     /** The owner approves every tool use of a session in advance (`PUT …/permission-bypass`), and sessions say whether they did. */

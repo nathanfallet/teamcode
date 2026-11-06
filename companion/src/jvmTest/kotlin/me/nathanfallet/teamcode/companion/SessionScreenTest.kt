@@ -10,6 +10,8 @@ import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.SoftwareKeyboardController
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertIsNotFocused
 import androidx.compose.ui.test.getBoundsInRoot
@@ -53,8 +55,7 @@ class SessionScreenTest {
         override fun follow(accountId: String, sessionId: String, after: Long): Flow<LiveUpdate<TranscriptEvent>> = emptyFlow()
     }
 
-    private fun viewModel(sessions: FakeSessionRepository, transcripts: TranscriptRepository = this.transcripts): SessionViewModel {
-        val features = FakeFeatures()
+    private fun viewModel(sessions: FakeSessionRepository, transcripts: TranscriptRepository = this.transcripts, features: FakeFeatures = FakeFeatures()): SessionViewModel {
         val accounts = InMemoryAccountRepository(listOf(account("a1")))
         val guard = AccountGuard(RefreshAccountUseCase(FakeAuthRepository(), accounts, credentials(), FixedClock()))
         return SessionViewModel(
@@ -146,6 +147,35 @@ class SessionScreenTest {
         onNodeWithTag("end-confirm-yes").performClick()
         waitUntil { sessions.calls.contains("end s1") }
         onNodeWithTag("end-confirm").assertDoesNotExist()
+    }
+
+    @Test fun theModelChipOpensThePickerAndSwitchesTheModelOfTheSession() = runComposeUiTest {
+        val sessions = FakeSessionRepository().apply { byId["s1"] = cloudSession("s1", SessionState.ACTIVE).copy(model = "claude-opus-5-5") }
+        val model = viewModel(sessions, features = FakeFeatures(setOf("cloud.sessions.v1", "cloud.messages.v1", "cloud.events.v1", "cloud.sessions.model.v1")))
+        setContent { TeamCodeTheme { SessionScreen(model, memberId = "m1", onBack = {}) } }
+        waitUntil { model.uiState.value.session != null && model.uiState.value.canControl && model.uiState.value.modelChanges }
+        // The model that runs is on the header, without expanding it.
+        onNodeWithTag("model-chip", useUnmergedTree = true).assertExists()
+        onNodeWithTag("model-chip", useUnmergedTree = true).performClick()
+        onNodeWithTag("model-dialog").assertExists()
+        // The list is the policy's; the current model is chosen already, so nothing is switched to itself.
+        waitUntil { model.uiState.value.models != null }
+        assertTrue(sessions.calls.contains("models claude"))
+        onNodeWithTag("model-apply").assertIsNotEnabled()
+        onNodeWithTag("model-option-claude-sonnet-5-5").performClick()
+        onNodeWithTag("model-apply").assertIsEnabled().performClick()
+        waitUntil { sessions.calls.contains("setModel s1 claude-sonnet-5-5") }
+        waitUntil { model.uiState.value.session?.model == "claude-sonnet-5-5" }
+        onNodeWithTag("model-dialog").assertDoesNotExist()
+    }
+
+    @Test fun theModelIsOnlyAChipForAnOwnerWhoseServerCannotChangeIt() = runComposeUiTest {
+        val sessions = FakeSessionRepository().apply { byId["s1"] = cloudSession("s1", SessionState.ACTIVE).copy(model = "claude-opus-5-5") }
+        val model = viewModel(sessions)
+        setContent { TeamCodeTheme { SessionScreen(model, memberId = "m1", onBack = {}) } }
+        waitUntil { model.uiState.value.session != null && model.uiState.value.canControl }
+        onNodeWithTag("model-chip", useUnmergedTree = true).assertExists().performClick()
+        onNodeWithTag("model-dialog").assertDoesNotExist()
     }
 
     @Test fun anEndedSessionHasNoEndEntry() = runComposeUiTest {

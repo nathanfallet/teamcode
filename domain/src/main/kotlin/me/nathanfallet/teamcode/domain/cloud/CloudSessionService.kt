@@ -16,7 +16,13 @@ class CloudSessionService(
     private val initialMessages: CloudInitialMessages? = null,
     /** The daemons of members' devices; null where remote sessions cannot be started on another device. */
     private val daemons: DeviceDaemonStore? = null,
+    /** The team's model policy, checked when the model of a session changes; null (tests of the lifecycle alone) allows any model. */
+    private val modelPolicies: me.nathanfallet.teamcode.domain.policy.ModelPolicyStore? = null,
+    /** Tells a running agent its model changed; null where the server has no conversations (the change then applies at the next start). */
+    private val modelChanges: CloudModelChanges? = null,
 ) {
+    /** Whether a session's model can be changed (`cloud.sessions.model.v1`): the change reaches a running agent through the conversation. */
+    val changesModels: Boolean get() = modelChanges != null
     /** Whether a remote session can be started on one of the caller's devices by its daemon (`cloud.sessions.remote.daemon.v1`). */
     val startsOnDevices: Boolean get() = daemons != null
 
@@ -340,6 +346,37 @@ class CloudSessionService(
                 )
             }
         } ?: throw missing()
+    }
+
+    /**
+     * Changes the model of a session's agent (`cloud.sessions.model.v1`), like `/model` in a terminal: the owner only (a
+     * role, an administrator's included, opens nobody else's session; the model is spent from the owner's allowance), to a
+     * model the team's model policy allows (an alias such as `opus` stands for `claude-opus`).
+     * The recorded model changes at once, so a session that is not running starts with it; a running agent takes it for
+     * its next turn through the conversation ([CloudModelChanges]), and a turn in flight ends with the old one. The change
+     * is audited as `cloud.session.model_changed`. Choosing the current model changes nothing.
+     */
+    suspend fun setModel(principal: Principal, onBehalfOf: String?, id: String, model: String): CloudSession {
+        val actor = actor(principal, onBehalfOf)
+        visible(principal, store.find(principal.teamId, id))
+        CloudConversationRules.validateModel(model)
+        modelPolicies?.get(principal.teamId)?.let { policy ->
+            if (!CloudModelCatalog.allowed(policy, model)) throw TeamFailure("model_not_allowed", 403,
+                "This model is not allowed. Choose an allowed model: ${policy.allowedModels.joinToString()}. Denied patterns: ${policy.deniedModels.joinToString()}.")
+        }
+        val session = transition(principal.teamId, id) { current ->
+            when {
+                current.state.terminal || current.desiredState == DesiredState.TERMINATED -> throw notRunning()
+                current.agentModel == model -> null
+                else -> CloudTransition(
+                    current.copy(agentModel = model, updatedAt = store.now()),
+                    CloudWrite(actor = actor, auditAction = "cloud.session.model_changed", reconcileAt = null),
+                )
+            }
+        } ?: throw missing()
+        // After the commit: the row is the truth, the input only tells a running agent. A repeat of the same choice queues nothing.
+        modelChanges?.announce(principal, session, model)
+        return session
     }
 
     /**

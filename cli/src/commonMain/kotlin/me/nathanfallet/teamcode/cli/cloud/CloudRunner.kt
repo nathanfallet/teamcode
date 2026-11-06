@@ -210,7 +210,7 @@ internal class CloudRunner : SuspendingCliktCommand(name = "runner") {
                 override suspend fun events(events: List<RunnerEventView>) = client.runnerEvents(RunnerEventsRequest(team, session, epoch, events))
                 override suspend fun inputs(waitMillis: Long) = client.runnerInputs(RunnerInputsRequest(team, session, epoch, waitMillis)).inputs
                 override suspend fun poll(waitMillis: Long, desiredState: String, acceptsFiles: Boolean, acceptsTaskStops: Boolean) =
-                    client.runnerInputs(RunnerInputsRequest(team, session, epoch, waitMillis, desiredState, acceptsFiles, acceptsTaskStops))
+                    client.runnerInputs(RunnerInputsRequest(team, session, epoch, waitMillis, desiredState, acceptsFiles, acceptsTaskStops, acceptsModelChanges = true))
                 override suspend fun acknowledge(acks: List<RunnerInputAckView>) = client.runnerAcknowledge(RunnerInputAckRequest(team, session, epoch, acks))
                 override suspend fun file(fileId: String, maxBytes: Long, receive: (ByteArray, Int) -> Unit) = client.runnerFile(team, session, epoch, fileId, maxBytes, receive)
             }

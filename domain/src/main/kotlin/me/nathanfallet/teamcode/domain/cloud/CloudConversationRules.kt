@@ -36,6 +36,12 @@ object CloudConversationRules {
         if (!TASK_ID.matches(taskId)) throw TeamFailure("invalid_task", 400, "Send the id of a background task: 1 to 64 letters, digits, '-' or '_'.")
     }
 
+    /** The model ids a session takes: the creation's rule. */
+    val MODEL = Regex("[a-zA-Z0-9._:/-]{1,120}")
+    fun validateModel(model: String) {
+        if (!MODEL.matches(model)) throw TeamFailure("invalid_agent", 400, "Use a valid agent model: 1 to 120 letters, digits, '.', '_', ':', '/' or '-'.")
+    }
+
     /** Longest message a member may send, in characters. */
     const val MAX_MESSAGE_CHARS = 32_000
     /** Longest string kept in an event; longer strings are cut and marked. */

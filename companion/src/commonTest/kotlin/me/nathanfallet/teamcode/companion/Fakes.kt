@@ -194,6 +194,13 @@ class FakeSessionRepository : me.nathanfallet.teamcode.companion.domain.reposito
         calls += "bypass $sessionId $enabled"; bypassFailure?.let { throw it }
         return (byId[sessionId] ?: cloudSession(sessionId)).copy(permissionBypass = enabled).also { byId[sessionId] = it }
     }
+    var modelFailure: Exception? = null
+    var modelOptions = listOf(me.nathanfallet.teamcode.companion.domain.models.ModelOption("claude-opus-5-5", "Opus 5.5"), me.nathanfallet.teamcode.companion.domain.models.ModelOption("claude-sonnet-5-5", "Sonnet 5.5"))
+    override suspend fun setModel(accountId: String, sessionId: String, model: String): me.nathanfallet.teamcode.companion.domain.models.CloudSession {
+        calls += "setModel $sessionId $model"; modelFailure?.let { throw it }
+        return (byId[sessionId] ?: cloudSession(sessionId)).copy(model = model).also { byId[sessionId] = it }
+    }
+    override suspend fun models(accountId: String, agent: String): List<me.nathanfallet.teamcode.companion.domain.models.ModelOption> { calls += "models $agent"; return modelOptions }
     override suspend fun resume(accountId: String, sessionId: String) = (byId[sessionId] ?: cloudSession(sessionId)).copy(state = me.nathanfallet.teamcode.companion.domain.models.SessionState.RESUMING).also { calls += "resume $sessionId" }
     override fun sessionChanges(accountId: String, kinds: Set<me.nathanfallet.teamcode.companion.domain.models.SessionKind>, waiting: Boolean, waits: Boolean, renames: Boolean, workflows: Boolean, todos: Boolean) =
         changes.also { calls += "feed" + (if (kinds.isEmpty()) "" else " " + kinds.map { it.wire }.sorted().joinToString(",")) + (if (waiting) " waiting" else "") + (if (waits) " waits" else "") + (if (renames) " renames" else "") + (if (workflows) " workflows" else "") + if (todos) " todos" else "" }

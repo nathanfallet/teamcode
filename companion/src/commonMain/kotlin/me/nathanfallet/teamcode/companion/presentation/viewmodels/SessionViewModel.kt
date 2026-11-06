@@ -16,6 +16,7 @@ import kotlinx.coroutines.sync.withLock
 import me.nathanfallet.teamcode.companion.domain.models.AgentQuestion
 import me.nathanfallet.teamcode.companion.domain.models.AnswerOutcome
 import me.nathanfallet.teamcode.companion.domain.models.CloudSession
+import me.nathanfallet.teamcode.companion.domain.models.ModelOption
 import me.nathanfallet.teamcode.companion.domain.models.PermissionAnswer
 import me.nathanfallet.teamcode.companion.domain.models.QuestionChoice
 import me.nathanfallet.teamcode.companion.domain.models.CompanionException
@@ -115,6 +116,11 @@ data class SessionUiState(
     val renames: Boolean = false,
     /** The server lets the owner approve tool uses in advance (`cloud.permissions.bypass.v1`). */
     val bypassSupported: Boolean = false,
+    /** The server changes the model of a session's agent (`cloud.sessions.model.v1`): the model chip opens the picker. */
+    val modelChanges: Boolean = false,
+    /** The models the picker offers, read when it opens; null until then (or when they could not be read, [modelsFailed]). */
+    val models: List<ModelOption>? = null,
+    val modelsFailed: Boolean = false,
     /** A short result of an action (woken, nothing to interrupt) or its failure. */
     val notice: SessionNotice? = null,
     /** Answers being written or sent, by request id. */
@@ -206,6 +212,7 @@ class SessionViewModel(
         started = true
         if (!state.value.renames) viewModelScope.launch { if (control.supportsRename(route.accountId)) state.update { it.copy(renames = true) } }
         if (!state.value.bypassSupported) viewModelScope.launch { if (control.supportsBypass(route.accountId)) state.update { it.copy(bypassSupported = true) } }
+        if (!state.value.modelChanges) viewModelScope.launch { if (control.supportsModelChange(route.accountId)) state.update { it.copy(modelChanges = true) } }
         files?.load()
         if (followTodo != null && todoJob?.isActive != true) todoJob = viewModelScope.launch {
             try {
@@ -437,6 +444,28 @@ class SessionViewModel(
 
     /** Renames the session; a refused name (the rules are the server's) is told in a notice. */
     fun rename(name: String) = act { val session = control.rename(route.accountId, route.sessionId, name); actions++; state.update { it.copy(session = session) } }
+
+    /** Reads the models the picker offers; the member can still type another id when the list cannot be read. */
+    fun loadModels() {
+        val session = state.value.session ?: return
+        if (state.value.models != null) return
+        viewModelScope.launch {
+            try {
+                val models = control.models(route.accountId, session)
+                state.update { it.copy(models = models, modelsFailed = false) }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Exception) {
+                state.update { it.copy(modelsFailed = true) }
+            }
+        }
+    }
+
+    /**
+     * Switches the session's agent to [model], like `/model` in a terminal; the answer is the session with its new model.
+     * A refused model (the team's policy is the server's) is told in a notice.
+     */
+    fun setModel(model: String) = act { val session = control.setModel(route.accountId, route.sessionId, model); actions++; state.update { it.copy(session = session) } }
 
     /** Ends the session (its workspace is deleted): the header then reads the server's answer, "Ended" once it is done. */
     fun end() = act { control.end(route.accountId, route.sessionId); actions++; refreshSession() }

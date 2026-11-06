@@ -8,6 +8,7 @@ import me.nathanfallet.teamcode.companion.domain.models.CompanionException
 import me.nathanfallet.teamcode.companion.domain.models.FilePolicy
 import me.nathanfallet.teamcode.companion.domain.models.UploadedFile
 import me.nathanfallet.teamcode.companion.domain.models.InputReceipt
+import me.nathanfallet.teamcode.companion.domain.models.ModelOption
 import me.nathanfallet.teamcode.companion.domain.models.NewSession
 import me.nathanfallet.teamcode.companion.domain.models.PendingMessage
 import me.nathanfallet.teamcode.companion.domain.models.Profile
@@ -160,13 +161,42 @@ class ControlSessionUseCase(private val sessions: SessionRepository, private val
         false
     }
 
+    /** Whether the server changes the model of a session's agent (`cloud.sessions.model.v1`); the model chip opens the picker only then. */
+    suspend fun supportsModelChange(accountId: String): Boolean = try {
+        Features.MODEL in features.features(accountId)
+    } catch (error: kotlinx.coroutines.CancellationException) {
+        throw error
+    } catch (_: Exception) {
+        false
+    }
+
     /** Approves every later tool use of the session in advance, or takes that back; the server refuses anyone but the owner. */
     suspend fun setPermissionBypass(accountId: String, sessionId: String, enabled: Boolean): CloudSession = guard(accountId) {
         if (Features.PERMISSION_BYPASS !in features.features(accountId)) throw CompanionException.Unsupported(Features.PERMISSION_BYPASS)
         sessions.setPermissionBypass(accountId, sessionId, enabled)
     }
 
+    /** The models the team's policy lets the member pick for [session]'s agent, best first. */
+    suspend fun models(accountId: String, session: CloudSession): List<ModelOption> = guard(accountId) {
+        if (Features.MODEL !in features.features(accountId)) throw CompanionException.Unsupported(Features.MODEL)
+        sessions.models(accountId, session.agentKind)
+    }
+
+    /** Switches the agent to [model]; the id is checked here as the server checks it, the team's policy there. */
+    suspend fun setModel(accountId: String, sessionId: String, model: String): CloudSession = guard(accountId) {
+        val sent = model.trim()
+        requireInput(validModel(sent), InvalidInput.Problem.SESSION_MODEL, MAX_MODEL, "Use a valid model: letters, digits and . _ : / - (up to $MAX_MODEL characters).")
+        if (Features.MODEL !in features.features(accountId)) throw CompanionException.Unsupported(Features.MODEL)
+        sessions.setModel(accountId, sessionId, sent)
+    }
+
     companion object {
+        /** The model of a session can change while it is not over; a local session's agent is the terminal's, not the server's. */
+        fun canChangeModel(session: CloudSession): Boolean = !session.local && session.state.group != SessionGroup.ENDED
+        const val MAX_MODEL = 120
+        private val MODEL = Regex("[a-zA-Z0-9._:/-]+")
+        /** The server's model rules (as at creation): 1 to [MAX_MODEL] letters, digits and `. _ : / -`. */
+        fun validModel(model: String): Boolean = model.length in 1..MAX_MODEL && MODEL.matches(model)
         /** Pause and resume are offered to the session's owner: a role opens nobody else's session. */
         fun canControl(account: Account, session: CloudSession): Boolean = session.ownerId == account.memberId
         fun canPause(session: CloudSession): Boolean = !session.local && session.state in setOf(SessionState.READY, SessionState.ACTIVE, SessionState.RESUMING)

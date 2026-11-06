@@ -839,4 +839,74 @@ class CloudConversationRoutesTest {
         val paused = stop("colleague", """{"taskId":"b3"}""")
         assertEquals(HttpStatusCode.Conflict, paused.status); assertTrue("nothing_to_stop" in paused.bodyAsText())
     }
+
+    /**
+     * `cloud.sessions.model.v1`: the owner switches the model of a session's agent, within the team's model policy. The
+     * recorded model changes at once; a running agent is told through an input that only a runner announcing it receives
+     * (an older one gets it rejected, never read as a message).
+     */
+    @Test fun theOwnerSwitchesTheModelOfARunningAgentWithinThePolicy() = testApplication {
+        val store = Sessions(listOf(admin, colleague, other))
+        val conversations = Conversations().also { c -> c.sessionOf = { store.sessions[it] } }
+        val access = CloudAccessService(conversations, store)
+        val service = CloudConversationService(conversations, store, access, { _, _ -> false })
+        val policies = object : me.nathanfallet.teamcode.domain.policy.ModelPolicyStore {
+            override suspend fun get(teamId: String) = me.nathanfallet.teamcode.domain.policy.ModelPolicy(allowedModels = listOf("claude-*"), deniedModels = listOf("*haiku*"))
+            override suspend fun save(actor: Principal, policy: me.nathanfallet.teamcode.domain.policy.ModelPolicy) = policy
+        }
+        val sessions = CloudSessionService(store, access = access, modelPolicies = policies, modelChanges = service)
+        application {
+            configureGateway(gateway, team = team(), cloudSessions = sessions, cloudAdmin = CloudAdministrationService(object : CloudAdminStore {
+                override suspend fun clusters(actor: Principal) = emptyList<CloudCluster>()
+                override suspend fun saveCluster(actor: Principal, id: String?, expectedVersion: Int?, input: CloudClusterInput) = error("unused")
+                override suspend fun profiles(actor: Principal) = emptyList<CloudProfile>()
+                override suspend fun member(actor: Principal, memberId: String): Member? = null
+                override suspend fun saveProfile(actor: Principal, id: String?, expectedVersion: Int, name: String, spec: CloudProfileSpec, assignedMemberIds: Set<String>) = error("unused")
+                override suspend fun settings(actor: Principal) = CloudSettings()
+                override suspend fun saveSettings(actor: Principal, settings: CloudSettings) = settings
+            }, cluster), cloudRunner = CloudRunnerChannel(RunnerChannelUseCase(store), AuthenticateRunnerUseCase(store, cluster)),
+                cloudConversation = CloudConversation(service, access, RunnerConversationUseCase(store, conversations, { _, _ -> false }, sleep = { })),
+                modelPolicies = policies, publicOrigin = "http://localhost")
+        }
+        val created = (sessions.create(Principal(colleague, "colleague-session", "default"), null, CloudSessionDraft("Run", "profile-id", null, "claude-opus-5-5", null, emptyMap(), null), null) as CloudCreateOutcome.Created).session
+        store.sessions.clear()
+        store.sessions["s1"] = created.copy(id = "s1", currentEpoch = 1, generation = 1, state = CloudSessionState.READY)
+        store.runs["s1" to 1] = CloudExecution("s1", 1, "tc-s1-e1", ExecutionState.RUNNING, 1)
+        val features = Serialization.json.decodeFromString<Capabilities>(client.get("/api/v1/capabilities") { bearerAuth("colleague") }.bodyAsText()).features
+        assertTrue(CloudModels.FEATURE in features)
+        val offered = Serialization.json.decodeFromString<CloudModelsView>(client.get("/api/v1/cloud/models?agent=claude") { bearerAuth("colleague") }.bodyAsText())
+        assertTrue(offered.models.any { it.id == "claude-sonnet-5-5" } && offered.models.none { "haiku" in it.id }, "The picker offers what the policy allows")
+        assertEquals(HttpStatusCode.BadRequest, client.get("/api/v1/cloud/models?agent=gemini") { bearerAuth("colleague") }.status)
+        suspend fun switch(token: String, body: String) = client.put("/api/v1/cloud/sessions/s1/model") { bearerAuth(token); contentType(ContentType.Application.Json); setBody(body) }
+        assertEquals(HttpStatusCode.NotFound, switch("other", """{"model":"claude-sonnet-5-5"}""").status, "Only the owner switches the model")
+        assertEquals(HttpStatusCode.Forbidden, switch("colleague-read", """{"model":"claude-sonnet-5-5"}""").status, "A read-only key switches nothing")
+        assertEquals(HttpStatusCode.BadRequest, switch("colleague", """{"model":"not a model"}""").status)
+        val refused = switch("colleague", """{"model":"claude-haiku-5-5"}""")
+        assertEquals(HttpStatusCode.Forbidden, refused.status); assertTrue("model_not_allowed" in refused.bodyAsText())
+        assertEquals("claude-opus-5-5", store.sessions.getValue("s1").agentModel)
+        val switched = switch("colleague", """{"model":"claude-sonnet-5-5"}""")
+        assertEquals(HttpStatusCode.OK, switched.status, switched.bodyAsText())
+        assertEquals("claude-sonnet-5-5", Serialization.json.decodeFromString<CloudSessionView>(switched.bodyAsText()).agent.model)
+        assertEquals("claude-sonnet-5-5", store.sessions.getValue("s1").agentModel)
+        val input = conversations.inputs.values.single()
+        assertEquals(CloudInputKind.SET_MODEL, input.kind); assertEquals("claude-sonnet-5-5", input.text); assertFalse(input.wake)
+        val runner = TeamCodeClient("http://localhost", { "projected-pod-token-1" }) { config -> createClient { config(this) } }
+        try {
+            // An older runner would read the model as a message: the change is rejected for it instead.
+            assertTrue(runner.runnerInputs(RunnerInputsRequest("default", "s1", 1, 0, acceptsTaskStops = true)).inputs.isEmpty())
+            assertEquals(CloudModels.UNSUPPORTED, conversations.inputs.getValue(input.id).reason)
+            assertEquals(HttpStatusCode.OK, switch("colleague", """{"model":"claude-opus-5-5"}""").status)
+            val delivered = runner.runnerInputs(RunnerInputsRequest("default", "s1", 1, 0, acceptsModelChanges = true)).inputs.single()
+            assertEquals(RunnerInputView(delivered.id, CloudModels.KIND, "claude-opus-5-5", 1), delivered)
+        } finally { runner.close() }
+        // Choosing the model it already has again tells the agent nothing more.
+        val before = conversations.inputs.size
+        assertEquals(HttpStatusCode.OK, switch("colleague", """{"model":"claude-opus-5-5"}""").status)
+        assertEquals(before, conversations.inputs.size)
+        // A session that is not running takes the model without any input: it starts with it.
+        store.sessions["s1"] = store.sessions.getValue("s1").copy(state = CloudSessionState.PAUSED, desiredState = DesiredState.PAUSED, generation = 5)
+        assertEquals(HttpStatusCode.OK, switch("colleague", """{"model":"claude-sonnet-5-5"}""").status)
+        assertEquals("claude-sonnet-5-5", store.sessions.getValue("s1").agentModel)
+        assertEquals(before, conversations.inputs.size)
+    }
 }

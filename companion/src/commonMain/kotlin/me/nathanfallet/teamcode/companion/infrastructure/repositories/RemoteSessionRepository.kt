@@ -16,6 +16,7 @@ import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flow
 import me.nathanfallet.teamcode.companion.domain.models.CloudSession
 import me.nathanfallet.teamcode.companion.domain.models.LiveUpdate
+import me.nathanfallet.teamcode.companion.domain.models.ModelOption
 import me.nathanfallet.teamcode.companion.domain.models.Profile
 import me.nathanfallet.teamcode.companion.domain.models.SessionChange
 import me.nathanfallet.teamcode.companion.domain.models.SessionFilter
@@ -82,6 +83,11 @@ class RemoteSessionRepository(private val calls: AccountCalls, private val polic
 
     override suspend fun setPermissionBypass(accountId: String, sessionId: String, enabled: Boolean): CloudSession =
         calls.withAccount(accountId, resource = true) { it.setCloudPermissionBypass(sessionId, enabled).domain() }
+    override suspend fun setModel(accountId: String, sessionId: String, model: String): CloudSession =
+        calls.withAccount(accountId, resource = true) { it.setCloudSessionModel(sessionId, model).domain() }
+
+    override suspend fun models(accountId: String, agent: String): List<ModelOption> =
+        calls.withAccount(accountId) { client -> client.cloudModels(agent).models.map { ModelOption(it.id, it.label) } }
 
     override suspend fun end(accountId: String, sessionId: String) {
         calls.withAccount(accountId, resource = true) { it.deleteCloudSession(sessionId) }
