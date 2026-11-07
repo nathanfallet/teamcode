@@ -15,6 +15,7 @@ import com.github.ajalt.clikt.parameters.types.long
 import me.nathanfallet.teamcode.cli.daemon.homeDirectory
 import me.nathanfallet.teamcode.cli.daemon.refuseFolder
 import me.nathanfallet.teamcode.cli.daemon.ClaudeTranscripts
+import me.nathanfallet.teamcode.cli.daemon.FolderStore
 import kotlin.uuid.Uuid
 import kotlinx.serialization.Serializable
 import me.nathanfallet.teamcode.api.Serialization
@@ -44,7 +45,7 @@ import okio.Path.Companion.toPath
  */
 class Remote : SuspendingNoOpCliktCommand(name = "remote") {
     override fun help(context: Context) = "Run sessions on this device that your team's clients follow and drive like cloud sessions."
-    init { subcommands(RemoteStart(), RemoteList(), RemoteResume(), RemoteStop(), RemoteHost(), RemoteResumable()) }
+    init { subcommands(RemoteStart(), RemoteList(), RemoteResume(), RemoteStop(), RemoteHost(), RemoteResumable(), RemoteFolders()) }
 }
 
 internal const val REMOTE_CAPABILITY = "cloud.sessions.remote.v1"
@@ -175,6 +176,51 @@ private class RemoteResumable : SuspendingCliktCommand(name = "resumable") {
         if (view.sessions.isEmpty()) echo("No Claude Code conversation of $path on this device.", err = true)
         view.nextBefore?.let { echo("Older ones: --before $it", err = true) }
     }
+}
+
+/**
+ * `teamcode remote folders`: the folders this device already knows, for the desktop app's "On this device" to suggest
+ * instead of browsing. Read from this device's own files (the directories of its remote sessions and the folders its
+ * daemon offers), never from the server.
+ */
+private class RemoteFolders : SuspendingCliktCommand(name = "folders") {
+    override fun help(context: Context) = "List the folders this device already knows, the most recently used first: the directories of its remote " +
+        "sessions and the folders its daemon offers (teamcode folders). Read locally; nothing is sent to the server."
+    private val limit by option("--limit", help = "At most this many (1 to ${LocalKnownFolders.MAX_LIMIT}).").int().default(LocalKnownFolders.DEFAULT_LIMIT)
+    private val json by option("--json", help = "Print the folders as JSON on standard output.").flag()
+
+    override suspend fun run() {
+        if (limit !in 1..LocalKnownFolders.MAX_LIMIT) throw UsageError("--limit is between 1 and ${LocalKnownFolders.MAX_LIMIT}.")
+        val windows = servicePlatform().os == "windows"
+        val view = knownFolders(RemoteSessions().recentDirectories(), FolderStore().read().folders.map { it.path }, limit, homeDirectory(), windows) {
+            FileSystem.SYSTEM.metadataOrNull(it.toPath())?.isDirectory == true
+        }
+        if (json) { echo(Serialization.json.encodeToString(view)); return }
+        view.folders.forEach { echo(it.path) }
+        if (view.folders.isEmpty()) echo("No known folder yet: start a session with teamcode remote start DIRECTORY.", err = true)
+    }
+}
+
+/**
+ * The folders a device knows: [recent] directories of its remote sessions (newest first, with when), then the [offered]
+ * ones of its daemon (the latest added first), each once, those that still exist and may host a session, at most
+ * [limit]. A path that is the home directory, a system directory or gone is left out; nothing here reads a transcript
+ * or touches the network.
+ */
+internal fun knownFolders(
+    recent: List<Pair<String, Long>>, offered: List<String>, limit: Int, home: Path?, windows: Boolean, exists: (String) -> Boolean,
+): LocalKnownFoldersView {
+    fun key(path: String) = if (windows) path.replace('/', '\\').trimEnd('\\').lowercase() else path.trimEnd('/')
+    val seen = mutableSetOf<String>()
+    val found = mutableListOf<LocalKnownFolderView>()
+    fun offer(path: String, at: Long?) {
+        if (found.size >= limit || path.isBlank() || path.any { it.isISOControl() } || !seen.add(key(path))) return
+        val allowed = try { refuseFolder(path.toPath(), home, windows); true } catch (_: CliUserException) { false }
+        if (allowed && exists(path)) found += LocalKnownFolderView(path, at)
+    }
+    recent.forEach { (path, at) -> offer(path, at) }
+    offered.asReversed().forEach { offer(it, null) }
+    return LocalKnownFoldersView(found)
 }
 
 /** `teamcode remote host`: the host itself, in the foreground; `--detach`, `--attach` and the device's daemon start it in the background. */
@@ -323,6 +369,22 @@ internal class RemoteSessions(
         return file.toString()
     }
 
+    /**
+     * The directories of the most recent records with when each was written (milliseconds), newest first and each
+     * directory once. Only the newest [MAX_SCANNED] files are read; a damaged record is skipped.
+     */
+    fun recentDirectories(): List<Pair<String, Long>> {
+        val files = try { FileSystem.SYSTEM.list(root) } catch (_: Exception) { return emptyList() }
+        val newest = files.filter { it.name.endsWith(".json") && !it.name.endsWith(".conversation.json") }
+            .mapNotNull { file -> FileSystem.SYSTEM.metadataOrNull(file)?.takeIf { it.isRegularFile && it.symlinkTarget == null }?.let { file to (it.lastModifiedAtMillis ?: 0L) } }
+            .sortedByDescending { it.second }.take(MAX_SCANNED)
+        val seen = mutableSetOf<String>()
+        return newest.mapNotNull { (file, at) ->
+            val record = try { Serialization.json.decodeFromString<RemoteSessionRecord>(FileSystem.SYSTEM.read(file) { readUtf8() }) } catch (_: Exception) { return@mapNotNull null }
+            (record.directory to at).takeIf { seen.add(record.directory) }
+        }
+    }
+
     /** Removes the records of [ended] sessions (with their conversation id and log); records of other sessions stay. */
     fun prune(ended: Set<String>) {
         val stale = ended.filter { SESSION_ID.matches(it) && FileSystem.SYSTEM.exists(root / "$it.json") }
@@ -335,6 +397,7 @@ internal class RemoteSessions(
     companion object {
         private val SESSION_ID = Regex("[a-zA-Z0-9-]{1,36}")
         const val MAX_LOG_BYTES = 1_048_576L
+        private const val MAX_SCANNED = 200
     }
 }
 

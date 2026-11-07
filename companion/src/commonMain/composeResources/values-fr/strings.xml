@@ -414,6 +414,10 @@
     <string name="local_session_folder">Dossier</string>
     <string name="local_session_choose_folder">Choisir un dossier…</string>
     <string name="local_session_folder_hint">Seul le nom du dossier parvient au serveur.</string>
+    <string name="local_session_known">Dossiers connus</string>
+    <string name="local_session_known_none">Choisis un dossier déjà utilisé sur cet ordinateur</string>
+    <string name="local_session_known_loading">Lecture des dossiers de cet ordinateur…</string>
+    <string name="local_session_known_empty">Aucun dossier connu pour l'instant. Choisis-en un ci-dessus : il sera proposé ici ensuite.</string>
     <string name="local_session_agent">Agent</string>
     <string name="local_session_agent_claude">Claude Code</string>
     <string name="local_session_agent_codex">Codex</string>

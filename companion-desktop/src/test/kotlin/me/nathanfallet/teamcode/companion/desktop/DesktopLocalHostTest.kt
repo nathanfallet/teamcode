@@ -5,6 +5,7 @@ import java.io.File
 import kotlinx.coroutines.test.runTest
 import me.nathanfallet.teamcode.companion.domain.models.Account
 import me.nathanfallet.teamcode.companion.domain.services.LocalAvailability
+import me.nathanfallet.teamcode.companion.domain.services.KnownFolder
 import me.nathanfallet.teamcode.companion.domain.services.LocalHostException
 import me.nathanfallet.teamcode.companion.domain.services.LocalSessionRequest
 import me.nathanfallet.teamcode.companion.domain.services.LocalResumables
@@ -50,6 +51,18 @@ class DesktopLocalHostTest {
         assertEquals(LocalResumables.Page(ResumableSessions(emptyList())),
             DesktopLocalHost.resumables(CliResult(0, """{"sessions":[{"id":"../../etc","title":"x","lastActiveAt":1,"turns":1}]}""", "")))
         assertFailsWith<LocalHostException> { DesktopLocalHost.resumables(CliResult(0, "not json", "")) }
+    }
+
+    @Test fun theKnownFoldersAreReadFromTheCli() {
+        assertEquals(listOf("remote", "folders", "--json", "--limit", "20"), DesktopLocalHost.KNOWN_FOLDERS_ARGUMENTS)
+        val folders = DesktopLocalHost.knownFolders(CliResult(0,
+            """{"folders":[{"path":"/Users/ada/git/paywall","lastUsedAt":1700000000000},{"path":"/Users/ada/git/api"},{"path":"/Users/ada/x\u001b[2Jy"},{"path":" "}]}""", ""))
+        assertEquals(listOf(KnownFolder("/Users/ada/git/paywall", 1_700_000_000_000), KnownFolder("/Users/ada/git/api")), folders, "A path with a control character is never offered")
+        assertEquals(emptyList(), DesktopLocalHost.knownFolders(CliResult(0, """{"folders":[]}""", "")))
+        // A CLI from before the command keeps the browse picker alone; its own refusal is said as is.
+        assertEquals(emptyList(), DesktopLocalHost.knownFolders(CliResult(1, "", "Error: no such subcommand folders\n")))
+        assertEquals("Cannot read folders.json.", assertFailsWith<LocalHostException> { DesktopLocalHost.knownFolders(CliResult(1, "", "Error: Cannot read folders.json.\n")) }.message)
+        assertFailsWith<LocalHostException> { DesktopLocalHost.knownFolders(CliResult(0, "not json", "")) }
     }
 
     @Test fun theIdAndTheClisExplanationAreRead() {

@@ -19,6 +19,7 @@ import me.nathanfallet.teamcode.companion.credentials
 import me.nathanfallet.teamcode.companion.domain.models.CompanionException
 import me.nathanfallet.teamcode.companion.domain.models.PendingMessage
 import me.nathanfallet.teamcode.companion.domain.repositories.Features
+import me.nathanfallet.teamcode.companion.domain.services.KnownFolder
 import me.nathanfallet.teamcode.companion.domain.services.LocalAvailability
 import me.nathanfallet.teamcode.companion.domain.services.LocalHost
 import me.nathanfallet.teamcode.companion.domain.services.LocalHostException
@@ -57,6 +58,15 @@ private class FakeLocalHost(var availability: LocalAvailability = LocalAvailabil
     override suspend fun resumable(accountId: String, directory: String, before: Long?): LocalResumables {
         listed += directory to before
         return listing(directory, before)
+    }
+    /** How many times the known folders were read; [folders] answers. */
+    var foldersRead = 0
+    var folders: List<KnownFolder> = emptyList()
+    var foldersFailure: Exception? = null
+    override suspend fun knownFolders(accountId: String): List<KnownFolder> {
+        foldersRead++
+        foldersFailure?.let { throw it }
+        return folders
     }
     override suspend fun start(accountId: String, request: LocalSessionRequest): String {
         failure?.let { throw it }
@@ -277,6 +287,71 @@ class LocalSessionViewModelTest {
         assertEquals("The downloaded install script is not the one this app was built with. Nothing was run.", refused.uiState.value.error?.text)
         assertIs<LocalAvailability.CliMissing>(refused.uiState.value.availability)
         assertFalse(refused.uiState.value.installing)
+    }
+
+    private val paywall = KnownFolder("/Users/ada/git/paywall", 2_000)
+    private val api = KnownFolder("/Users/ada/git/api")
+
+    @Test fun knownFoldersAreReadOnFirstOpeningAndChoosingOneNamesTheSession() = runTest(dispatcher) {
+        val host = FakeLocalHost().apply { folders = listOf(paywall, api) }
+        val model = LocalSessionViewModel(NewSessionRoute("cli"), useCase(host), host, SettingsPreferencesRepository(MapSettings()))
+        settle()
+        assertEquals(0, host.foldersRead, "Nothing is read before the section opens")
+        model.onFoldersOpen(); settle()
+        assertEquals(1, host.foldersRead)
+        assertEquals(listOf(paywall, api), model.uiState.value.knownFolders)
+        assertTrue(model.uiState.value.foldersOpen)
+        model.onKnownFolder("/Users/ada/not-listed")
+        assertEquals("", model.uiState.value.directory, "Only a listed folder can be chosen")
+        model.onKnownFolder(api.path)
+        assertEquals("/Users/ada/git/api", model.uiState.value.directory)
+        assertEquals("api", model.uiState.value.name)
+        assertFalse(model.uiState.value.foldersOpen)
+        // Closing and opening again does not read the folders again.
+        model.onFoldersOpen(); model.onFoldersOpen(); settle()
+        assertEquals(1, host.foldersRead)
+        model.create(); settle()
+        assertEquals("/Users/ada/git/api", host.started.single().directory)
+    }
+
+    @Test fun aKnownFolderMovesTheResumeChoiceLikeTheBrowsePickerDoes() = runTest(dispatcher) {
+        val host = FakeLocalHost().apply { folders = listOf(paywall, api); listing = { _, _ -> LocalResumables.Page(ResumableSessions(listOf(first))) } }
+        val model = LocalSessionViewModel(NewSessionRoute("cli"), useCase(host), host, SettingsPreferencesRepository(MapSettings()))
+        settle()
+        model.onFoldersOpen(); settle()
+        model.onKnownFolder(paywall.path)
+        model.onResumeOpen(); settle()
+        model.onResume(first.id)
+        assertEquals(first.id, model.uiState.value.resumeId)
+        model.onKnownFolder(api.path)
+        assertNull(model.uiState.value.resumeId, "A conversation belongs to its folder")
+        assertNull(model.uiState.value.resumable)
+    }
+
+    @Test fun aFailureReadingTheFoldersIsSaidWithRetryAndTheBrowsePickerStillWorks() = runTest(dispatcher) {
+        val host = FakeLocalHost().apply { foldersFailure = LocalHostException("Cannot read folders.json.") }
+        val model = LocalSessionViewModel(NewSessionRoute("cli"), useCase(host), host, SettingsPreferencesRepository(MapSettings()))
+        settle()
+        model.onFoldersOpen(); settle()
+        assertNotNull(model.uiState.value.foldersError)
+        assertNull(model.uiState.value.knownFolders)
+        assertTrue(model.uiState.value.foldersOpen)
+        host.foldersFailure = null; host.folders = listOf(paywall)
+        model.onFoldersRetry(); settle()
+        assertNull(model.uiState.value.foldersError)
+        assertEquals(listOf(paywall), model.uiState.value.knownFolders)
+        model.chooseDirectory(); settle()
+        assertEquals("/Users/ada/git/paywall", model.uiState.value.directory)
+    }
+
+    @Test fun theUseCaseBoundsAndCleansWhatTheHostGives() = runTest(dispatcher) {
+        val many = (1..40).map { KnownFolder("/w/p$it") }
+        val host = FakeLocalHost().apply { folders = listOf(KnownFolder("/w/ok"), KnownFolder("/w/ok"), KnownFolder(" "), KnownFolder("/w/bad\u001b[2J")) + many }
+        val found = useCase(host).knownFolders("cli")
+        assertEquals(KnownFolder.LIMIT, found.size)
+        assertEquals("/w/ok", found.first().path)
+        assertEquals(found.size, found.map { it.path }.toSet().size, "Each folder once")
+        assertTrue(found.none { it.path.isBlank() || it.path.any(Char::isISOControl) })
     }
 
     @Test fun aFolderGivenByTeamcodeUiIsChosenAlready() = runTest(dispatcher) {

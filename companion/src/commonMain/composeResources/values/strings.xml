@@ -414,6 +414,10 @@
     <string name="local_session_folder">Folder</string>
     <string name="local_session_choose_folder">Choose a folder…</string>
     <string name="local_session_folder_hint">Only the folder's name reaches the server.</string>
+    <string name="local_session_known">Known folders</string>
+    <string name="local_session_known_none">Pick one you already used on this computer</string>
+    <string name="local_session_known_loading">Reading this computer's folders…</string>
+    <string name="local_session_known_empty">No known folder yet. Choose one above: it is suggested here from then on.</string>
     <string name="local_session_agent">Agent</string>
     <string name="local_session_agent_claude">Claude Code</string>
     <string name="local_session_agent_codex">Codex</string>

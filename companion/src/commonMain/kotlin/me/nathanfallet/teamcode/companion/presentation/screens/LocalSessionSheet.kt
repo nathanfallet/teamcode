@@ -1,6 +1,9 @@
 package me.nathanfallet.teamcode.companion.presentation.screens
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.ui.semantics.Role
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -31,7 +34,9 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.adamglin.PhosphorIcons
 import com.adamglin.phosphoricons.Regular
+import com.adamglin.phosphoricons.regular.CaretDown
 import com.adamglin.phosphoricons.regular.CaretRight
+import com.adamglin.phosphoricons.regular.CaretUp
 import com.adamglin.phosphoricons.regular.Cloud
 import com.adamglin.phosphoricons.regular.Desktop
 import me.nathanfallet.teamcode.companion.domain.services.LocalAvailability
@@ -51,11 +56,17 @@ import me.nathanfallet.teamcode.companion.presentation.components.TcButton
 import me.nathanfallet.teamcode.companion.presentation.components.TcSheet
 import me.nathanfallet.teamcode.companion.presentation.components.TcTextField
 import me.nathanfallet.teamcode.companion.presentation.components.Tone
+import me.nathanfallet.teamcode.companion.presentation.theme.MetaStyle
 import me.nathanfallet.teamcode.companion.presentation.theme.MonospaceStyle
 import me.nathanfallet.teamcode.companion.presentation.theme.TeamCode
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.LocalSessionViewModel
 import me.nathanfallet.teamcode.companion.resources.Res
 import me.nathanfallet.teamcode.companion.resources.action_cancel
+import me.nathanfallet.teamcode.companion.resources.action_retry
+import me.nathanfallet.teamcode.companion.resources.local_session_known
+import me.nathanfallet.teamcode.companion.resources.local_session_known_empty
+import me.nathanfallet.teamcode.companion.resources.local_session_known_loading
+import me.nathanfallet.teamcode.companion.resources.local_session_known_none
 import me.nathanfallet.teamcode.companion.resources.local_session_agent
 import me.nathanfallet.teamcode.companion.resources.local_session_agent_claude
 import me.nathanfallet.teamcode.companion.resources.local_session_agent_codex
@@ -192,6 +203,7 @@ private fun Form(viewModel: LocalSessionViewModel) {
         }
         Text(stringResource(Res.string.local_session_folder_hint), color = colors.muted, fontSize = 12.5.sp)
     }
+    LocalKnownFolders(viewModel)
     LocalResumeFields(viewModel)
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Text(stringResource(Res.string.local_session_agent), color = colors.text, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
@@ -217,6 +229,57 @@ private fun Form(viewModel: LocalSessionViewModel) {
         }
         if (state.bypassPermissions) Banner(stringResource(Res.string.local_session_bypass_warning), Tone.WARN, Modifier.testTag("local-bypass-warning"))
         else Text(stringResource(Res.string.local_session_bypass_hint_off), color = colors.muted, fontSize = 12.5.sp, lineHeight = 17.sp)
+    }
+}
+
+/**
+ * "Known folders" under the folder, styled like the resume picker: closed it shows what it is for (or the folder
+ * chosen from it), opened it lists the folders this device already knows, the most recent first, to choose with one tap.
+ * The browse picker above stays for a folder that is not listed. Read from this computer's files when first opened,
+ * never through the server; a failure says why and offers Retry.
+ */
+@Composable
+private fun LocalKnownFolders(viewModel: LocalSessionViewModel) {
+    val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val colors = TeamCode.colors
+    val chosen = state.knownFolders?.firstOrNull { it.path == state.directory }
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.testTag("known-folders")) {
+        Group {
+            Row(
+                Modifier.fillMaxWidth().heightIn(min = 56.dp).clickable(enabled = !state.starting, role = Role.Button, onClick = viewModel::onFoldersOpen)
+                    .padding(horizontal = 14.dp, vertical = 8.dp).testTag("known-folders-toggle"),
+                verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(chosen?.name ?: stringResource(Res.string.local_session_known), color = colors.text, fontWeight = FontWeight.SemiBold, fontSize = 15.sp,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(chosen?.path ?: stringResource(Res.string.local_session_known_none), style = MetaStyle, color = colors.muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+                Icon(if (state.foldersOpen) PhosphorIcons.Regular.CaretUp else PhosphorIcons.Regular.CaretDown, null, tint = colors.muted, modifier = Modifier.size(16.dp))
+            }
+            if (state.foldersOpen) {
+                GroupDivider()
+                if (state.loadingFolders && state.knownFolders == null) {
+                    BusyRow(true)
+                    Text(stringResource(Res.string.local_session_known_loading), color = colors.muted, fontSize = 13.sp, modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp))
+                }
+                if (state.foldersError != null) Column(Modifier.padding(horizontal = 14.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    ErrorText(state.foldersError, Modifier.testTag("known-folders-error"))
+                    TcButton(stringResource(Res.string.action_retry), onClick = viewModel::onFoldersRetry, kind = ButtonKind.SECONDARY, small = true, modifier = Modifier.testTag("known-folders-retry"))
+                }
+                state.knownFolders?.let { folders ->
+                    Column(Modifier.selectableGroup()) {
+                        folders.forEachIndexed { index, folder ->
+                            if (index > 0) GroupDivider()
+                            Option(folder.name, folder.path, selected = state.directory == folder.path, tag = "known-folder-$index") { viewModel.onKnownFolder(folder.path) }
+                        }
+                        if (folders.isEmpty() && state.foldersError == null)
+                            Text(stringResource(Res.string.local_session_known_empty), color = colors.muted, fontSize = 14.sp,
+                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp).testTag("known-folders-empty"))
+                    }
+                }
+            }
+        }
     }
 }
 

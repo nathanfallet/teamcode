@@ -10,6 +10,8 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.runComposeUiTest
 import me.nathanfallet.teamcode.companion.domain.repositories.Features
+import me.nathanfallet.teamcode.companion.domain.services.KnownFolder
+import me.nathanfallet.teamcode.companion.domain.services.LocalHostException
 import me.nathanfallet.teamcode.companion.domain.services.LocalAvailability
 import me.nathanfallet.teamcode.companion.domain.services.LocalHost
 import me.nathanfallet.teamcode.companion.domain.services.LocalSessionRequest
@@ -40,6 +42,9 @@ class LocalSessionSheetTest {
         override suspend fun start(accountId: String, request: LocalSessionRequest) = "s1".also { started += request }
         var listing: LocalResumables = LocalResumables.Page(ResumableSessions(listOf(ResumableSession(ID, "Fix the flaky login test", 0, 6))))
         override suspend fun resumable(accountId: String, directory: String, before: Long?) = listing
+        var folders: List<KnownFolder> = emptyList()
+        var foldersFailure: Exception? = null
+        override suspend fun knownFolders(accountId: String): List<KnownFolder> { foldersFailure?.let { throw it }; return folders }
     }
 
     private fun model(host: Host): LocalSessionViewModel {
@@ -135,5 +140,42 @@ class LocalSessionSheetTest {
         onNodeWithTag("resume-empty").assertExists()
     }
 
-    private companion object { const val ID = "0000000a-aaaa-4bbb-8ccc-00000000000a" }
+    @Test fun knownFoldersUnfoldLikeTheResumePickerAndChoosingOneFillsTheFolder() = runComposeUiTest {
+        val host = Host(LocalAvailability.Ready).apply { folders = listOf(KnownFolder("/Users/ada/git/api", 5_000), KnownFolder("/Users/ada/git/web")) }
+        val viewModel = model(host)
+        setContent { TeamCodeTheme { LocalSessionSheet(viewModel, onDismiss = {}, onStarted = {}) } }
+        waitUntil { viewModel.uiState.value.availability != null }
+        onNodeWithTag("known-folder-0").assertDoesNotExist()
+        onNodeWithTag("known-folders-toggle").assertTextContains("Known folders")
+        onNodeWithTag("known-folders-toggle").performClick()
+        waitUntil { viewModel.uiState.value.knownFolders != null }
+        onNodeWithTag("known-folder-0").assertTextContains("api")
+        onNodeWithTag("known-folder-1").assertTextContains("/Users/ada/git/web", substring = true)
+        onNodeWithTag("known-folder-1").performClick()
+        onNodeWithTag("local-directory").assertTextContains("/Users/ada/git/web")
+        onNodeWithTag("known-folder-0").assertDoesNotExist()
+        onNodeWithTag("known-folders-toggle").assertTextContains("web")
+        onNodeWithTag("local-start").assertIsEnabled()
+        // The browse picker still gives a folder that is not listed.
+        onNodeWithTag("local-choose-folder").performClick()
+        waitUntil { viewModel.uiState.value.directory == "/Users/ada/git/paywall" }
+        onNodeWithTag("known-folders-toggle").assertTextContains("Known folders")
+    }
+
+    @Test fun noKnownFolderIsSaidAndAFailureOffersRetry() = runComposeUiTest {
+        val host = Host(LocalAvailability.Ready).apply { foldersFailure = LocalHostException("Cannot read folders.json.") }
+        val viewModel = model(host)
+        setContent { TeamCodeTheme { LocalSessionSheet(viewModel, onDismiss = {}, onStarted = {}) } }
+        waitUntil { viewModel.uiState.value.availability != null }
+        onNodeWithTag("known-folders-toggle").performClick()
+        waitUntil { viewModel.uiState.value.foldersError != null }
+        onNodeWithTag("known-folders-error").assertExists()
+        host.foldersFailure = null
+        onNodeWithTag("known-folders-retry").performClick()
+        waitUntil { viewModel.uiState.value.knownFolders != null }
+        onNodeWithTag("known-folders-empty").assertExists()
+        onNodeWithTag("known-folders-error").assertDoesNotExist()
+    }
+
+    private companion object { const val ID ="0000000a-aaaa-4bbb-8ccc-00000000000a" }
 }
