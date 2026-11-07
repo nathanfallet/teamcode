@@ -37,6 +37,7 @@ import me.nathanfallet.teamcode.companion.domain.usecases.sessions.SendMessageUs
 import me.nathanfallet.teamcode.companion.domain.usecases.sessions.GetSessionUseCase
 import me.nathanfallet.teamcode.companion.domain.usecases.sessions.LoadSessionsUseCase
 import me.nathanfallet.teamcode.companion.domain.usecases.transcript.FollowTranscriptUseCase
+import me.nathanfallet.teamcode.companion.domain.usecases.transcript.ListAgentsUseCase
 import me.nathanfallet.teamcode.companion.domain.usecases.transcript.LoadTranscriptUseCase
 import me.nathanfallet.teamcode.companion.infrastructure.repositories.AccountCalls
 import me.nathanfallet.teamcode.companion.infrastructure.repositories.CachedFeaturesRepository
@@ -100,6 +101,7 @@ val domainModule = module {
     single { SessionFeed(get(), get(), get()) }
     single { FollowSessionListUseCase(get(), get(), get()) }
     single { LoadTranscriptUseCase(get(), get(), get()) }
+    single { ListAgentsUseCase(get(), get(), get()) }
     single { FollowTranscriptUseCase(get(), get()) }
     single { SendMessageUseCase(get(), get(), get(), get()) }
     single { ControlSessionUseCase(get(), get(), get(), get()) }

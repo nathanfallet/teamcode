@@ -20,6 +20,7 @@ import me.nathanfallet.teamcode.companion.domain.models.ModelOption
 import me.nathanfallet.teamcode.companion.domain.models.PermissionAnswer
 import me.nathanfallet.teamcode.companion.domain.models.QuestionChoice
 import me.nathanfallet.teamcode.companion.domain.models.CompanionException
+import me.nathanfallet.teamcode.companion.domain.models.KnownAgent
 import me.nathanfallet.teamcode.companion.domain.models.FileProblem
 import me.nathanfallet.teamcode.companion.domain.models.PickedFile
 import me.nathanfallet.teamcode.companion.domain.usecases.files.SessionFilesUseCase
@@ -41,9 +42,11 @@ import me.nathanfallet.teamcode.companion.domain.usecases.sessions.GetSessionUse
 import me.nathanfallet.teamcode.companion.domain.usecases.sessions.SendMessageUseCase
 import me.nathanfallet.teamcode.companion.domain.usecases.sessions.reconciled
 import me.nathanfallet.teamcode.companion.domain.usecases.transcript.FollowTranscriptUseCase
+import me.nathanfallet.teamcode.companion.domain.usecases.transcript.ListAgentsUseCase
 import me.nathanfallet.teamcode.companion.domain.usecases.transcript.LoadTranscriptUseCase
 import me.nathanfallet.teamcode.companion.domain.usecases.transcript.Transcript
 import me.nathanfallet.teamcode.companion.presentation.navigation.SessionRoute
+import me.nathanfallet.teamcode.companion.presentation.transcript.AGENT_TOOLS
 
 /** The panel's two views: the subagents and background work, or the agent's todo. */
 enum class PanelTab { AGENTS, TODO }
@@ -145,7 +148,22 @@ data class SessionUiState(
     val todoReconnecting: Boolean = false,
     /** The panel's selected view; the todo shows by itself while there is nothing else to list. */
     val panelTab: PanelTab = PanelTab.AGENTS,
+    /** The server pages each agent's events apart and lists subagents (`cloud.transcript.feeds.v1`); false: one feed, as before. */
+    val feeds: Boolean = false,
+    /** The session's subagents as the server tracks them, so their start and state are right without their events loaded. */
+    val agents: List<KnownAgent> = emptyList(),
+    /** The subagent feeds whose page is on its way. */
+    val loadingFeeds: Set<String> = emptySet(),
 ) {
+    /** The cursor of the next older page of [thread]'s events (null: the main agent's); null when everything was loaded. Without feeds one cursor serves every thread. */
+    fun olderOf(thread: String?): Long? = if (thread == null || !feeds) transcript.nextBefore else transcript.feeds[thread]
+
+    /** An older page of [thread] is on its way. */
+    fun loadingOlderOf(thread: String?): Boolean = if (thread == null || !feeds) loadingOlder else thread in loadingFeeds
+
+    /** [thread]'s newest page was read (always, for the main agent's, once the first page is there, and without feeds). */
+    fun threadLoaded(thread: String?): Boolean = if (thread == null || !feeds) loaded else thread in transcript.feeds
+
     /** The session's agent runs (ready or active): only then has it background tasks. */
     val agentRuns: Boolean get() = session?.state == SessionState.READY || session?.state == SessionState.ACTIVE
 
@@ -196,6 +214,8 @@ class SessionViewModel(
     filesUseCase: SessionFilesUseCase? = null,
     /** Null when the app does not read todos: no Todo view, no counter. */
     private val followTodo: FollowTodoUseCase? = null,
+    /** Null when the app does not list subagents: their state is read from the loaded events alone. */
+    private val listAgents: ListAgentsUseCase? = null,
 ) : ViewModel() {
     private val state = MutableStateFlow(SessionUiState())
     val uiState: StateFlow<SessionUiState> = state.asStateFlow()
@@ -246,10 +266,14 @@ class SessionViewModel(
                 try { refreshSession() } catch (error: CancellationException) { throw error } catch (error: CompanionException.NotFound) { throw error } catch (_: Exception) { }
                 loading.withLock {
                     if (!state.value.loaded) {
-                        val page = loadTranscript(route.accountId, route.sessionId)
-                        state.update { it.withTranscript(it.transcript.withLatest(page)).copy(loaded = true) }
+                        // With feeds the conversation opens on the main agent's own events: a subagent's burst of steps
+                        // never pushes its messages out of the page. Each subagent has its own pages, read when opened.
+                        val feeds = try { loadTranscript.feeds(route.accountId) } catch (error: CancellationException) { throw error } catch (_: Exception) { false }
+                        val page = loadTranscript(route.accountId, route.sessionId, feed = if (feeds) MAIN_FEED else null)
+                        state.update { it.withTranscript(it.transcript.withLatest(page)).copy(loaded = true, feeds = feeds) }
                     }
                 }
+                refreshAgents()
                 var reconnected = false
                 followTranscript(route.accountId, route.sessionId, state.value.transcript.newestSeq).collect { update ->
                     when (update) {
@@ -257,12 +281,13 @@ class SessionViewModel(
                             state.update { it.copy(live = LiveState.LIVE) }
                             // Back after a cut: the session may have been paused or resumed meanwhile.
                             // Beside the stream, so a slow header never holds up the events.
-                            if (reconnected) { reconnected = false; viewModelScope.launch { refreshSessionQuietly() } }
+                            if (reconnected) { reconnected = false; viewModelScope.launch { refreshSessionQuietly() }; refreshAgents() }
                         }
                         is LiveUpdate.Item -> {
                             // A turn starting or ending settles any interruption kept for a retry: a later tap is a new one.
                             if (update.value is TranscriptEvent.Turn) interruptKey = null
                             state.update { it.withTranscript(it.transcript.withLive(update.value)).withTurn(update.value).withTasks(update.value).copy(live = LiveState.LIVE) }
+                            if (changesAgents(update.value)) refreshAgents()
                         }
                         is LiveUpdate.Reconnecting -> { reconnected = true; state.update { it.copy(live = LiveState.RECONNECTING) } }
                         LiveUpdate.Gap -> Unit
@@ -285,6 +310,7 @@ class SessionViewModel(
     fun stop() {
         started = false
         follow?.cancel(); follow = null
+        agentsJob?.cancel(); agentsJob = null
         header?.cancel(); header = null
         todoJob?.cancel(); todoJob = null
         state.update { if (it.live == LiveState.ENDED) it else it.copy(live = LiveState.STOPPED) }
@@ -297,7 +323,10 @@ class SessionViewModel(
         if (follow?.isActive == true) loadOlder() else start()
     }
 
+    /** Older events of the thread on screen: its own feed's page, or the main agent's. */
     fun loadOlder() {
+        val thread = state.value.thread
+        if (thread != null && state.value.feeds) { loadFeed(thread); return }
         val before = state.value.transcript.nextBefore ?: return
         if (state.value.loadingOlder) return
         state.update { it.copy(loadingOlder = true) }
@@ -306,7 +335,7 @@ class SessionViewModel(
                 loading.withLock {
                     // Another page may have arrived meanwhile.
                     if (state.value.transcript.nextBefore != before) return@withLock
-                    val page = loadTranscript(route.accountId, route.sessionId, before)
+                    val page = loadTranscript(route.accountId, route.sessionId, before, if (state.value.feeds) MAIN_FEED else null)
                     state.update { it.copy(transcript = it.transcript.withOlder(page)) }
                 }
             } catch (error: CancellationException) {
@@ -316,6 +345,73 @@ class SessionViewModel(
             } finally {
                 state.update { it.copy(loadingOlder = false) }
             }
+        }
+    }
+
+    /**
+     * The newest page of the subagent [feed] when it was never read, an older one when it was: a feed has its own cursor,
+     * so going up in a subagent's thread never loads the main agent's history, nor the other way round.
+     */
+    private fun loadFeed(feed: String) {
+        val current = state.value
+        if (!current.feeds || feed in current.loadingFeeds) return
+        val read = feed in current.transcript.feeds
+        val before = if (read) current.transcript.feeds[feed] ?: return else null
+        state.update { it.copy(loadingFeeds = it.loadingFeeds + feed) }
+        viewModelScope.launch {
+            try {
+                loading.withLock {
+                    // Another page may have arrived meanwhile.
+                    val now = state.value.transcript.feeds
+                    if ((feed in now) != read || now[feed] != before && read) return@withLock
+                    val page = loadTranscript(route.accountId, route.sessionId, before, feed)
+                    state.update { it.withTranscript(it.transcript.withFeed(feed, page)) }
+                }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                state.update { it.copy(error = error.userMessage()) }
+            } finally {
+                state.update { it.copy(loadingFeeds = it.loadingFeeds - feed) }
+            }
+        }
+    }
+
+    // ---- The server's list of subagents -------------------------------------------------------------------------------
+
+    private var agentsJob: Job? = null
+    private var agentsAgain = false
+
+    /** An event after which the server's list of subagents may have changed: a subagent started, answered, or the tasks moved. */
+    private fun changesAgents(event: TranscriptEvent): Boolean = when (event) {
+        is TranscriptEvent.ToolCall -> event.name in AGENT_TOOLS || event.parentToolUseId != null && state.value.agents.any { it.id == event.parentToolUseId }
+        is TranscriptEvent.ToolResult -> state.value.agents.any { it.id == event.id } || event.parentToolUseId == null && state.value.transcript.events.any { it is TranscriptEvent.ToolCall && it.id == event.id && it.name in AGENT_TOOLS }
+        is TranscriptEvent.Tasks -> true
+        is TranscriptEvent.Turn -> event.phase.finished
+        else -> false
+    }
+
+    /**
+     * Reads the server's list of subagents: their start, state and step count without their events loaded. A request while
+     * one runs asks for one more read after it, a second later at the earliest: a burst of events costs two reads, not one each.
+     */
+    private fun refreshAgents() {
+        val list = listAgents ?: return
+        if (!state.value.feeds) return
+        if (agentsJob?.isActive == true) { agentsAgain = true; return }
+        agentsJob = viewModelScope.launch {
+            do {
+                agentsAgain = false
+                try {
+                    val agents = list(route.accountId, route.sessionId)
+                    state.update { it.copy(agents = agents) }
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (_: Exception) {
+                    // The panel keeps what the loaded events show; the next change reads again.
+                }
+                if (agentsAgain) delay(AGENTS_MILLIS)
+            } while (agentsAgain)
         }
     }
 
@@ -391,7 +487,7 @@ class SessionViewModel(
     // ---- Subagents and background tasks -------------------------------------------------------------------------------
 
     /** Shows the subagent [id]'s thread in place of the main agent's (or beside it, on an extra-large window). */
-    fun openThread(id: String) = state.update { it.copy(thread = id) }
+    fun openThread(id: String) { state.update { it.copy(thread = id) }; if (id !in state.value.transcript.feeds) loadFeed(id) }
     fun backToMain() = state.update { it.copy(thread = null) }
     fun selectPanelTab(tab: PanelTab) = state.update { it.copy(panelTab = tab) }
 
@@ -653,6 +749,9 @@ class SessionViewModel(
 
     private companion object {
         const val HEADER_MILLIS = 30_000L
+        const val AGENTS_MILLIS = 1_000L
+        /** The `feed` value of the main agent's own events. */
+        const val MAIN_FEED = "main"
     }
 
     /** Bumped by each action's answer: a header read that started before it is older and is dropped. */

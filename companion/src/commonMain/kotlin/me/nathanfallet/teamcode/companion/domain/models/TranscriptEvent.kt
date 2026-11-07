@@ -76,5 +76,24 @@ enum class TurnPhase(val wire: String) {
     }
 }
 
+/** How the server reports a subagent's progress (`cloud.transcript.feeds.v1`). */
+enum class KnownAgentState { RUNNING, COMPLETED, FAILED, UNKNOWN }
+
+/**
+ * A subagent as the server tracks it, whatever part of the transcript was loaded: [id] is its `Agent` call's id and the
+ * feed of its events, [parentId] the feed that started it (null: the main agent), [taskId] the id to stop it with.
+ */
+data class KnownAgent(
+    val id: String,
+    val type: String?,
+    val description: String,
+    val state: KnownAgentState,
+    val startedAt: Long,
+    val endedAt: Long?,
+    val steps: Int,
+    val parentId: String?,
+    val taskId: String?,
+)
+
 /** A page of history, oldest first. [nextBefore] continues upward; null when nothing older is kept. */
 data class TranscriptPage(val events: List<TranscriptEvent>, val nextBefore: Long?, val lastSeq: Long)

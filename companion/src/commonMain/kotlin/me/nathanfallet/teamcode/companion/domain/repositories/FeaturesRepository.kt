@@ -13,6 +13,8 @@ object Features {
     /** The members a session can be given to, listed to members too (`GET /cloud/transfer-recipients`). */
     const val TRANSFER_RECIPIENTS = "cloud.transfer.recipients.v1"
     const val TRANSCRIPT = "cloud.transcript.v1"
+    /** Events carry a feed, `GET …/events?feed=` pages one agent's events alone and `GET …/agents` lists the subagents with their real state. */
+    const val TRANSCRIPT_FEEDS = "cloud.transcript.feeds.v1"
     const val MESSAGES = "cloud.messages.v1"
     const val EVENTS = "cloud.events.v1"
     /** Sessions say what their agent waits for (`waiting`), and the feed takes `cloud.session.waiting` and `.answered`. */
