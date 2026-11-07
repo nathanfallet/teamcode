@@ -27,8 +27,9 @@ private const val MAX_JSON_ARRAY = CloudTranscriptLimits.MAX_ENTRIES
 /** Keys whose values are model reasoning or its signature; never stored even if an adapter forwards them. */
 private val DROPPED_KEYS = CloudTranscriptLimits.DROPPED_KEYS
 
-internal fun CloudEvent.view() = CloudEventView(seq, type.wire, at, epoch, Serialization.json.parseToJsonElement(data).jsonObject)
+internal fun CloudEvent.view() = CloudEventView(seq, type.wire, at, epoch, Serialization.json.parseToJsonElement(data).jsonObject, feed)
 private fun CloudEventPage.view() = CloudEventPageView(events.map { it.view() }, firstSeq, lastSeq, nextAfter, nextBefore)
+private fun CloudSubagent.view() = CloudSubagentView(id, type, description, state, startedAt, endedAt, steps, parentId, taskId)
 private fun CloudInput.view() = CloudInputView(id, kind.wire, status.wire, authorId, text, wake, woke, clientKey, createdAt, deliveredAt, deliveredEpoch, consumedAt, finishedAt, reason, eventSeq)
 private fun CloudFile.view() = CloudFileView(id, sessionId, name, size, contentType.orEmpty(), sha256.orEmpty(), createdAt, expiresAt)
 private fun CloudFilePolicy.view() = CloudFilePolicyView(available, reason, maxFileBytes, maxMessageBytes, maxFilesPerMessage, types)
@@ -160,7 +161,12 @@ internal fun Route.cloudConversationRoutes(conversation: CloudConversation) {
 
         get("/sessions/{id}/events") {
             val limit = call.longQuery("limit")?.toInt() ?: 100
-            call.respond(service.events(call.principal, call.sessionId(), call.longQuery("after"), call.longQuery("before"), limit).view())
+            // A server without `cloud.transcript.feeds.v1` ignores `feed`; this one honors it, so a client asks only when it is advertised.
+            val feed = call.request.queryParameters.getAll("feed")?.let { it.singleOrNull() ?: throw TeamFailure("invalid_query", 400, "Send feed once.") }
+            call.respond(service.events(call.principal, call.sessionId(), call.longQuery("after"), call.longQuery("before"), limit, feed).view())
+        }
+        get("/sessions/{id}/agents") {
+            call.respond(CloudSubagentListView(service.subagents(call.principal, call.sessionId()).map { it.view() }))
         }
         get("/sessions/{id}/events/stream") {
             // Last-Event-ID wins over ?after so a reconnecting EventSource resumes where it stopped.

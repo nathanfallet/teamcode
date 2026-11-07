@@ -249,6 +249,16 @@ object CloudConversationRules {
     private val permissionRequestId = Regex("[\\x21-\\x7E]{1,128}")
     fun isPermissionRequestId(id: String) = permissionRequestId.matches(id)
 
+    /** The feed a page is asked for: `main`, or the id of the `tool.call` that started a subagent. */
+    fun validateFeed(feed: String?) {
+        if (feed != null && !FEED.matches(feed)) throw TeamFailure("invalid_feed", 400, "Use feed=main or the id of a subagent's tool call (at most 128 letters, digits and _ . : -).")
+    }
+
+    val FEED = Regex("[A-Za-z0-9_.:-]{1,128}")
+    const val MAIN_FEED = "main"
+    /** Subagents one listing returns at most (the newest). */
+    const val MAX_SUBAGENTS = 200
+
     fun validatePage(limit: Int, after: Long?, before: Long?) {
         if (limit !in 1..MAX_PAGE) throw TeamFailure("invalid_limit", 400, "Use a page size between 1 and $MAX_PAGE.")
         if (after != null && before != null) throw TeamFailure("invalid_cursor", 400, "Send after or before, not both.")

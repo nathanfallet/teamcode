@@ -379,10 +379,23 @@ private fun ApiCatalog.cloudConversation() {
             queryNumber("after", "Events after this sequence number.")
             queryNumber("before", "Events before this sequence number.")
             queryNumber("limit", "The page size (100 by default).")
+            queryText("feed", "Capability `cloud.transcript.feeds.v1`: `main` for the main agent's events only, or the id of a subagent's `tool.call` for that subagent's. Cursors and `firstSeq` follow the feed; `lastSeq` stays the session's newest event. Without it, every event, as before; a server without the capability ignores it.")
         }
         responses {
             ok<CloudEventPageView>("A page of events.")
-            badRequest("An invalid cursor or limit (`invalid_query`, `invalid_cursor`).")
+            badRequest("An invalid cursor, limit or feed (`invalid_query`, `invalid_cursor`, `invalid_feed`).")
+            notFound("No such session (`not_found`).")
+        }
+    }
+    get("/api/v1/cloud/sessions/{id}/agents") {
+        operationId = "listCloudSubagents"; tag(ApiTags.CLOUD_CONVERSATION)
+        summary = "List a session's subagents"
+        description = "Capability `cloud.transcript.feeds.v1`. The session's subagents, oldest first (the newest 200), with when they " +
+            "started, their state (`running`, `completed`, `failed`) and their steps, kept as events arrive: correct whatever part of the " +
+            "transcript the caller read. `id` is the `feed` of the agent's events. Agents that ran before the server knew feeds are not listed. Requires the `transcript` permission."
+        parameters { sessionId() }
+        responses {
+            ok<CloudSubagentListView>("The subagents.")
             notFound("No such session (`not_found`).")
         }
     }

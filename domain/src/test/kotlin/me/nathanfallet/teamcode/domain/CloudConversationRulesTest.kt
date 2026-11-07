@@ -16,6 +16,11 @@ import kotlin.test.*
 class CloudConversationRulesTest {
     private fun masked(text: String) = CloudConversationRules.mask(text)
 
+    @Test fun feedsAreMainOrAToolCallId() {
+        for (ok in listOf(null, "main", "toolu_01AbC", "a.b:c-d_e", "x".repeat(128))) CloudConversationRules.validateFeed(ok)
+        for (bad in listOf("", "bad feed", "x".repeat(129), "a/b", "é")) assertEquals("invalid_feed", assertFailsWith<TeamFailure> { CloudConversationRules.validateFeed(bad) }.code)
+    }
+
     @Test fun credentialsAreMasked() {
         val secrets = listOf(
             "sk-ant-api03-${"a1".repeat(20)}", "sk-proj-${"Z9".repeat(12)}", "ghp_${"A1b2".repeat(6)}", "github_pat_${"x1".repeat(15)}",

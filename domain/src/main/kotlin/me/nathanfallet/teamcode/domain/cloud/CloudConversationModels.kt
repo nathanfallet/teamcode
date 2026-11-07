@@ -24,7 +24,16 @@ enum class CloudEventType(val wire: String) {
 }
 
 /** [data] is a bounded, secret-masked JSON object, encoded by the presentation layer. */
-data class CloudEvent(val sessionId: String, val seq: Long, val type: CloudEventType, val at: Long, val epoch: Int, val data: String)
+data class CloudEvent(val sessionId: String, val seq: Long, val type: CloudEventType, val at: Long, val epoch: Int, val data: String, val feed: String? = null)
+
+/**
+ * A subagent of a session: [id] is the `tool.call` that started it and the feed of its events, [parentId] the feed it
+ * was started from (null: the main agent's), [taskId] the live background task standing for it, if one was reported.
+ */
+data class CloudSubagent(
+    val id: String, val type: String?, val description: String, val state: String, val startedAt: Long, val endedAt: Long?,
+    val steps: Int, val parentId: String?, val taskId: String?,
+)
 /** Lifecycle hints the presentation layer reads from an event: a turn starting or ending, the conversation's resumability. */
 enum class TurnMarker { STARTED, ENDED }
 

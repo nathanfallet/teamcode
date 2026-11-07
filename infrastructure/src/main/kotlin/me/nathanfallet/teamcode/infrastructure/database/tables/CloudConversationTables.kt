@@ -15,12 +15,45 @@ object CloudSessionEvents : Table("cloud_session_events") {
     val type = varchar("type", 32)
     val at = long("at")
     val data = text("data")
+    /**
+     * The `tool.call` id of the subagent that produced the event (its `parentToolUseId`); empty for the main agent and for
+     * events written before feeds. Never null, so the main feed is an equality like any other and the index below serves it
+     * (the optimizer reads `IS NULL` plus a range through the primary key and filters instead).
+     */
+    val feed = varchar("feed", 128).default("")
     override val primaryKey = PrimaryKey(sessionId, seq)
     init {
         uniqueIndex("cloud_event_runner_seq", sessionId, epoch, runnerSeq)
+        /** One feed's events in order: equality on the feed (or `IS NULL` for the main agent), then the sequence, so a page reads only its own rows. */
+        index("cloud_event_feed", false, sessionId, feed, seq)
         index("cloud_event_retention", false, teamId, at)
         /** Events of one type in order: a permission request, and what closed it, without reading the tool events between. */
         index("cloud_event_type", false, sessionId, type, seq)
+    }
+}
+
+/**
+ * The subagents of a session, kept as their events arrive so their start and state never depend on how far back a client
+ * read. [id] is the `tool.call` that started the agent; [parentId] the feed it was started from. [state] `running`,
+ * `completed` or `failed`; [taskId] is set while the runner reports the agent as a live background task, and keeps a
+ * background agent `running` after the call that launched it returned. [resultError] records that the call's result was an error, for when the live task ends.
+ */
+object CloudSessionSubagents : Table("cloud_session_subagents") {
+    val sessionId = reference("session_id", CloudSessions.id, onDelete = ReferenceOption.CASCADE, onUpdate = ReferenceOption.NO_ACTION, fkName = "cloud_session_subagents_session")
+    val id = varchar("id", 128)
+    val type = varchar("type", 64).nullable()
+    val description = varchar("description", 200)
+    val state = varchar("state", 16)
+    val startedAt = long("started_at")
+    val endedAt = long("ended_at").nullable()
+    val steps = integer("steps")
+    val parentId = varchar("parent_id", 128).nullable()
+    val taskId = varchar("task_id", 64).nullable()
+    val resultError = bool("result_error")
+    override val primaryKey = PrimaryKey(sessionId, id)
+    init {
+        /** The newest agents of a session, and the ones still running, in start order. */
+        index("cloud_subagent_started", false, sessionId, startedAt)
     }
 }
 
