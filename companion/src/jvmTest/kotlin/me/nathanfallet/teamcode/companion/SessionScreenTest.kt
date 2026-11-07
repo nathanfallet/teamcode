@@ -204,12 +204,15 @@ class SessionScreenTest {
     }
 
     /** A history of [count] agent messages (sequence 1..count) served 50 at a time, newest page first, like the server. */
-    private fun pagedHistory(count: Int, tools: Boolean = false, text: (Int) -> String = { "Message $it" }) = object : TranscriptRepository {
+    private fun pagedHistory(count: Int, tools: Boolean = false, gate: kotlinx.coroutines.CompletableDeferred<Unit>? = null, requests: MutableList<Long?>? = null, text: (Int) -> String = { "Message $it" }) = object : TranscriptRepository {
         private val all: List<TranscriptEvent> = (1..count).map { seq ->
             if (tools && seq % 5 != 0) TranscriptEvent.ToolCall(seq.toLong(), 0, "t$seq", "Bash", "{}", "step $seq", null)
             else TranscriptEvent.AgentMessage(seq.toLong(), 0, text(seq), null)
         }
         override suspend fun page(accountId: String, sessionId: String, before: Long?): TranscriptPage {
+            requests?.add(before)
+            // The older pages wait for the test, which measures the list before they land.
+            if (before != null) gate?.await()
             val older = all.filter { before == null || it.seq < before }
             val events = older.takeLast(50)
             return TranscriptPage(events, nextBefore = events.first().seq.takeIf { it > 1 }, lastSeq = count.toLong())
@@ -219,20 +222,25 @@ class SessionScreenTest {
 
     @Test fun loadingEarlierEventsKeepsTheMessageBeingReadWhereItWas() = runComposeUiTest {
         val sessions = FakeSessionRepository().apply { byId["s1"] = cloudSession("s1", SessionState.PAUSED) }
-        val model = viewModel(sessions, pagedHistory(150))
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val requests = mutableListOf<Long?>()
+        val model = viewModel(sessions, pagedHistory(150, gate = gate, requests = requests))
         setContent { TeamCodeTheme { Box(Modifier.size(900.dp, 700.dp)) { SessionScreen(model, memberId = "m1", onBack = {}) } } }
         waitUntil { model.uiState.value.loaded }
         waitForIdle()
+        assertEquals(listOf<Long?>(null), requests, "the list opens on its newest messages: nothing older is asked for before the member goes up")
         // The member scrolls up by hand (that is what stops the list following the newest message), to the top of the
-        // loaded page: "Message 101" is its first message, right under the button.
+        // loaded page: "Message 101" is its first message, right under the loader, which asks for the page above by itself.
         onNodeWithTag("transcript").performTouchInput { swipeDown() }
         waitForIdle()
         onNodeWithTag("transcript").performScrollToIndex(0)
+        waitUntil { model.uiState.value.loadingOlder }
         waitForIdle()
+        assertEquals(listOf<Long?>(null, 101L), requests, "one request, no click")
         val listTop = onNodeWithTag("transcript").getBoundsInRoot().top
         val before = onNodeWithText("Message 101", useUnmergedTree = true).getBoundsInRoot().top
-        onNodeWithText("Load earlier events").performClick()
-        waitUntil { model.uiState.value.transcript.events.size == 100 }
+        gate.complete(Unit)
+        waitUntil { model.uiState.value.transcript.events.size >= 100 }
         waitForIdle()
         // Same message, nearly the same place: it moves up under the edge the button was at, not fifty messages away.
         val after = onNodeWithText("Message 101", useUnmergedTree = true).getBoundsInRoot().top

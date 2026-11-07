@@ -9,6 +9,9 @@ import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.longOrNull
 import me.nathanfallet.teamcode.api.models.CloudEventPageView
+import me.nathanfallet.teamcode.api.models.CloudSubagentView
+import me.nathanfallet.teamcode.companion.domain.models.KnownAgent
+import me.nathanfallet.teamcode.companion.domain.models.KnownAgentState
 import me.nathanfallet.teamcode.api.models.CloudEventTypes
 import me.nathanfallet.teamcode.api.models.CloudEventView
 import me.nathanfallet.teamcode.api.models.CloudProfileView
@@ -93,6 +96,12 @@ internal fun TeamEventView.sessionChange(): SessionChange? {
         todoTotal = if (type == SessionChange.TODO) data["total"].int() else null,
     )
 }
+
+internal fun CloudSubagentView.domain() = KnownAgent(
+    id, type?.takeIf { it.isNotBlank() }, description,
+    when (state) { "running" -> KnownAgentState.RUNNING; "completed" -> KnownAgentState.COMPLETED; "failed" -> KnownAgentState.FAILED; else -> KnownAgentState.UNKNOWN },
+    startedAt, endedAt, steps, parentId, taskId,
+)
 
 internal fun CloudEventPageView.domain() = TranscriptPage(events.map { it.domain() }, nextBefore, lastSeq)
 

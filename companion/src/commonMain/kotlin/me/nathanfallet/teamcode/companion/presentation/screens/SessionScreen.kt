@@ -228,10 +228,10 @@ fun SessionScreen(
     // What runs in the session, from the transcript already loaded: no request of its own.
     val events = state.transcript.events
     val live = remember(events, state.agentRuns) { liveTasks(events, state.agentRuns) }
-    val activeHint = remember(events, live) { subagentsOf(events, state.agentRuns, live?.tasks, 0).any { it.active } || !live?.tasks.isNullOrEmpty() }
+    val activeHint = remember(events, live, state.agents) { subagentsOf(events, state.agentRuns, live?.tasks, 0, state.agents).any { it.active } || !live?.tasks.isNullOrEmpty() }
     val now = rememberTicking(activeHint)
-    val work = remember(events, live, state.agentRuns, now) {
-        RunningWork(subagentsOf(events, state.agentRuns, live?.tasks, now), live, live?.tasks?.let { backgroundCommands(it, events) }.orEmpty())
+    val work = remember(events, live, state.agentRuns, now, state.agents) {
+        RunningWork(subagentsOf(events, state.agentRuns, live?.tasks, now, state.agents), live, live?.tasks?.let { backgroundCommands(it, events) }.orEmpty())
     }
     val byId = remember(work) { work.subagents.associateBy { it.id } }
     val mode = currentSubagentPanelMode()
@@ -506,12 +506,20 @@ private fun Transcript(state: SessionUiState, thread: String?, subagents: Map<St
     LazyColumn(modifier.fillMaxWidth().alpha(if (settled || !state.loaded) 1f else 0f).testTag("transcript"), state = listState,
         contentPadding = PaddingValues(vertical = 8.dp)) {
         item(key = "top") {
+            val older = state.olderOf(thread)
+            // Reaching the top loads the page above by itself, like a messaging app: this row is only composed while it is
+            // (nearly) on screen. Not before the list is pinned to the bottom (it starts at its top), and once per cursor:
+            // the next page is asked for only after this one landed, if the member is still at the top. A failed page stops
+            // the chain and offers the button, so nothing loops.
+            val failed = state.error != null && !state.loadingOlderOf(thread)
+            if (older != null && settled && !failed) LaunchedEffect(older, thread) { viewModel.loadOlder() }
             when {
-                state.loadingOlder -> BusyRow(true)
-                state.transcript.nextBefore != null -> TcButton(stringResource(Res.string.session_load_older), onClick = viewModel::loadOlder, kind = ButtonKind.GHOST, small = true)
+                state.loadingOlderOf(thread) -> BusyRow(true)
+                older != null && failed -> TcButton(stringResource(Res.string.session_load_older), onClick = viewModel::loadOlder, kind = ButtonKind.GHOST, small = true)
+                older != null -> BusyRow(true)
                 // A subagent's thread starts with its call: "nothing older" speaks of the whole conversation.
                 thread == null && state.loaded && items.isNotEmpty() -> TranscriptSeparator(stringResource(Res.string.session_nothing_older))
-                !state.loaded -> BusyRow(state.error == null)
+                !state.threadLoaded(thread) -> BusyRow(state.error == null)
             }
         }
         items(items, key = { it.key }) { TranscriptItemView(it, memberId, subagents, onOpenSubagent, today) }

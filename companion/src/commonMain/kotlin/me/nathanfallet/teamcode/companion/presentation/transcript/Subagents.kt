@@ -5,6 +5,8 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import me.nathanfallet.teamcode.companion.domain.models.BackgroundTask
+import me.nathanfallet.teamcode.companion.domain.models.KnownAgent
+import me.nathanfallet.teamcode.companion.domain.models.KnownAgentState
 import me.nathanfallet.teamcode.companion.domain.models.TranscriptEvent
 
 /** The tools that start a subagent: `Agent`, and `Task`, its name before Claude Code renamed it. */
@@ -69,7 +71,62 @@ private fun JsonObject.text(key: String) = (this[key] as? JsonPrimitive)?.takeIf
  * Every subagent the loaded events show, in the order they started. [running]: the session's agent runs (ready or
  * active); [tasks]: the runner's live tasks, null when it reports none (an older runner or server); [now] the clock.
  */
-fun subagentsOf(events: List<TranscriptEvent>, running: Boolean, tasks: List<BackgroundTask>?, now: Long): List<Subagent> {
+fun subagentsOf(events: List<TranscriptEvent>, running: Boolean, tasks: List<BackgroundTask>?, now: Long, known: List<KnownAgent> = emptyList()): List<Subagent> {
+    val read = subagentsRead(events, running, tasks, now)
+    if (known.isEmpty()) return read
+    return withKnown(read, known, running, tasks, now)
+}
+
+/**
+ * The subagents the loaded events show, completed by the server's own list ([known], `cloud.transcript.feeds.v1`): a
+ * subagent whose call is older than the loaded page is still listed, and one that is listed gets its real start, state
+ * and step count, which the loaded events alone understate. What the events say about a running one wins while it runs
+ * (they are newer than the list); a finished one, per the server, is finished.
+ */
+private fun withKnown(read: List<Subagent>, known: List<KnownAgent>, running: Boolean, tasks: List<BackgroundTask>?, now: Long): List<Subagent> {
+    val info = known.associateBy { it.id }
+    val merged = read.map { agent ->
+        val server = info[agent.id] ?: return@map agent
+        val state = when {
+            agent.state == SubagentState.RUNNING && agent.taskId != null -> agent.state
+            server.state == KnownAgentState.COMPLETED && !agent.finished -> SubagentState.DONE
+            server.state == KnownAgentState.FAILED && !agent.finished -> SubagentState.FAILED
+            else -> agent.state
+        }
+        val start = minOf(agent.startedAt, server.startedAt)
+        val active = state == SubagentState.RUNNING || state == SubagentState.BACKGROUND
+        val end = if (active) now else server.endedAt ?: (agent.startedAt + agent.durationMs)
+        agent.copy(state = state, startedAt = start, durationMs = (end - start).coerceAtLeast(0), steps = maxOf(agent.steps, server.steps), taskId = agent.taskId ?: server.taskId)
+    }
+    val shown = read.mapTo(mutableSetOf()) { it.id }
+    val extra = known.filter { it.id !in shown }
+    if (extra.isEmpty()) return merged
+    val parents = (read.associate { it.id to it.parentId } + known.associate { it.id to it.parentId })
+    val live = tasks.orEmpty().filter { it.subagent }.mapNotNull { it.toolUseId }.toSet()
+    val added = extra.map { agent ->
+        val state = when {
+            agent.id in live -> SubagentState.RUNNING
+            agent.state == KnownAgentState.COMPLETED -> SubagentState.DONE
+            agent.state == KnownAgentState.FAILED -> SubagentState.FAILED
+            agent.state == KnownAgentState.RUNNING && running -> SubagentState.RUNNING
+            else -> SubagentState.STOPPED
+        }
+        val active = state == SubagentState.RUNNING
+        val end = if (active) now else agent.endedAt ?: agent.startedAt
+        var depth = 0
+        var parent = agent.parentId
+        while (parent != null && depth < MAX_DEPTH) { depth++; parent = parents[parent] }
+        Subagent(
+            id = agent.id, type = agent.type ?: DEFAULT_TYPE, description = agent.description, state = state, startedAt = agent.startedAt,
+            durationMs = (end - agent.startedAt).coerceAtLeast(0), depth = depth, parentId = agent.parentId, steps = agent.steps, taskId = agent.taskId,
+        )
+    }
+    return (merged + added).sortedBy { it.startedAt }
+}
+
+private val Subagent.finished: Boolean get() = state == SubagentState.DONE || state == SubagentState.FAILED
+
+private fun subagentsRead(events: List<TranscriptEvent>, running: Boolean, tasks: List<BackgroundTask>?, now: Long): List<Subagent> {
     val calls = events.filterIsInstance<TranscriptEvent.ToolCall>().filter { it.name in AGENT_TOOLS && it.id.isNotEmpty() }
     if (calls.isEmpty()) return emptyList()
     val ids = calls.map { it.id }.toSet()
