@@ -1,0 +1,1 @@
+CREATE TABLE IF NOT EXISTS member_todo_settings (member_id VARCHAR(36), stop_hook_enabled BOOLEAN DEFAULT TRUE NOT NULL, CONSTRAINT pk_member_todo_settings PRIMARY KEY (member_id), CONSTRAINT member_todo_settings_member FOREIGN KEY (member_id) REFERENCES members(id) ON DELETE CASCADE);

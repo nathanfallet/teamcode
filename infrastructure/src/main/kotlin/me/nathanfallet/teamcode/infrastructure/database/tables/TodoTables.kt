@@ -60,3 +60,13 @@ object SessionTodoItems : Table("session_todo_items") {
         index("session_todo_item_position", false, sessionId, position)
     }
 }
+
+/**
+ * Per-member switch of the todo Stop hook (docs/todos.md, "Turning the Stop hook off for a member"). No row means the hook is
+ * on, so existing members keep today's behavior. The row ends with its member.
+ */
+object MemberTodoSettings : Table("member_todo_settings") {
+    val memberId = reference("member_id", Members.id, onDelete = ReferenceOption.CASCADE, onUpdate = ReferenceOption.NO_ACTION, fkName = "member_todo_settings_member")
+    val stopHookEnabled = bool("stop_hook_enabled").default(true)
+    override val primaryKey = PrimaryKey(memberId)
+}

@@ -11,6 +11,13 @@ class TodoServiceTest {
         var artifacts = mutableMapOf<String, Int>()
         var waits = mutableMapOf<String, WaitState>()
         var openWait = false
+        val hookOff = mutableSetOf<String>()
+        override suspend fun stopHookEnabled(teamId: String, memberId: String) = memberId !in hookOff
+        override suspend fun stopHookDisabled(teamId: String) = hookOff.toSet()
+        override suspend fun setStopHookEnabled(teamId: String, memberId: String, enabled: Boolean): Boolean {
+            if (memberId != "ada" && memberId != "root") return false
+            if (enabled) hookOff.remove(memberId) else hookOff.add(memberId); return true
+        }
         override suspend fun now() = 1_000L
         override suspend fun revalidate(actor: Principal) = Unit
         override suspend fun executionSession(tokenId: String): String? = null
@@ -75,6 +82,27 @@ class TodoServiceTest {
     private fun begin(background: Boolean = false) = TodoStopInput(TodoStopPhase.BEGIN, background = background)
     private fun verify(vararg items: TodoStopItemReport, orphans: List<String> = emptyList()) = TodoStopInput(TodoStopPhase.VERIFY, items = items.toList(), orphans = orphans, lastMessage = "I am stuck")
     private val pr = TodoCheck.PrMerged("acme/x")
+
+    private val root = Principal(Member("root", "root", Role.ADMIN, false, false), "token", "team", null)
+
+    @Test fun aMemberWhoseStopHookIsOffIsNeverHeldBack() = runBlocking {
+        val store = Store(); val service = TodoService(store)
+        service.create(ada, "s1", "Plan", emptyList(), listOf(item("a", TodoCheck.PrMerged("acme/x"))))
+        assertEquals(TodoStopAction.VERIFY, service.stop(ada, "s1", begin()).action)
+        service.setStopHook(root, "ada", false)
+        val before = store.list
+        val off = service.stop(ada, "s1", begin())
+        assertEquals(TodoStopAction.ALLOW, off.action); assertEquals("hook_disabled", off.why)
+        assertEquals(before, store.list, "nothing is counted or written while the hook is off")
+        service.setStopHook(root, "ada", true)
+        assertEquals(TodoStopAction.VERIFY, service.stop(ada, "s1", begin()).action)
+    }
+
+    @Test fun onlyAnAdministratorTurnsTheStopHookOff() = runBlocking {
+        val service = TodoService(Store())
+        assertEquals("forbidden", assertFailsWith<TeamFailure> { runBlocking { service.setStopHook(ada, "ada", false) } }.code)
+        assertEquals("not_found", assertFailsWith<TeamFailure> { runBlocking { service.setStopHook(root, "ghost", false) } }.code)
+    }
 
     @Test fun aStopWithNothingToHoldBackPassesWithoutAQuestion() = runBlocking {
         val store = Store(); val service = TodoService(store, Drops())

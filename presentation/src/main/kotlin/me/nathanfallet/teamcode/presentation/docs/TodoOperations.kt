@@ -102,6 +102,14 @@ internal fun ApiCatalog.todoOperations() {
         body<TodoWakeRequest>("How long the server may hold the answer back.")
         responses { ok<TodoWakeView>("The answers that arrived, and whether a wait is still open."); notFound("No such session.") }
     }
+    put("/api/v1/members/{id}/todo-stop-hook") {
+        operationId = "setMemberTodoStopHook"; tag(ApiTags.TODOS)
+        summary = "Turn the todo Stop hook on or off for a member"
+        description = "When off, the stops of the member's sessions pass without a question and the server-side reminder leaves them alone; their lists are still kept. A member has the hook on until an administrator turns it off. " +
+            "Interactive administrators only; no service key reaches this route."
+        body<TodoStopHookRequest>("`enabled`: true to hold the agent while its todo has open items.")
+        responses { ok<TodoStopHookView>("The setting now in force."); notFound("No such member of the team.") }
+    }
     post("/api/v1/todos/session/hook-error") {
         operationId = "recordTodoHookError"; tag(ApiTags.TODOS)
         summary = "Record a failure of the Stop hook"

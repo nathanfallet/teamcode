@@ -199,6 +199,8 @@ class TodoService(private val store: TodoStore, private val drops: TodoDropWaits
     suspend fun stop(actor: Principal, sessionId: String?, input: TodoStopInput): TodoStopDecision {
         val id = session(actor, sessionId, write = true)
         val list = reconcile(actor.teamId, id) ?: return TodoStopDecision(TodoStopAction.ALLOW, null, why = "no_list")
+        // An administrator turned the hook off for the session's owner: the stop passes before anything is run, counted or written.
+        if (!store.stopHookEnabled(actor.teamId, store.sessionOwner(actor.teamId, id) ?: actor.member.id)) return TodoStopDecision(TodoStopAction.ALLOW, list, why = "hook_disabled")
         if (list.status != TodoListStatus.ACTIVE) return TodoStopDecision(TodoStopAction.ALLOW, list, why = "finished")
         if (input.background || store.hasOpenWait(actor.teamId, id)) {
             val why = if (input.background) "background_task" else "wait_open"
@@ -293,6 +295,7 @@ class TodoService(private val store: TodoStore, private val drops: TodoDropWaits
     suspend fun remind(teamId: String, owner: Principal, sessionId: String, turn: TodoTurnEnd, deliver: suspend (text: String, key: String) -> Unit): TodoReminderOutcome {
         val now = store.now()
         val before = store.find(teamId, sessionId) ?: return TodoReminderOutcome.NONE
+        if (!store.stopHookEnabled(teamId, owner.member.id)) return TodoReminderOutcome.NONE
         if (before.status != TodoListStatus.ACTIVE || before.allClosed || (before.reminderSeq ?: -1) >= turn.seq) return TodoReminderOutcome.NONE
         val openWait = store.hasOpenWait(teamId, sessionId)
         var outcome = TodoReminderOutcome.NONE
@@ -323,6 +326,20 @@ class TodoService(private val store: TodoStore, private val drops: TodoDropWaits
             throw e
         }
         return outcome
+    }
+
+    /** Members whose Stop hook an administrator turned off (the others have it on), for the dashboard. */
+    suspend fun stopHookDisabled(actor: Principal): Set<String> {
+        actor.requireAdmin()
+        store.revalidate(actor)
+        return store.stopHookDisabled(actor.teamId)
+    }
+
+    /** Turns the Stop hook of a member on or off (administrators). Their sessions' lists stay as they are; only the blocking changes. */
+    suspend fun setStopHook(actor: Principal, memberId: String, enabled: Boolean) {
+        actor.requireAdmin()
+        store.revalidate(actor)
+        if (!store.setStopHookEnabled(actor.teamId, memberId, enabled)) throw TeamFailure("not_found", 404, "Member not found.")
     }
 
     /** The store's clock, for the engine that drives [remind]. */

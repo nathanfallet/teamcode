@@ -109,6 +109,22 @@ class SqlTodoStore(private val database: Database) : TodoStore, TodoReminderStor
             ?.let { Member(it[Members.id], it[Members.username], readMemberRole(it), it[Members.disabled], it[Members.mustChangePassword]) }
     }
 
+    override suspend fun stopHookEnabled(teamId: String, memberId: String): Boolean = database.query {
+        (MemberTodoSettings innerJoin Members).select(MemberTodoSettings.stopHookEnabled)
+            .where { (MemberTodoSettings.memberId eq memberId) and (Members.teamId eq teamId) }.singleOrNull()?.get(MemberTodoSettings.stopHookEnabled) ?: true
+    }
+
+    override suspend fun stopHookDisabled(teamId: String): Set<String> = database.query {
+        (MemberTodoSettings innerJoin Members).select(MemberTodoSettings.memberId)
+            .where { (Members.teamId eq teamId) and (MemberTodoSettings.stopHookEnabled eq false) }.limit(10_000).map { it[MemberTodoSettings.memberId] }.toSet()
+    }
+
+    override suspend fun setStopHookEnabled(teamId: String, memberId: String, enabled: Boolean): Boolean = database.query {
+        if (Members.select(Members.id).where { (Members.id eq memberId) and (Members.teamId eq teamId) }.limit(1).none()) return@query false
+        MemberTodoSettings.upsert { it[MemberTodoSettings.memberId] = memberId; it[stopHookEnabled] = enabled }
+        true
+    }
+
     override suspend fun hasOpenWait(teamId: String, sessionId: String): Boolean = database.query {
         Waits.select(Waits.id).where { (Waits.sessionId eq sessionId) and (Waits.status eq WaitStatus.OPEN.wire) and (Waits.teamId eq teamId) }.limit(1).any()
     }

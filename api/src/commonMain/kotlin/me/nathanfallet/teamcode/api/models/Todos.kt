@@ -193,3 +193,10 @@ data class TodoSessionView(val todo: TodoView? = null)
 /** The answer of a start: the list, and the [marker] to put in the body of the item's pull request so it is found whatever its number. */
 @Serializable
 data class StartTodoItemView(val todo: TodoView, val marker: String)
+
+/** The Stop hook switch of a member (administrators): `PUT /api/v1/members/{id}/todo-stop-hook`. Without a row the hook is on. */
+@Serializable
+data class TodoStopHookRequest(val enabled: Boolean)
+
+@Serializable
+data class TodoStopHookView(val memberId: String, val enabled: Boolean)

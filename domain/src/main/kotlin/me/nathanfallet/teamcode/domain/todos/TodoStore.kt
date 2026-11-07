@@ -33,6 +33,12 @@ interface TodoStore {
     suspend fun waitStates(teamId: String, sessionId: String, waitIds: Collection<String>): Map<String, WaitState> = waitIds.mapNotNull { id -> waitState(teamId, sessionId, id)?.let { id to it } }.toMap()
     /** The outcome of each of these drop waits that was decided, in one read. */
     suspend fun dropOutcomes(teamId: String, waitIds: Collection<String>): Map<String, DropOutcome>
+    /** Whether the Stop hook is on for this member: true unless an administrator turned it off. */
+    suspend fun stopHookEnabled(teamId: String, memberId: String): Boolean = true
+    /** The members of the team whose Stop hook is off, in one read. */
+    suspend fun stopHookDisabled(teamId: String): Set<String> = emptySet()
+    /** Turns the member's Stop hook on or off; false when the member is not in the team. */
+    suspend fun setStopHookEnabled(teamId: String, memberId: String, enabled: Boolean): Boolean = false
 }
 
 /** An active list whose session is running: what the server-side reminder looks at. */
