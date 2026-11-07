@@ -15,6 +15,9 @@ object CloudConversationRules {
      * The runner's text for a bare denial of [requestId] ([PermissionAnswer.isBareDenial]): the only shape of a
      * permission input that [onlyStops] lets through, so the transport encodes bare denials with this and nothing else.
      */
+    fun bypassAllowText(requestId: String) =
+        "{\"requestId\":\"" + requestId.replace("\\", "\\\\").replace("\"", "\\\"") + "\",\"behavior\":\"allow\"}"
+
     fun bareDenialText(requestId: String) =
         "{\"requestId\":\"" + requestId.replace("\\", "\\\\").replace("\"", "\\\"") + "\",\"behavior\":\"deny\"}"
 
@@ -197,7 +200,7 @@ object CloudConversationRules {
      * send messages to the session, which the caller already passed. Answers need a question request, and their
      * indexes must exist in it when its input is known.
      */
-    fun checkAnswer(request: PermissionRequestRecord, answer: PermissionAnswer, approver: Boolean, currentEpoch: Int = request.epoch) {
+    fun checkAnswer(request: PermissionRequestRecord, answer: PermissionAnswer, approver: Boolean, currentEpoch: Int = request.epoch, standing: Boolean = false) {
         // Who may decide comes first, so someone who may not learns nothing about the request's state.
         if (!request.question && !approver) throw TeamFailure("permission_answer_denied", 403, "Only the session owner or an administrator may approve or deny this tool use.")
         // An execution that ended (a pause, a new pod) took its open requests with it.
@@ -208,7 +211,8 @@ object CloudConversationRules {
             PermissionRequestState.ENDED -> throw TeamFailure("permission_request_ended", 409, "The turn of this permission request has ended.")
         }
         // Nobody may approve what nobody could read: an input too large for the transcript can only be denied.
-        if (answer.allow && request.inputLeftOut)
+        // A standing approval (the owner's PermissionBypass) was given in advance, seen or not.
+        if (answer.allow && request.inputLeftOut && !standing)
             throw TeamFailure("permission_input_unseen", 400, "This request's input was too large to show in the transcript, so it can only be denied.")
         if (!request.question) {
             if (answer.answers.isNotEmpty()) throw TeamFailure("invalid_permission_answer", 400, "This request is a tool use, not a question: send no answers.")

@@ -371,6 +371,29 @@ class CloudSessionService(
         } ?: throw missing()
     }
 
+    /**
+     * The owner approves every later tool use of the session ([PermissionBypass]), or takes that back. Only the owner,
+     * signed in or through their own key, never on their behalf: it is the owner's decision. It applies at once to the
+     * requests the runner posts next; a request already open stays for the owner to answer.
+     */
+    suspend fun setPermissionBypass(principal: Principal, onBehalfOf: String?, id: String, enabled: Boolean): CloudSession {
+        if (onBehalfOf != null && onBehalfOf != principal.member.id) throw TeamFailure("bypass_owner_only", 403, "Only the session owner approves tool uses in advance.")
+        val actor = actor(principal, null)
+        val found = store.find(principal.teamId, id)
+        if (found == null || found.ownerId != principal.member.id) throw missing()
+        return transition(principal.teamId, id) { current ->
+            val now = store.now()
+            when {
+                current.ownerId != principal.member.id -> throw missing()
+                current.state.terminal || current.desiredState == DesiredState.TERMINATED -> throw notRunning()
+                current.state == CloudSessionState.TRANSFERRING || current.transferId != null -> throw TeamFailure("session_transferring", 409, "The session is being transferred.")
+                (current.permissionBypass != null) == enabled -> null
+                else -> CloudTransition(current.copy(permissionBypass = if (enabled) PermissionBypass(principal.member.id, principal.tokenId, now) else null, updatedAt = now),
+                    CloudWrite(actor = actor, auditAction = if (enabled) "cloud.session.permission_bypass_enabled" else "cloud.session.permission_bypass_disabled", reconcileAt = null))
+            }
+        } ?: throw missing()
+    }
+
     suspend fun resume(principal: Principal, onBehalfOf: String?, id: String): CloudSession {
         val actor = actor(principal, onBehalfOf)
         val session = visible(principal, store.find(principal.teamId, id))

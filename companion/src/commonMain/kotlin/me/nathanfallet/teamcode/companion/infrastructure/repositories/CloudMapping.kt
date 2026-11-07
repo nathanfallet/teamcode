@@ -52,6 +52,7 @@ internal fun CloudSessionView.domain() = CloudSession(
     },
     refusalReason = failure?.takeIf { it.code == CloudSession.HOST_REFUSED }?.message?.let(::refusalReason),
     waiting = waiting?.let { SessionWaiting(it.reason, it.requestId, it.since) },
+    permissionBypass = permissionBypass == true,
 )
 
 /**

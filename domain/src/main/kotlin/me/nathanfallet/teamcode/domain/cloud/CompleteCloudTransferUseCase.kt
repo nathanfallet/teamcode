@@ -71,7 +71,8 @@ class CompleteCloudTransferUseCase(
             // The recipient gets the full paused retention: a session about to expire is not handed over for deletion.
             else s.copy(ownerId = transfer.toMemberId, state = PAUSED, phase = null, desiredState = DesiredState.PAUSED, transferId = null,
                 expiresAt = settings.pausedRetentionDays?.let { now + it * ReconcileCloudSessionsUseCase.DAY_MILLIS }, failure = null, updatedAt = now))
-            .copy(githubAccess = github)
+            // Neither does a standing approval of tool uses: the recipient decides for themselves.
+            .copy(githubAccess = github, permissionBypass = null)
         return when (transfers.complete(s, next, transfer, owner, settings.maxRetainedSessionsPerMember)) {
             is TransferCompletion.Completed, TransferCompletion.Conflict -> now
             TransferCompletion.RecipientAtLimit -> fail(s, transfer, owner, now, CloudProblem("cloud_session_limit", "The recipient already retains the maximum number of cloud sessions."))

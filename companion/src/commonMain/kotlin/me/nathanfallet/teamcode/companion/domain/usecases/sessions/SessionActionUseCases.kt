@@ -151,6 +151,21 @@ class ControlSessionUseCase(private val sessions: SessionRepository, private val
         sessions.rename(accountId, sessionId, sent)
     }
 
+    /** Whether the server lets the owner approve tool uses in advance (`cloud.permissions.bypass.v1`); the permission card offers "Bypass" only then. */
+    suspend fun supportsBypass(accountId: String): Boolean = try {
+        Features.PERMISSION_BYPASS in features.features(accountId)
+    } catch (error: kotlinx.coroutines.CancellationException) {
+        throw error
+    } catch (_: Exception) {
+        false
+    }
+
+    /** Approves every later tool use of the session in advance, or takes that back; the server refuses anyone but the owner. */
+    suspend fun setPermissionBypass(accountId: String, sessionId: String, enabled: Boolean): CloudSession = guard(accountId) {
+        if (Features.PERMISSION_BYPASS !in features.features(accountId)) throw CompanionException.Unsupported(Features.PERMISSION_BYPASS)
+        sessions.setPermissionBypass(accountId, sessionId, enabled)
+    }
+
     companion object {
         /** Pause and resume are offered to the session's owner: a role opens nobody else's session. */
         fun canControl(account: Account, session: CloudSession): Boolean = session.ownerId == account.memberId

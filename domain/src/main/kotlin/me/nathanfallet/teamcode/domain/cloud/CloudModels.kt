@@ -183,6 +183,8 @@ data class CloudSession(
     val automationId: String? = null,
     /** The `teamcode run` launch a local session is attached to ([CloudSessionKind.LOCAL]); null for every other kind. */
     val runId: String? = null,
+    /** Set when the owner chose to approve every later tool use of this session without asking; see [PermissionBypass]. */
+    val permissionBypass: PermissionBypass? = null,
 ) {
     /** Whether a permission answer can reach the agent now: `ready` or `active`, desired running. */
     val takesAnswers: Boolean get() = desiredState == DesiredState.RUNNING && (state == CloudSessionState.READY || state == CloudSessionState.ACTIVE)
@@ -194,6 +196,14 @@ data class CloudSession(
     /** The runner reported a failed preparation; the reconciler fails the session or blocks the resume. */
     val preparationFailed get() = failure?.code == CloudEnvironmentRules.PREPARATION_FAILED && (state == CloudSessionState.PREPARING || state == CloudSessionState.RESUMING)
 }
+
+/**
+ * The owner's standing approval of every tool use of one session (`cloud.permissions.bypass.v1`): [memberId] (the owner
+ * who chose it, with [credentialId] of the request) at [at]. The server answers each later `permission.request` of the
+ * session with an allow written by that member, without it reaching any client. Questions to the user are never answered.
+ * It ends when the owner revokes it or when the session changes owner.
+ */
+data class PermissionBypass(val memberId: String, val credentialId: String, val at: Long)
 
 data class CloudExecution(
     val sessionId: String,

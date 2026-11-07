@@ -319,6 +319,22 @@ private fun ApiCatalog.cloudSessions() {
             conflict("A running session cannot turn access off (`session_not_paused`), or the session is ending, transferring or remote (`session_not_running`, `session_transferring`, `github_access_unsupported`).")
         }
     }
+    put("/api/v1/cloud/sessions/{id}/permission-bypass") {
+        operationId = "setCloudSessionPermissionBypass"; tag(ApiTags.CLOUD_SESSIONS)
+        summary = "Approve every tool use of a session in advance"
+        description = "`enabled: true` records the owner's standing approval on the session: the server answers each later " +
+            "`permission.request` of the running agent with an allow written by the owner, so none reaches a client. Questions to " +
+            "the user (`AskUserQuestion`) are never answered this way. A request already open stays for the owner to answer. " +
+            "`enabled: false` takes it back. It ends by itself when the session changes owner. Only the owner, never on their " +
+            "behalf (`cloud.permissions.bypass.v1`); each change is journaled."
+        parameters { sessionId() }
+        body<CloudPermissionBypassRequest>("`enabled`: true or false.")
+        responses {
+            ok<CloudSessionView>("The session with its new `permissionBypass`.")
+            notFound("No such session among the caller's own (`not_found`), or the call is on behalf of another member (`bypass_owner_only`, 403).")
+            conflict("The session is ending or transferring (`session_not_running`, `session_transferring`).")
+        }
+    }
     post("/api/v1/cloud/sessions/{id}/resume") {
         operationId = "resumeCloudSession"; tag(ApiTags.CLOUD_SESSIONS)
         summary = "Resume a paused session"

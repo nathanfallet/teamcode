@@ -355,6 +355,34 @@ class SessionViewModelTest {
         model.stop()
     }
 
+    @Test fun bypassRecordsTheApprovalThenAllowsTheOpenRequestAndCanBeTakenBack() = runTest(dispatcher) {
+        val model = viewModel()
+        model.start(); settle()
+        live.send(LiveUpdate.Item(toolEvent(5, "t1"))); settle()
+        assertTrue(model.uiState.value.bypassOffered, "The owner of a session on a server that supports it is offered Bypass")
+        model.bypass("t1"); settle()
+        assertEquals("bypass s1 true", sessions.calls.last { it.startsWith("bypass") })
+        assertEquals(PermissionAnswer("t1", allow = true), sessions.answers.last().first, "The request open now is allowed too")
+        assertTrue(model.uiState.value.session!!.permissionBypass)
+        assertFalse(model.uiState.value.bypassOffered, "Once it is on, the card no longer offers it")
+        model.revokeBypass(); settle()
+        assertFalse(model.uiState.value.session!!.permissionBypass)
+        assertTrue(model.uiState.value.bypassOffered)
+        model.stop()
+    }
+
+    @Test fun aRefusedBypassAllowsNothing() = runTest(dispatcher) {
+        val model = viewModel()
+        model.start(); settle()
+        live.send(LiveUpdate.Item(toolEvent(5, "t1"))); settle()
+        sessions.bypassFailure = CompanionException.Server(403, "bypass_owner_only")
+        val before = sessions.answers.size
+        model.bypass("t1"); settle()
+        assertEquals(before, sessions.answers.size, "The request stays open for the member")
+        assertNotNull(model.uiState.value.notice)
+        model.stop()
+    }
+
     @Test fun anAcceptedAnswerTheAgentRejectedCanBeSentAgain() = runTest(dispatcher) {
         val model = viewModel()
         model.start(); settle()

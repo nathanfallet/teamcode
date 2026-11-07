@@ -108,6 +108,8 @@ data class CloudSession(
     val refusalReason: String? = null,
     /** What the agent waits for from a person (`cloud.sessions.waiting.v1`); null when nothing waits. */
     val waiting: SessionWaiting? = null,
+    /** The owner approved every tool use of this session in advance (`cloud.permissions.bypass.v1`): the server answers its permission requests itself. */
+    val permissionBypass: Boolean = false,
 ) {
     val remote: Boolean get() = kind == SessionKind.REMOTE
     /** The session of a `teamcode run` in a terminal: no pause, resume, transfer or message from the app. */

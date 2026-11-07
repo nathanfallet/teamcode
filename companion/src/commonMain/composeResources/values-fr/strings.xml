@@ -377,6 +377,9 @@
     <string name="permission_send">Envoyer</string>
     <string name="permission_decline">Refuser</string>
     <string name="permission_allow">Autoriser</string>
+    <string name="permission_bypass">Bypass</string>
+    <string name="session_bypass_on">Permissions ignorées</string>
+    <string name="session_menu_revoke_bypass">Redemander les permissions</string>
     <string name="permission_deny">Interdire</string>
     <string name="permission_left_out">Cette demande est trop volumineuse pour être affichée en entier : elle ne peut qu'être refusée. Son début :</string>
     <string name="permission_more_waiting">%1$d autres en attente après celle-ci</string>

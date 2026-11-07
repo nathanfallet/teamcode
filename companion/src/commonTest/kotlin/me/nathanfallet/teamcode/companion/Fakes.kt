@@ -118,7 +118,7 @@ fun cloudSession(
 fun laptop(online: Boolean = true, name: String? = "Ada's MacBook", removed: Boolean = false) =
     me.nathanfallet.teamcode.companion.domain.models.SessionHost(name, "macos", "15.1", "app", online, removed, "ask")
 
-class FakeFeatures(var features: Set<String> = setOf("cloud.sessions.v1", "cloud.transcript.v1", "cloud.messages.v1", "cloud.events.v1", "cloud.permissions.v1")) :
+class FakeFeatures(var features: Set<String> = setOf("cloud.sessions.v1", "cloud.transcript.v1", "cloud.messages.v1", "cloud.events.v1", "cloud.permissions.v1", "cloud.permissions.bypass.v1")) :
     me.nathanfallet.teamcode.companion.domain.repositories.FeaturesRepository {
     val refreshes = mutableListOf<Boolean>()
     override suspend fun features(accountId: String, refresh: Boolean): Set<String> { refreshes += refresh; return features }
@@ -188,6 +188,11 @@ class FakeSessionRepository : me.nathanfallet.teamcode.companion.domain.reposito
     override suspend fun rename(accountId: String, sessionId: String, name: String): me.nathanfallet.teamcode.companion.domain.models.CloudSession {
         calls += "rename $sessionId $name"; renameFailure?.let { throw it }
         return (byId[sessionId] ?: cloudSession(sessionId)).copy(name = name)
+    }
+    var bypassFailure: Exception? = null
+    override suspend fun setPermissionBypass(accountId: String, sessionId: String, enabled: Boolean): me.nathanfallet.teamcode.companion.domain.models.CloudSession {
+        calls += "bypass $sessionId $enabled"; bypassFailure?.let { throw it }
+        return (byId[sessionId] ?: cloudSession(sessionId)).copy(permissionBypass = enabled).also { byId[sessionId] = it }
     }
     override suspend fun resume(accountId: String, sessionId: String) = (byId[sessionId] ?: cloudSession(sessionId)).copy(state = me.nathanfallet.teamcode.companion.domain.models.SessionState.RESUMING).also { calls += "resume $sessionId" }
     override fun sessionChanges(accountId: String, kinds: Set<me.nathanfallet.teamcode.companion.domain.models.SessionKind>, waiting: Boolean, waits: Boolean, renames: Boolean, workflows: Boolean, todos: Boolean) =

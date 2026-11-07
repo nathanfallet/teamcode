@@ -113,6 +113,8 @@ data class SessionUiState(
     val acting: Boolean = false,
     /** The server renames sessions (`cloud.sessions.rename.v1`): the menu offers "Rename". */
     val renames: Boolean = false,
+    /** The server lets the owner approve tool uses in advance (`cloud.permissions.bypass.v1`). */
+    val bypassSupported: Boolean = false,
     /** A short result of an action (woken, nothing to interrupt) or its failure. */
     val notice: SessionNotice? = null,
     /** Answers being written or sent, by request id. */
@@ -150,6 +152,9 @@ data class SessionUiState(
         if (state != null && state != SessionState.READY && state != SessionState.ACTIVE) emptyList()
         else transcript.events.openPermissionRequests().filter { it.requestId !in closedRequests }
     }
+
+    /** The permission card offers "Bypass": the server supports it, the member owns the session and has not turned it on yet. */
+    val bypassOffered: Boolean get() = bypassSupported && canControl && session?.permissionBypass == false
 
     /** The oldest open request, answered first: the agent asked them in this order and their deadlines pass in it. */
     val permission: PermissionCard? get() = openRequests.firstOrNull()?.let { PermissionCard(it, drafts[it.requestId] ?: PermissionDraft(), openRequests.size - 1) }
@@ -200,6 +205,7 @@ class SessionViewModel(
     fun start() {
         started = true
         if (!state.value.renames) viewModelScope.launch { if (control.supportsRename(route.accountId)) state.update { it.copy(renames = true) } }
+        if (!state.value.bypassSupported) viewModelScope.launch { if (control.supportsBypass(route.accountId)) state.update { it.copy(bypassSupported = true) } }
         files?.load()
         if (followTodo != null && todoJob?.isActive != true) todoJob = viewModelScope.launch {
             try {
@@ -532,6 +538,25 @@ class SessionViewModel(
         if (!card.editable || !card.answerable || card.request.question) return
         deliverAnswer(card, PermissionAnswer(requestId, allow = true))
     }
+
+    /**
+     * "Bypass" on a tool use: records the owner's standing approval on the session, then allows this request too (the
+     * server only answers the requests the agent asks after it). From then on the server allows each request itself and
+     * none comes back here. If the approval is refused, nothing is allowed and the request stays open.
+     */
+    fun bypass(requestId: String) {
+        val card = cardFor(requestId) ?: return
+        if (!card.editable || !card.answerable || card.request.question || state.value.acting) return
+        act {
+            val session = control.setPermissionBypass(route.accountId, route.sessionId, true)
+            actions++
+            state.update { it.copy(session = session) }
+            cardFor(requestId)?.let { current -> if (current.editable) deliverAnswer(current, PermissionAnswer(requestId, allow = true)) }
+        }
+    }
+
+    /** Takes the standing approval back: the next permission requests come to the member again. */
+    fun revokeBypass() = act { val session = control.setPermissionBypass(route.accountId, route.sessionId, false); actions++; state.update { it.copy(session = session) } }
 
     /** Declines a question or denies a tool use. */
     fun deny(requestId: String) {

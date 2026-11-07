@@ -142,6 +142,8 @@ class DemoSessionRepository(private val demo: DemoMode) : SessionRepository {
 
     override suspend fun rename(accountId: String, sessionId: String, name: String): CloudSession = demo.store().rename(sessionId, name)
 
+    override suspend fun setPermissionBypass(accountId: String, sessionId: String, enabled: Boolean): CloudSession = demo.store().setPermissionBypass(sessionId, enabled)
+
     override suspend fun end(accountId: String, sessionId: String) { demo.store().move(sessionId, SessionState.TERMINATED) }
 
     override fun sessionChanges(accountId: String, kinds: Set<SessionKind>, waiting: Boolean, waits: Boolean, renames: Boolean, workflows: Boolean, todos: Boolean): Flow<LiveUpdate<SessionChange>> = channelFlow {

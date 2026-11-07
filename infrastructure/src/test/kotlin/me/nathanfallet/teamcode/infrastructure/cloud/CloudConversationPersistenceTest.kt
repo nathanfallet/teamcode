@@ -56,6 +56,7 @@ class CloudConversationPersistenceTest {
                 val profile = administration(ra, admin, setOf(colleague.member.id, other.member.id))
                 val session = ready(ra, rb, admin, colleague, profile)
                 githubAccess(ra, rb, admin, colleague, session)
+                permissionBypass(ra, rb, admin, colleague, session)
                 messagesAndTranscript(ra, rb, admin, colleague, ra.store.find(admin.teamId, session.id)!!)
                 accessPolicy(ra, rb, admin, colleague, other, groups, profile, session)
                 wakeAndRedelivery(ra, rb, admin, colleague, session)
@@ -101,6 +102,18 @@ class CloudConversationPersistenceTest {
         assertEquals(CloudGitHubAccess.SHARED, rb.store.find(admin.teamId, s.id)!!.githubAccess)
         assertEquals(CloudGitHubAccess.OWNER, rb.sessions.setGitHubAccess(colleague, null, s.id, CloudGitHubAccess.OWNER).githubAccess)
         assertEquals(CloudGitHubAccess.OWNER, ra.store.find(admin.teamId, s.id)!!.githubAccess)
+    }
+
+    /** The owner's standing approval is stored with the session, read by every replica and ended by the owner only. */
+    private suspend fun permissionBypass(ra: Replica, rb: Replica, admin: Principal, colleague: Principal, s: CloudSession) {
+        assertNull(rb.store.find(admin.teamId, s.id)!!.permissionBypass)
+        assertEquals("not_found", assertFailsWith<TeamFailure> { ra.sessions.setPermissionBypass(admin, null, s.id, true) }.code, "A role decides nothing on a colleague's session")
+        assertEquals("bypass_owner_only", assertFailsWith<TeamFailure> { ra.sessions.setPermissionBypass(colleague, admin.member.id, s.id, true) }.code)
+        val on = ra.sessions.setPermissionBypass(colleague, null, s.id, true).permissionBypass
+        assertEquals(colleague.member.id, on?.memberId)
+        assertEquals(on, rb.store.find(admin.teamId, s.id)!!.permissionBypass)
+        assertNull(rb.sessions.setPermissionBypass(colleague, null, s.id, false).permissionBypass)
+        assertNull(ra.store.find(admin.teamId, s.id)!!.permissionBypass)
     }
 
     private suspend fun messagesAndTranscript(ra: Replica, rb: Replica, admin: Principal, colleague: Principal, s: CloudSession) {

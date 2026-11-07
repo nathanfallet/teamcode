@@ -45,6 +45,8 @@ interface SessionRepository {
     suspend fun resume(accountId: String, sessionId: String): CloudSession
     /** Renames the session (`cloud.sessions.rename.v1`); the server applies the creation's name rules. */
     suspend fun rename(accountId: String, sessionId: String, name: String): CloudSession
+    /** Approves every later tool use of the session in advance, or takes that back (`cloud.permissions.bypass.v1`); owner only. */
+    suspend fun setPermissionBypass(accountId: String, sessionId: String, enabled: Boolean): CloudSession
     /** Ends the session and deletes its workspace (`DELETE /cloud/sessions/{id}`); idempotent. */
     suspend fun end(accountId: String, sessionId: String)
 
