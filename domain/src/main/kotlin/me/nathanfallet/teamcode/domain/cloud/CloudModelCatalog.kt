@@ -16,7 +16,12 @@ object CloudModelCatalog {
         CloudModelOption("claude-opus-5-5", "Opus 5.5"), CloudModelOption("claude-sonnet-5-5", "Sonnet 5.5"), CloudModelOption("claude-haiku-5-5", "Haiku 5.5"),
         CloudModelOption("claude-opus-4-8", "Opus 4.8"), CloudModelOption("claude-sonnet-4-6", "Sonnet 4.6"), CloudModelOption("claude-haiku-4-5", "Haiku 4.5"),
     )
-    private val CODEX = listOf(CloudModelOption("gpt-6-sol", "gpt-6-sol"), CloudModelOption("gpt-6-astra", "gpt-6-astra"), CloudModelOption("gpt-6-luna", "gpt-6-luna"))
+    /** The visible entries of Codex's own model cache (`models_cache.json`); hidden ones (`gpt-reserve`, `codex-auto-review`) are not offered. */
+    private val CODEX = listOf(
+        CloudModelOption("gpt-6.1-sol", "GPT-6.1-Sol"), CloudModelOption("gpt-6.1-terra", "GPT-6.1 Terra"),
+        CloudModelOption("gpt-6-astra", "GPT-6-Astra"), CloudModelOption("gpt-6-sol", "GPT-6-Sol"), CloudModelOption("gpt-6-luna", "GPT-6-Luna"),
+        CloudModelOption("gpt-5.6-sol", "GPT-5.6-Sol"), CloudModelOption("gpt-5.6-terra", "GPT-5.6-Terra"), CloudModelOption("gpt-5.6-luna", "GPT-5.6-Luna"),
+    )
 
     /** Claude Code's own short names; the policy sees the model they stand for. */
     private val CLAUDE_ALIASES = setOf("opus", "sonnet", "haiku")

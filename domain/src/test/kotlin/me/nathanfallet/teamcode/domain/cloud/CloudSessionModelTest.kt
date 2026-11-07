@@ -101,7 +101,9 @@ class CloudSessionModelTest {
         assertTrue("claude-opus-5-5" in defaults && "claude-sonnet-5-5" in defaults && "claude-haiku-5-5" in defaults)
         assertEquals(listOf("claude-sonnet-5-5"), CloudModelCatalog.options("claude", ModelPolicy(allowedModels = listOf("claude-sonnet-5-5"))).map { it.id })
         assertTrue(CloudModelCatalog.options("claude", ModelPolicy(allowedModels = listOf("claude-*"), deniedModels = listOf("claude-*"))).isEmpty())
-        assertTrue(CloudModelCatalog.options("codex", ModelPolicy()).isNotEmpty())
+        val codexIds = CloudModelCatalog.options("codex", ModelPolicy()).map { it.id }
+        assertEquals(listOf("gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"), codexIds)
+        assertTrue("gpt-reserve" !in codexIds && "codex-auto-review" !in codexIds, "Hidden entries of Codex's cache are not offered")
         assertTrue(CloudModelCatalog.options("unknown", ModelPolicy()).isEmpty())
         assertEquals("claude-opus", CloudModelCatalog.resolved("Opus"))
     }
