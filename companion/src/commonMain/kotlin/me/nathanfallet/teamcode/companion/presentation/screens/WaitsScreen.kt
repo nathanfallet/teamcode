@@ -218,7 +218,7 @@ private fun WaitsBannerRow(state: WaitsUiState, onOpen: () -> Unit) {
             Icon(PhosphorIcons.Regular.Bell, contentDescription = null, tint = colors.accentText, modifier = Modifier.padding(2.dp))
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(stringResource(Res.string.waits_banner_count, count), color = colors.text, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.testTag("waits-banner-count"))
-                Text(state.waits.first().title, style = MetaStyle, color = colors.muted, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.testTag("waits-banner-title"))
+                Text(waitTitle(state.waits.first()), style = MetaStyle, color = colors.muted, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.testTag("waits-banner-title"))
             }
             Icon(PhosphorIcons.Regular.CaretRight, contentDescription = null, tint = colors.muted, modifier = Modifier.padding(2.dp))
         }

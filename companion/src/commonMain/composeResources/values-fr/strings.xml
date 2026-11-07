@@ -852,6 +852,16 @@
     <string name="waits_open_session">Ouvrir la session</string>
     <string name="waits_asks_you">Te demande</string>
     <string name="waits_turn_failed">Tour en échec</string>
+    <string name="waits_title_permission">L'agent a besoin d'une permission</string>
+    <string name="waits_title_question">L'agent pose une question</string>
+    <string name="waits_title_drop">Abandonner cet élément de la todo ?</string>
+    <string name="waits_title_blocked">Bloqué : %1$s</string>
+    <string name="waits_title_blocked_todo">Bloqué : la todo</string>
+    <string name="waits_action_drop_it">Abandonner</string>
+    <string name="waits_action_keep_it">Garder</string>
+    <string name="waits_action_resume">Reprendre</string>
+    <string name="waits_action_drop_item">Abandonner cet élément</string>
+    <string name="waits_action_stop_here">S'arrêter ici</string>
     <string name="waits_from_session">dans %1$s</string>
     <string name="waits_closed_elsewhere">Quelqu’un a déjà répondu.</string>
     <string name="waits_notice_refused">Le serveur a refusé cette réponse. Vérifie les valeurs.</string>
