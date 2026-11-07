@@ -58,11 +58,12 @@ object CloudEventTypes {
 }
 
 /**
- * One transcript event. [seq] is assigned by the server, starts at 1 and increases by one per session; [epoch] is
+ * One transcript event. [feed] ([CloudFeeds.FEATURE]) is the id of the `tool.call` that started the subagent the event
+ * belongs to, null for the main agent (and for every event written before the server knew feeds). [seq] is assigned by the server, starts at 1 and increases by one per session; [epoch] is
  * the execution that produced it (0 for server-written events). [data] is bounded and secret-masked.
  */
 @Serializable
-data class CloudEventView(val seq: Long, val type: String, val at: Long, val epoch: Int, val data: JsonObject)
+data class CloudEventView(val seq: Long, val type: String, val at: Long, val epoch: Int, val data: JsonObject, val feed: String? = null)
 
 /**
  * A page of events in ascending order. [firstSeq] is the oldest retained event (older ones expired), [lastSeq] the
@@ -144,6 +145,51 @@ data class AnswerCloudPermissionRequest(
  */
 @Serializable
 data class CloudQuestionAnswer(val question: Int, val options: List<Int> = emptyList(), val text: String? = null)
+
+/**
+ * `cloud.transcript.feeds.v1`: events carry a [CloudEventView.feed], `GET /cloud/sessions/{id}/events?feed=` pages one
+ * feed alone, and `GET /cloud/sessions/{id}/agents` lists the session's subagents with their real state. A server
+ * without it ignores `feed` and returns every event, so a client uses it only when the capability is advertised.
+ */
+object CloudFeeds {
+    const val FEATURE = "cloud.transcript.feeds.v1"
+    /** The `feed` query value for the main agent's own events. */
+    const val MAIN = "main"
+    /** The ids the server takes as a feed: the id of a `tool.call` (at most 128 characters). */
+    val FEED = Regex("[A-Za-z0-9_.:-]{1,128}")
+    /** Subagents one `agents` response lists at most (the newest). */
+    const val MAX_AGENTS = 200
+}
+
+/** Where a subagent is. `running` until its call returned (or, for a background one, until it left the live tasks). */
+object CloudAgentStates {
+    const val RUNNING = "running"
+    const val COMPLETED = "completed"
+    const val FAILED = "failed"
+}
+
+/**
+ * A subagent of a session ([CloudFeeds.FEATURE]). [id] is the `tool.call` that started it, and the [CloudEventView.feed] of
+ * its events; [parentId] the feed it was started from (null: by the main agent). [type] is its `subagent_type`,
+ * [startedAt] when the server saw its call (or its first task report), [endedAt] when it ended, [steps] its tool uses
+ * so far, [taskId] the id to stop it with ([CloudTasks.FEATURE]) while it is a live task.
+ */
+@Serializable
+data class CloudSubagentView(
+    val id: String,
+    val type: String? = null,
+    val description: String = "",
+    val state: String,
+    val startedAt: Long,
+    val endedAt: Long? = null,
+    val steps: Int = 0,
+    val parentId: String? = null,
+    val taskId: String? = null,
+)
+
+/** `GET /cloud/sessions/{id}/agents`: the session's subagents, oldest first, at most [CloudFeeds.MAX_AGENTS] (the newest). */
+@Serializable
+data class CloudSubagentListView(val agents: List<CloudSubagentView>)
 
 /** `POST /cloud/sessions/{id}/tasks/stop` ([CloudTasks.FEATURE]): stops the background task [taskId] of the session's running agent. */
 @Serializable

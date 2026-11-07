@@ -63,10 +63,17 @@ class CloudConversationService(
         if (outcome is InputOutcome.Accepted) wake(principal.teamId, session.id, principal)
     }
 
-    suspend fun events(principal: Principal, id: String, after: Long?, before: Long?, limit: Int): CloudEventPage {
+    suspend fun events(principal: Principal, id: String, after: Long?, before: Long?, limit: Int, feed: String? = null): CloudEventPage {
         CloudConversationRules.validatePage(limit, after, before)
+        CloudConversationRules.validateFeed(feed)
         val session = open(principal, id, CloudPermission.TRANSCRIPT)
-        return store.events(session.id, after, before, limit)
+        return store.events(session.id, after, before, limit, feed)
+    }
+
+    /** The session's subagents and their state, kept as events arrive: correct whatever part of the transcript the caller read. */
+    suspend fun subagents(principal: Principal, id: String): List<CloudSubagent> {
+        val session = open(principal, id, CloudPermission.TRANSCRIPT)
+        return store.subagents(session.id, CloudConversationRules.MAX_SUBAGENTS)
     }
 
     /**

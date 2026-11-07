@@ -570,12 +570,21 @@ class TeamCodeClient(
     }
 
     // Transcript, messages and attachments (`cloud.transcript.v1`, `cloud.messages.v1`, `cloud.attach.v1`).
-    suspend fun cloudEvents(id: String, after: Long? = null, before: Long? = null, limit: Int = 100): CloudEventPageView {
+    suspend fun cloudEvents(id: String, after: Long? = null, before: Long? = null, limit: Int = 100, feed: String? = null): CloudEventPageView {
         identifier(id)
         require(limit in 1..200 && (after == null || before == null))
+        require(feed == null || feed == CloudFeeds.MAIN || CloudFeeds.FEED.matches(feed)) { "Invalid feed." }
         return coded(HttpMethod.Get, "/api/v1/cloud/sessions/$id/events", null as Unit?) {
-            url { after?.let { parameters.append("after", it.toString()) }; before?.let { parameters.append("before", it.toString()) }; parameters.append("limit", limit.toString()) }
+            url {
+                after?.let { parameters.append("after", it.toString()) }; before?.let { parameters.append("before", it.toString()) }
+                feed?.let { parameters.append("feed", it) }; parameters.append("limit", limit.toString())
+            }
         }
+    }
+    /** The session's subagents with their real state, whatever part of the transcript was read (`cloud.transcript.feeds.v1`). */
+    suspend fun cloudSubagents(id: String): CloudSubagentListView {
+        identifier(id)
+        return coded(HttpMethod.Get, "/api/v1/cloud/sessions/$id/agents", null as Unit?)
     }
     /**
      * Follows the session's event stream after [after], calling [onEvent] for each event in order. Returns

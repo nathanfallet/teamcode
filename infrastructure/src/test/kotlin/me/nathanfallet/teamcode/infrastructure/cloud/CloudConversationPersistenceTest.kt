@@ -45,7 +45,7 @@ class CloudConversationPersistenceTest {
                 coroutineScope { listOf(a, b).map { async(Dispatchers.IO) { it.migrate() } }.awaitAll() }
                 a.query {
                     val drift = MigrationUtils.statementsRequiredForDatabaseMigration(CloudSettingsTable, CloudSessions, CloudSessionEvents, CloudSessionInputs,
-                        CloudSessionAttachments, CloudAccessPolicies, CloudSessionTranscripts, withLogs = false)
+                        CloudSessionAttachments, CloudAccessPolicies, CloudSessionTranscripts, CloudSessionSubagents, withLogs = false)
                     assertEquals(emptyList(), drift, "The reviewed migration matches the Exposed tables")
                 }
                 val cluster = FakeClusterPort()
@@ -61,6 +61,24 @@ class CloudConversationPersistenceTest {
                 accessPolicy(ra, rb, admin, colleague, other, groups, profile, session)
                 wakeAndRedelivery(ra, rb, admin, colleague, session)
                 retentionAndCancellation(ra, rb, admin, colleague, session)
+            } }
+        }
+    }
+
+    @Test fun subagentFeedsAreServedPerAgentAndTheirStateIsKept() = runBlocking {
+        MySQLContainer("mysql:8.4").withDatabaseName("teamcode").withTmpFs(mapOf("/var/lib/mysql" to "rw,nosuid,size=1g")).use { container ->
+            container.start()
+            Database(container.jdbcUrl, container.username, container.password).use { a ->
+            Database(container.jdbcUrl, container.username, container.password).use { b ->
+                coroutineScope { listOf(a, b).map { async(Dispatchers.IO) { it.migrate() } }.awaitAll() }
+                val cluster = FakeClusterPort()
+                val cipher = CredentialCipher(ByteArray(32) { 41 })
+                val groups = Groups()
+                val ra = Replica(a, cluster, cipher, groups); val rb = Replica(b, cluster, cipher, groups)
+                val (admin, colleague, other) = members(a)
+                val profile = administration(ra, admin, setOf(colleague.member.id, other.member.id))
+                val session = ready(ra, rb, admin, colleague, profile)
+                subagentFeeds(ra, rb, admin, colleague, ra.store.find(admin.teamId, session.id)!!)
             } }
         }
     }
@@ -417,6 +435,76 @@ class CloudConversationPersistenceTest {
         val room = CloudConversationRules.MAX_PENDING_INPUTS - ra.conversation.inputs(colleague, s.id, null, 200).inputs.count { !it.status.final }
         repeat(room) { ra.conversation.send(colleague, s.id, InputRequest("filler $it", false, null, null, null)) }
         failure("too_many_pending_inputs") { ra.conversation.send(colleague, s.id, InputRequest("one too many", false, null, null, null)) }
+    }
+
+    /** Feeds and the subagent list: one feed pages alone, and an agent's start and state never depend on what was read. */
+    private suspend fun subagentFeeds(ra: Replica, rb: Replica, admin: Principal, colleague: Principal, s: CloudSession) {
+        val team = admin.teamId
+        var n = 0L
+        fun ev(type: CloudEventType, data: String) = RunnerEvent(++n, type, data)
+        ra.agent.events(team, s.id, 1, listOf(
+            ev(CloudEventType.TOOL_CALL, """{"id":"main-1","name":"Read","input":{}}"""),
+            ev(CloudEventType.TOOL_CALL, """{"id":"ag-1","name":"Agent","input":{"description":"Scan the repo","subagent_type":"Explore"}}"""),
+            ev(CloudEventType.TOOL_CALL, """{"id":"s-1","name":"Grep","input":{},"parentToolUseId":"ag-1"}"""),
+            ev(CloudEventType.AGENT_MESSAGE, """{"text":"found it","parentToolUseId":"ag-1"}"""),
+            ev(CloudEventType.AGENT_MESSAGE, """{"text":"main text"}"""),
+            ev(CloudEventType.TOOL_CALL, """{"id":"s-2","name":"Read","input":{},"parentToolUseId":"ag-1"}"""),
+            ev(CloudEventType.TOOL_CALL, """{"id":"ag-9","name":"Task","input":{"description":"Inner","subagent_type":"Plan"},"parentToolUseId":"ag-1"}"""),
+        ))
+        val main = rb.conversations.events(s.id, null, null, 200, "main").events
+        assertTrue(main.all { it.feed == null }, "The main feed holds no subagent event")
+        assertTrue(listOf("main text", "ag-1").all { needle -> main.any { needle in it.data } })
+        assertTrue(main.none { "found it" in it.data || "\"s-1\"" in it.data })
+        // One feed, paged in both directions: the cursors follow the feed, not the session.
+        val whole = rb.conversations.events(s.id, null, null, 200, "ag-1")
+        assertEquals(listOf("s-1", "found it", "s-2", "ag-9").map { it }, whole.events.map { e -> listOf("s-1", "found it", "s-2", "ag-9").first { it in e.data } })
+        assertTrue(whole.events.all { it.feed == "ag-1" })
+        assertEquals(null, whole.nextAfter); assertEquals(null, whole.nextBefore)
+        val head = rb.conversations.events(s.id, null, null, 2, "ag-1")
+        assertEquals(2, head.events.size); assertEquals(head.events.last().seq, head.nextAfter); assertEquals(null, head.nextBefore)
+        val tail = rb.conversations.events(s.id, null, whole.events.last().seq + 1, 2, "ag-1")
+        assertEquals(whole.events.takeLast(2).map { it.seq }, tail.events.map { it.seq }); assertEquals(whole.events[2].seq, tail.nextBefore)
+        assertEquals(emptyList(), rb.conversations.events(s.id, null, null, 10, "ag-unknown").events)
+        // Without a feed, every event, as before.
+        assertEquals(main.size + whole.events.size, rb.conversations.events(s.id, null, null, 200, null).events.count { it.seq >= main.first().seq })
+        failure("invalid_feed") { ra.conversation.events(colleague, s.id, null, null, 10, "bad feed!") }
+        assertEquals(emptyList(), ra.conversation.events(colleague, s.id, null, null, 10, "main").events.filter { it.feed != null })
+
+        fun agents() = runBlocking { rb.conversation.subagents(colleague, s.id).associateBy { it.id } }
+        val running = agents().getValue("ag-1")
+        assertEquals(Triple("Explore", "Scan the repo", "running"), Triple(running.type, running.description, running.state))
+        assertEquals(3, running.steps, "Its tool uses, a nested agent's call included"); assertNull(running.endedAt); assertNull(running.parentId)
+        assertEquals("ag-1", agents().getValue("ag-9").parentId, "A nested agent is listed with the feed it started from")
+
+        // A returned call ends its agent; an error fails it.
+        ra.agent.events(team, s.id, 1, listOf(
+            ev(CloudEventType.TOOL_RESULT, """{"id":"ag-1","output":"done","isError":false}"""),
+            ev(CloudEventType.TOOL_RESULT, """{"id":"ag-9","output":"boom","isError":true,"parentToolUseId":"ag-1"}"""),
+            ev(CloudEventType.TOOL_RESULT, """{"id":"main-1","output":"x","isError":false}"""),
+        ))
+        assertEquals("completed", agents().getValue("ag-1").state); assertNotNull(agents().getValue("ag-1").endedAt)
+        assertEquals("failed", agents().getValue("ag-9").state)
+
+        // A background agent: its call returns at once, its live task keeps it running, and a task seen first still shows with its real start.
+        fun tasks(count: Int, vararg tasks: String) = ev(CloudEventType.TASKS, """{"count":$count,"scheduled":0,"stoppable":true,"tasks":[${tasks.joinToString(",")}]}""")
+        fun task(id: String, use: String, started: Long) = """{"id":"$id","type":"local_agent","description":"bg","subagentType":"Explore","toolUseId":"$use","startedAt":$started}"""
+        ra.agent.events(team, s.id, 1, listOf(
+            ev(CloudEventType.TOOL_CALL, """{"id":"ag-2","name":"Agent","input":{"description":"Background scan","subagent_type":"Explore","run_in_background":true}}"""),
+            tasks(2, task("t1", "ag-2", 111), task("t2", "ag-3", 222), """{"id":"c1","type":"local_bash","description":"npm test","toolUseId":"cmd-1","startedAt":5}"""),
+            ev(CloudEventType.TOOL_RESULT, """{"id":"ag-2","output":"started","isError":false}"""),
+        ))
+        assertEquals(Triple("running", "t1", 111L), agents().getValue("ag-2").let { Triple(it.state, it.taskId, 111L) })
+        assertEquals(Triple("running", "t2", 222L), agents().getValue("ag-3").let { Triple(it.state, it.taskId, it.startedAt) })
+        assertNull(agents()["cmd-1"], "A background command is not an agent")
+        // A set cut at its limit does not say what ended; a whole one does.
+        ra.agent.events(team, s.id, 1, listOf(tasks(60, task("t2", "ag-3", 222))))
+        assertEquals("running", agents().getValue("ag-2").state)
+        ra.agent.events(team, s.id, 1, listOf(tasks(1, task("t2", "ag-3", 222))))
+        assertEquals("completed", agents().getValue("ag-2").state)
+        assertEquals("running", agents().getValue("ag-3").state)
+        ra.agent.events(team, s.id, 1, listOf(tasks(0)))
+        assertEquals("completed", agents().getValue("ag-3").state)
+        assertTrue(agents().values.none { it.state == "running" })
     }
 
     private suspend fun retentionAndCancellation(ra: Replica, rb: Replica, admin: Principal, colleague: Principal, s: CloudSession) {

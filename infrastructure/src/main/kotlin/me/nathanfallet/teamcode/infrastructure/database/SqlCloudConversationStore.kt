@@ -39,10 +39,13 @@ class SqlCloudConversationStore(private val database: Database) : CloudConversat
         // A request raised while the session takes no answer (a pause asked: the runner denies it) never shows as waiting.
         val answerable = DesiredState.parse(session[CloudSessions.desiredState]) == DesiredState.RUNNING &&
             CloudSessionState.parse(session[CloudSessions.state]).let { it == CloudSessionState.READY || it == CloudSessionState.ACTIVE }
+        val subagents = SubagentTracker(sessionId, now)
         for (event in events.sortedBy { it.sequence }) {
             if (event.sequence <= through) continue
             if (event.sequence != through + 1) break // A gap: the runner resends from acceptedThrough + 1.
-            insertEvent(sessionId, teamId, ++last, epoch, event.sequence, event.type, now, event.data)
+            // Only these types carry a `parentToolUseId` or tell an agent's story; the others are not even parsed.
+            val agentFeed = if (event.type in SUBAGENT_TYPES) subagents.see(event.type, jsonObject(event.data)) else null
+            insertEvent(sessionId, teamId, ++last, epoch, event.sequence, event.type, now, event.data, agentFeed)
             if (event.type in FEED_TYPES) feed += Triple(last, event.type, event.data)
             // The wait follows the transcript event by event, so it is exact whatever the batch holds.
             wait = when {
@@ -53,7 +56,7 @@ class SqlCloudConversationStore(private val database: Database) : CloudConversat
             }
             through = event.sequence
         }
-        if (last != start) saveCursor(sessionId, cursor != null, last, epoch, through)
+        if (last != start) { saveCursor(sessionId, cursor != null, last, epoch, through); subagents.flush() }
         if (wait != waited) saveHumanWait(sessionId, wait)
         // Last, so the team's cursor lock is taken after every other write of this transaction.
         val owner = session[CloudSessions.ownerId]
@@ -75,23 +78,53 @@ class SqlCloudConversationStore(private val database: Database) : CloudConversat
         RunnerEventsAck(through, last)
     }
 
-    override suspend fun events(sessionId: String, after: Long?, before: Long?, limit: Int): CloudEventPage = database.query {
+    override suspend fun events(sessionId: String, after: Long?, before: Long?, limit: Int, feed: String?): CloudEventPage = database.query {
         val last = lastSeqOf(sessionId)
-        val first = CloudSessionEvents.select(CloudSessionEvents.seq).where { CloudSessionEvents.sessionId eq sessionId }
+        // The index (session, feed, seq) serves one feed's pages; without a feed every event is one, as before.
+        val scope: Op<Boolean> = when (feed) {
+            null -> CloudSessionEvents.sessionId eq sessionId
+            CloudConversationRules.MAIN_FEED -> (CloudSessionEvents.sessionId eq sessionId) and (CloudSessionEvents.feed eq "")
+            else -> (CloudSessionEvents.sessionId eq sessionId) and (CloudSessionEvents.feed eq feed)
+        }
+        val first = CloudSessionEvents.select(CloudSessionEvents.seq).where { scope }
             .orderBy(CloudSessionEvents.seq to SortOrder.ASC).limit(1).singleOrNull()?.get(CloudSessionEvents.seq)
+        // The newest event of the feed bounds `nextAfter`; the session's own newest does when no feed was asked.
+        val newest = if (feed == null) last else CloudSessionEvents.select(CloudSessionEvents.seq).where { scope }
+            .orderBy(CloudSessionEvents.seq to SortOrder.DESC).limit(1).singleOrNull()?.get(CloudSessionEvents.seq) ?: 0L
         if (before != null) {
-            val rows = CloudSessionEvents.selectAll().where { (CloudSessionEvents.sessionId eq sessionId) and (CloudSessionEvents.seq less before) }
-                .orderBy(CloudSessionEvents.seq to SortOrder.DESC).limit(limit + 1).toList()
+            val rows = pageRows(sessionId, feed, scope and (CloudSessionEvents.seq less before), SortOrder.DESC, limit + 1)
             val page = rows.take(limit).map(::readEvent).reversed()
-            CloudEventPage(page, first, last, page.lastOrNull()?.seq?.takeIf { it < last },
+            CloudEventPage(page, first, last, page.lastOrNull()?.seq?.takeIf { it < newest },
                 if (rows.size > limit) page.first().seq else null)
         } else {
-            val rows = CloudSessionEvents.selectAll().where { (CloudSessionEvents.sessionId eq sessionId) and (CloudSessionEvents.seq greater (after ?: 0L)) }
-                .orderBy(CloudSessionEvents.seq to SortOrder.ASC).limit(limit + 1).toList()
+            val rows = pageRows(sessionId, feed, scope and (CloudSessionEvents.seq greater (after ?: 0L)), SortOrder.ASC, limit + 1)
             val page = rows.take(limit).map(::readEvent)
             CloudEventPage(page, first, last, if (rows.size > limit) page.last().seq else null,
                 page.firstOrNull()?.seq?.takeIf { first != null && it > first })
         }
+    }
+
+    /**
+     * One page of rows in [order]. Without a feed, one query on the primary key. With one, the keys come first from the
+     * covering index (session, feed, seq), which reads only the page's own entries however many events of other feeds sit
+     * between them (asked for whole rows, the optimizer walks the primary key and filters, a subagent's thousands of events
+     * included), then one primary-key read fetches the rows.
+     */
+    private fun pageRows(sessionId: String, feed: String?, condition: Op<Boolean>, order: SortOrder, limit: Int): List<ResultRow> {
+        if (feed == null) return CloudSessionEvents.selectAll().where { condition }.orderBy(CloudSessionEvents.seq to order).limit(limit).toList()
+        val keys = CloudSessionEvents.select(CloudSessionEvents.seq).where { condition }.orderBy(CloudSessionEvents.seq to order).limit(limit).map { it[CloudSessionEvents.seq] }
+        if (keys.isEmpty()) return emptyList()
+        return CloudSessionEvents.selectAll().where { (CloudSessionEvents.sessionId eq sessionId) and (CloudSessionEvents.seq inList keys) }
+            .orderBy(CloudSessionEvents.seq to order).toList()
+    }
+
+    override suspend fun subagents(sessionId: String, limit: Int): List<CloudSubagent> = database.query {
+        // The newest through (session, started_at), then oldest first for the reader.
+        CloudSessionSubagents.selectAll().where { CloudSessionSubagents.sessionId eq sessionId }
+            .orderBy(CloudSessionSubagents.startedAt to SortOrder.DESC).limit(limit).map {
+                CloudSubagent(it[CloudSessionSubagents.id], it[CloudSessionSubagents.type], it[CloudSessionSubagents.description], it[CloudSessionSubagents.state],
+                    it[CloudSessionSubagents.startedAt], it[CloudSessionSubagents.endedAt], it[CloudSessionSubagents.steps], it[CloudSessionSubagents.parentId], it[CloudSessionSubagents.taskId])
+            }.reversed()
     }
 
     override suspend fun lastSeq(sessionId: String): Long = database.query { lastSeqOf(sessionId) }
@@ -492,16 +525,18 @@ class SqlCloudConversationStore(private val database: Database) : CloudConversat
     }.orderBy(CloudSessionInputs.createdAt to SortOrder.ASC).limit(MAX_PENDING_ALL).map(::readInput)
 
     /** The caller holds the session row lock, so sequences are dense; [saveCursor] records the new last sequence. */
-    private fun insertEvent(sessionId: String, teamId: String, seq: Long, epoch: Int, runnerSeq: Long?, type: CloudEventType, at: Long, data: String) {
+    private fun insertEvent(sessionId: String, teamId: String, seq: Long, epoch: Int, runnerSeq: Long?, type: CloudEventType, at: Long, data: String, feed: String? = null) {
         CloudSessionEvents.insert {
             it[CloudSessionEvents.sessionId] = sessionId; it[CloudSessionEvents.seq] = seq; it[CloudSessionEvents.teamId] = teamId
             it[CloudSessionEvents.epoch] = epoch; it[CloudSessionEvents.runnerSeq] = runnerSeq; it[CloudSessionEvents.type] = type.wire
-            it[CloudSessionEvents.at] = at; it[CloudSessionEvents.data] = data
+            it[CloudSessionEvents.at] = at; it[CloudSessionEvents.data] = data; it[CloudSessionEvents.feed] = feed.orEmpty()
         }
     }
 
     /** The session's kind on its feed events, so the feed carries a remote session's only to clients that ask for them. */
     private fun PendingTeamEvent.ofKind(session: ResultRow) = copy(data = JsonObject(data + ("kind" to JsonPrimitive(session[CloudSessions.kind]))))
+
+    private val SUBAGENT_TYPES = setOf(CloudEventType.TOOL_CALL, CloudEventType.TOOL_RESULT, CloudEventType.AGENT_MESSAGE, CloudEventType.AGENT_MESSAGE_DELTA, CloudEventType.TASKS)
 
     private val FEED_TYPES = setOf(CloudEventType.TURN, CloudEventType.PERMISSION_REQUEST, CloudEventType.PERMISSION_EXPIRED)
 
@@ -589,7 +624,7 @@ internal fun readAccessPolicy(teamId: String): CloudAccessPolicy =
 
 private fun readEvent(row: ResultRow) = CloudEvent(
     row[CloudSessionEvents.sessionId], row[CloudSessionEvents.seq], CloudEventType.parse(row[CloudSessionEvents.type]) ?: CloudEventType.STATUS,
-    row[CloudSessionEvents.at], row[CloudSessionEvents.epoch], row[CloudSessionEvents.data],
+    row[CloudSessionEvents.at], row[CloudSessionEvents.epoch], row[CloudSessionEvents.data], row[CloudSessionEvents.feed].takeIf { it.isNotEmpty() },
 )
 /** How many of the session's latest requests an answer is matched against. */
 private const val MAX_REQUESTS_SCANNED = 200

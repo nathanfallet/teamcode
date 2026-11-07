@@ -80,11 +80,13 @@ class CloudConversationRoutesTest {
             runnerSeqs[sessionId to epoch] = through
             return RunnerEventsAck(through, lastSeq(sessionId))
         }
-        override suspend fun events(sessionId: String, after: Long?, before: Long?, limit: Int): CloudEventPage {
-            val all = events.filter { it.sessionId == sessionId }
+        override suspend fun events(sessionId: String, after: Long?, before: Long?, limit: Int, feed: String?): CloudEventPage {
+            val all = events.filter { it.sessionId == sessionId && (feed == null || (if (feed == "main") it.feed == null else it.feed == feed)) }
             val page = all.filter { it.seq > (after ?: 0) && (before == null || it.seq < before) }.let { if (before != null) it.takeLast(limit) else it.take(limit) }
             return CloudEventPage(page, all.firstOrNull()?.seq, all.lastOrNull()?.seq ?: 0, page.lastOrNull()?.seq?.takeIf { it < (all.lastOrNull()?.seq ?: 0) }, null)
         }
+        val subagentList = mutableListOf<CloudSubagent>()
+        override suspend fun subagents(sessionId: String, limit: Int): List<CloudSubagent> = subagentList.takeLast(limit)
         override suspend fun lastSeq(sessionId: String) = events.filter { it.sessionId == sessionId }.maxOfOrNull { it.seq } ?: 0
         /** The requests a test says are in the transcript (the MySQL lookup is covered in infrastructure). */
         val requests = mutableMapOf<String, PermissionRequestRecord>()
@@ -202,7 +204,27 @@ class CloudConversationRoutesTest {
             store.runs["s1" to 1] = CloudExecution("s1", 1, "tc-s1-e1", ExecutionState.RUNNING, 1)
 
             val features = Serialization.json.decodeFromString<Capabilities>(client.get("/api/v1/capabilities") { bearerAuth("colleague") }.bodyAsText()).features
-            assertTrue(listOf("cloud.transcript.v1", "cloud.messages.v1", "cloud.attach.v1", "cloud.access.v1", "cloud.sessions.initial-message.v1", "cloud.permissions.v1", "cloud.transcript.live.v1", "cloud.sessions.waiting.v1").all { it in features })
+            assertTrue(listOf("cloud.transcript.v1", "cloud.messages.v1", "cloud.attach.v1", "cloud.access.v1", "cloud.sessions.initial-message.v1", "cloud.permissions.v1", "cloud.transcript.live.v1", "cloud.sessions.waiting.v1", CloudFeeds.FEATURE).all { it in features })
+
+            // Feeds: `feed` pages one agent alone, a bad one is refused, and the agents list needs the transcript permission.
+            conversations.events += listOf(
+                CloudEvent("s1", 1, CloudEventType.TOOL_CALL, 1, 1, "{\"id\":\"a1\"}"),
+                CloudEvent("s1", 2, CloudEventType.TOOL_CALL, 2, 1, "{\"id\":\"x\",\"parentToolUseId\":\"a1\"}", "a1"),
+            )
+            conversations.subagentList += CloudSubagent("a1", "Explore", "Scan", "running", 1, null, 1, null, null)
+            fun feedPage(query: String) = runBlocking { client.get("/api/v1/cloud/sessions/s1/events$query") { bearerAuth("colleague") } }
+            assertEquals(listOf("a1"), Serialization.json.decodeFromString<CloudEventPageView>(feedPage("?feed=a1").bodyAsText()).events.map { it.feed })
+            assertEquals(listOf(null), Serialization.json.decodeFromString<CloudEventPageView>(feedPage("?feed=main").bodyAsText()).events.map { it.feed })
+            assertEquals(HttpStatusCode.BadRequest, feedPage("?feed=bad%20feed").status)
+            assertEquals(HttpStatusCode.BadRequest, feedPage("?feed=a&feed=b").status)
+            val listed = client.get("/api/v1/cloud/sessions/s1/agents") { bearerAuth("colleague") }
+            assertEquals(listOf("a1" to "running"), Serialization.json.decodeFromString<CloudSubagentListView>(listed.bodyAsText()).agents.map { it.id to it.state })
+            assertEquals(HttpStatusCode.OK, client.get("/api/v1/cloud/sessions/s1/agents") { bearerAuth("colleague-read") }.status, "cloud:read lists the agents")
+            // The typed client sends the feed and reads the list.
+            assertEquals(listOf("a1"), sdk("colleague").cloudEvents("s1", feed = "a1").events.map { it.feed })
+            assertEquals(listOf("a1"), sdk("colleague").cloudSubagents("s1").agents.map { it.id })
+            assertFailsWith<IllegalArgumentException> { sdk("colleague").cloudEvents("s1", feed = "bad feed") }
+            conversations.events.clear(); conversations.subagentList.clear()
 
             // An initial message of the full 32,000 characters fits the creation body and is queued (replay: CloudIdlePersistenceTest).
             val longest = "é".repeat(CloudConversationRules.MAX_MESSAGE_CHARS)

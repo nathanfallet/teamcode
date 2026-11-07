@@ -17,8 +17,13 @@ interface CloudConversationStore {
      * skipped, so a retried batch is idempotent; a gap (a sequence beyond the next expected one) stops the batch.
      */
     suspend fun appendRunnerEvents(sessionId: String, epoch: Int, events: List<RunnerEvent>): RunnerEventsAck
-    /** Ascending page: events after [after] (forward), or the newest ones before [before] (backward). */
-    suspend fun events(sessionId: String, after: Long?, before: Long?, limit: Int): CloudEventPage
+    /**
+     * Ascending page: events after [after] (forward), or the newest ones before [before] (backward). With [feed]
+     * (`main`, or a subagent's id) only that feed's events, and the cursors and `firstSeq` follow that feed.
+     */
+    suspend fun events(sessionId: String, after: Long?, before: Long?, limit: Int, feed: String? = null): CloudEventPage
+    /** The session's subagents, oldest first, the newest [limit] of them. */
+    suspend fun subagents(sessionId: String, limit: Int): List<CloudSubagent>
     suspend fun lastSeq(sessionId: String): Long
 
     /**
