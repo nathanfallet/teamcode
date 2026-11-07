@@ -7,6 +7,7 @@ import io.ktor.server.response.*
 import io.ktor.server.routing.*
 import java.security.MessageDigest
 import me.nathanfallet.teamcode.domain.team.*
+import me.nathanfallet.teamcode.domain.todos.TodoService
 
 internal fun escape(value: String) = value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;").replace("'", "&#39;")
 internal fun csrf(principal: Principal) = "<input type='hidden' name='csrf' value='${escape(principal.tokenId)}'>"
@@ -33,7 +34,7 @@ internal const val TRUSTED_BROWSER_COOKIE = "teamcode_trusted_browser"
 /** Sent only to the sign-in form's submission; 400 days, the longest lifetime browsers keep. */
 internal fun ApplicationCall.trustedBrowserCookie(value: String, origin: String) =
     response.cookies.append(Cookie(TRUSTED_BROWSER_COOKIE, value, path = "/dashboard/login", httpOnly = true, secure = origin.startsWith("https://"), maxAge = 400 * 86_400, extensions = mapOf("SameSite" to "Strict")))
-internal fun Route.dashboardRoutes(team: TeamService, publicOrigin: String, githubLinks: Boolean = false, overview: OverviewSources = OverviewSources()) {
+internal fun Route.dashboardRoutes(team: TeamService, publicOrigin: String, githubLinks: Boolean = false, overview: OverviewSources = OverviewSources(), todos: TodoService? = null) {
     val origin = publicOrigin.trimEnd('/')
     get("/") { call.respondRedirect("/dashboard") }
     get("/dashboard/login") {
@@ -77,11 +78,12 @@ internal fun Route.dashboardRoutes(team: TeamService, publicOrigin: String, gith
     get("/dashboard/members") {
         val actor = call.principal
         val members = team.members(actor)
+        val hookOff = if (todos != null && actor.member.role.isAdministrator) todos.stopHookDisabled(actor) else emptySet()
         val rows = members.joinToString("") { member ->
             val protectedOwner = member.role == Role.OWNER && actor.member.role != Role.OWNER
             val access = if (protectedOwner) "OWNER · only an owner can change this account" else """<form action="/dashboard/members/${escape(member.id)}/update" method="post">${csrf(actor)}${memberRoleSelect(actor, member.role)}<label><input type="checkbox" name="disabled" ${if (member.disabled) "checked" else ""}> Disabled</label><button>Save access</button></form>"""
             val recovery = if (protectedOwner) "Owner recovery is restricted" else """<form action="/dashboard/members/${escape(member.id)}/reset" method="post">${csrf(actor)}<button>Reset password</button></form>"""
-            """<tr><td><strong>${escape(member.username)}</strong> <span class="chip">${escape(member.role.name.lowercase())}</span>${if (member.disabled) " <span class=\"chip danger\">disabled</span>" else ""}<br><small>${if (member.passwordChangeRequired) "Password change required" else "Active password"}</small><br><a href="/dashboard/members/${escape(member.id)}/devices">Devices and sessions</a> · <a href="/dashboard/members/${escape(member.id)}/service-keys">Service keys</a></td><td>$access</td><td>$recovery</td></tr>"""
+            """<tr><td><strong>${escape(member.username)}</strong> <span class="chip">${escape(member.role.name.lowercase())}</span>${if (member.disabled) " <span class=\"chip danger\">disabled</span>" else ""}<br><small>${if (member.passwordChangeRequired) "Password change required" else "Active password"}</small><br><a href="/dashboard/members/${escape(member.id)}/devices">Devices and sessions</a> · <a href="/dashboard/members/${escape(member.id)}/service-keys">Service keys</a></td><td>$access${stopHookForm(actor, member.id, todos != null, member.id !in hookOff)}</td><td>$recovery</td></tr>"""
         }
         call.respondText(call.page("Team members", help("Who can change what", "<p>Create accounts directly. There is no public registration or email delivery. Owners control ownership and owner recovery. Keep another enabled owner with a changed password before relinquishing ownership; role changes sign the affected account out.</p>") + """<table><thead><tr><th>Member</th><th>Access</th><th>Recovery</th></tr></thead><tbody>$rows</tbody></table><h2>Add a member</h2><form method="post">${csrf(actor)}<label>Username <input name="username" minlength="3" maxlength="64" required pattern="[a-zA-Z0-9][a-zA-Z0-9._-]{2,63}"></label>${memberRoleSelect(actor, Role.MEMBER)}<button>Create member</button></form>"""), ContentType.Text.Html)
     }
@@ -95,12 +97,21 @@ internal fun Route.dashboardRoutes(team: TeamService, publicOrigin: String, gith
         team.updateMember(call.principal, call.parameters["id"]!!, role(input["role"].orEmpty()), input["disabled"] == "on")
         call.respondRedirect("/dashboard/members")
     }
+    post("/dashboard/members/{id}/stop-hook") {
+        val input = call.form(origin)
+        (todos ?: throw TeamFailure("not_found", 404, "Session todos are not enabled.")).setStopHook(call.principal, call.parameters["id"]!!, input["enabled"] == "on")
+        call.respondRedirect("/dashboard/members")
+    }
     post("/dashboard/members/{id}/reset") {
         call.form(origin)
         call.respondText(call.temporaryPassword(team.resetPassword(call.principal, call.parameters["id"]!!)), ContentType.Text.Html)
     }
 }
 private fun ApplicationCall.temporaryPassword(created: NewMember) = page("Temporary password", """<p>Share this password with <strong>${escape(created.member.username)}</strong>. It is displayed only in this response. They must change it before using TeamCode.</p><code>${escape(created.temporaryPassword)}</code><p><a href="/dashboard/members">Return to team</a></p>""")
+
+/** The todo Stop hook switch of one member; shown to administrators only, when the todo feature exists. */
+private fun stopHookForm(actor: Principal, memberId: String, available: Boolean, enabled: Boolean) =
+    if (!available || !actor.member.role.isAdministrator) "" else """<form action="/dashboard/members/${escape(memberId)}/stop-hook" method="post">${csrf(actor)}<label><input type="checkbox" name="enabled" ${if (enabled) "checked" else ""}> Todo Stop hook</label>${hint("When on, an agent of this member's sessions cannot end its turn while its todo has open items. Off: the agent may stop; the todo is still kept.")} <button>Save</button></form>"""
 
 /** Role controls reflect authority, while the transactional service remains the enforcement boundary. */
 private fun memberRoleSelect(actor: Principal, selected: Role): String {

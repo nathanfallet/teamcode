@@ -39,7 +39,7 @@ class TodoPersistenceTest {
     fun aTodoHoldsAcrossReplicas() = runBlocking {
         AutomationWorld.run(91) { w ->
             w.a.database.query {
-                assertEquals(emptyList(), MigrationUtils.statementsRequiredForDatabaseMigration(SessionTodos, SessionTodoItems, CloudSessions, withLogs = false), "The reviewed migrations match the Exposed tables")
+                assertEquals(emptyList(), MigrationUtils.statementsRequiredForDatabaseMigration(SessionTodos, SessionTodoItems, MemberTodoSettings, CloudSessions, withLogs = false), "The reviewed migrations match the Exposed tables")
             }
             val waitsA = SqlWaitStore(w.a.database)
             val a = TodoService(SqlTodoStore(w.a.database), WaitBackedDropWaits(waitsA)); val b = TodoService(SqlTodoStore(w.b.database), WaitBackedDropWaits(SqlWaitStore(w.b.database)))
@@ -55,6 +55,15 @@ class TodoPersistenceTest {
             val list = a.get(w.member, session)!!
             assertEquals(listOf("a", "b", "c"), list.items.map { it.id })
             assertEquals(list, b.get(w.member, session), "both replicas read the same list")
+
+            // The Stop hook is on until an administrator turns it off; the switch is shared by the replicas and ends with the member.
+            val hooks = SqlTodoStore(w.a.database); val otherReplica = SqlTodoStore(w.b.database)
+            val team = w.member.teamId; val me = w.member.member.id
+            assertTrue(hooks.stopHookEnabled(team, me)); assertEquals(emptySet(), hooks.stopHookDisabled(team))
+            assertTrue(hooks.setStopHookEnabled(team, me, false))
+            assertFalse(otherReplica.stopHookEnabled(team, me)); assertEquals(setOf(me), otherReplica.stopHookDisabled(team))
+            assertTrue(hooks.setStopHookEnabled(team, me, true)); assertTrue(otherReplica.stopHookEnabled(team, me))
+            assertFalse(hooks.setStopHookEnabled(team, "ghost", false), "an unknown member is refused")
 
             // A discovered item goes after the one in progress; the order survives a round trip.
             b.start(w.member, session, "a", false, null)

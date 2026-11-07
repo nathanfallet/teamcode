@@ -62,6 +62,12 @@ internal fun TodoList.view() = TodoView(
  * administrator reads. The rules and the checks of an item live in the domain; these routes decode and encode.
  */
 internal fun Route.todoRoutes(todos: TodoService) {
+    put("/api/v1/members/{id}/todo-stop-hook") {
+        val input = call.jsonBody<TodoStopHookRequest>()
+        val id = call.parameters["id"]!!
+        todos.setStopHook(call.principal, id, input.enabled)
+        call.respond(TodoStopHookView(id, input.enabled))
+    }
     route("/api/v1/todos/session") {
         get { call.respond(TodoSessionView(todos.get(call.principal, session(call.request.queryParameters["sessionId"]))?.view())) }
         post {
