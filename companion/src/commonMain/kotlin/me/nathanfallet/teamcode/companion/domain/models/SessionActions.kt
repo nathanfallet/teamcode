@@ -10,6 +10,9 @@ data class InputReceipt(
     val reason: String?,
 )
 
+/** A model the member may switch a session's agent to: [id] is what is sent, [label] what is read. */
+data class ModelOption(val id: String, val label: String)
+
 /** What the new-session form sends; optional fields are left out when empty or when the server does not take them. */
 data class NewSession(
     val name: String,

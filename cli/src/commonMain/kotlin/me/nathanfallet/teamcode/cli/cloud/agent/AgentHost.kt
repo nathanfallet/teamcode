@@ -264,6 +264,19 @@ internal class AgentHost(
             if (child == null || lines.isEmpty()) return RunnerInputAckView(input.id, CloudInputStatuses.REJECTED, "no_turn")
             return if (write(child, lines)) consumed else unavailable
         }
+        if (input.kind == CloudModels.KIND) {
+            // Never starts the agent: a stopped one reads the session's model, which the server already changed, when it starts.
+            val model = input.text?.takeIf { CloudModels.MODEL.matches(it) } ?: return RunnerInputAckView(input.id, CloudInputStatuses.REJECTED, "invalid_input")
+            val (child, lines) = lock.withLock {
+                // The settings the next start of the agent reads (a restart of its process, a resumed conversation) follow too.
+                settings = settings?.copy(model = model)
+                val active = adapter
+                val lines = active?.setModel(model).orEmpty()
+                process.takeIf { active != null } to lines
+            }
+            if (child == null || lines.isEmpty()) return consumed
+            return if (write(child, lines)) consumed else unavailable
+        }
         if (input.kind == CloudTasks.KIND) {
             // Never starts the agent: only a running process has tasks to stop.
             val taskId = input.text?.takeIf { CloudTasks.TASK_ID.matches(it) } ?: return RunnerInputAckView(input.id, CloudInputStatuses.REJECTED, "invalid_input")

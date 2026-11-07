@@ -201,6 +201,29 @@ data class PauseCloudSessionRequest(val force: Boolean = false)
 /** `PATCH /cloud/sessions/{id}` (`cloud.sessions.rename.v1`): the new name, 1-120 characters without control characters. */
 @Serializable
 data class RenameCloudSessionRequest(val name: String)
+/** `PUT /cloud/sessions/{id}/model` ([CloudModels.FEATURE]): the model the session's agent uses from its next turn on. Owner only. */
+@Serializable
+data class SetCloudSessionModelRequest(val model: String)
+/** One model a member may pick for a session: [id] is what the request sends, [label] what a person reads. */
+@Serializable
+data class CloudModelOptionView(val id: String, val label: String)
+/** `GET /cloud/models?agent=claude|codex`: the models the team's model policy lets the caller pick for that agent, best first. */
+@Serializable
+data class CloudModelsView(val agent: String, val models: List<CloudModelOptionView> = emptyList())
+
+/**
+ * `cloud.sessions.model.v1`: the owner of a cloud or remote session changes the model of its agent while it runs, like
+ * `/model` in a terminal. The session's recorded model changes at once; a running agent takes it for its next turn.
+ */
+object CloudModels {
+    const val FEATURE = "cloud.sessions.model.v1"
+    /** The input kind that carries the model to a running agent; its text is the model. */
+    const val KIND = "set_model"
+    /** The model ids the server takes: the creation's rule (letters, digits and `. _ : / -`, 1 to 120 characters). */
+    val MODEL = Regex("[a-zA-Z0-9._:/-]{1,120}")
+    /** Rejected by a runner that cannot change the model of its agent while it runs. */
+    const val UNSUPPORTED = "model_change_unsupported"
+}
 /** `PUT /cloud/sessions/{id}/github` (`cloud.sessions.github-access.v1`): `owner`, `shared` or `none`. Owner only. */
 @Serializable
 data class CloudGitHubAccessRequest(val access: String)

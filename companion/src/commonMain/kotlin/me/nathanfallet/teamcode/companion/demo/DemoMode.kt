@@ -147,6 +147,13 @@ internal class DemoStore(private val clock: Clock, account: Account) {
         return renamed
     }
 
+    /** Switches [id]'s agent to [model] at once; the demo's agent never answers differently. */
+    fun setModel(id: String, model: String): CloudSession {
+        val changed = session(id).copy(model = model, updatedAt = now())
+        _sessions.update { it + (id to changed) }
+        return changed
+    }
+
     /**
      * Records the member's [text] (when there is one) and the agent's scripted reply after it, as one finished turn;
      * returns the input id of the message.

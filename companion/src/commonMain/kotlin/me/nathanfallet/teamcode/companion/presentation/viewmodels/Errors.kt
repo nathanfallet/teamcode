@@ -91,6 +91,7 @@ private fun InvalidInput.inputSentence(): Pair<StringResource, List<Any>> = when
     InvalidInput.Problem.MESSAGE_LENGTH -> Res.string.input_message_length to listOf(limit)
     InvalidInput.Problem.FIRST_MESSAGE_LENGTH -> Res.string.input_first_message_length to listOf(limit)
     InvalidInput.Problem.SESSION_NAME -> Res.string.input_session_name to listOf(limit)
+    InvalidInput.Problem.SESSION_MODEL -> Res.string.input_session_model to listOf(limit)
     InvalidInput.Problem.CHOOSE_PROFILE -> Res.string.input_choose_profile to emptyList()
     InvalidInput.Problem.CHOOSE_DEVICE -> Res.string.input_choose_device to emptyList()
     InvalidInput.Problem.CHOOSE_FOLDER -> Res.string.input_choose_folder to emptyList()

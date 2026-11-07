@@ -596,6 +596,17 @@ private fun ApiCatalog.policyOperations() {
             badRequest("An invalid pattern, effort or thinking limit (`invalid_policy`, `invalid_thinking`).")
         }
     }
+    get("/api/v1/cloud/models") {
+        operationId = "listCloudModels"; tag(ApiTags.POLICY)
+        summary = "The models a session's agent can be switched to"
+        description = "The models of the `agent` query parameter (`claude` or `codex`) that the team's model policy allows, best first: " +
+            "what the model picker of a cloud or remote session offers (`cloud.sessions.model.v1`). A suggestion, not a limit: " +
+            "`PUT /cloud/sessions/{id}/model` takes any model id the policy allows. Readable by every member."
+        responses {
+            ok<CloudModelsView>("The allowed models of that agent.")
+            badRequest("An unknown agent (`invalid_agent`).")
+        }
+    }
     get("/api/v1/routes") {
         operationId = "listRoutes"; tag(ApiTags.POLICY)
         summary = "List the model routes"

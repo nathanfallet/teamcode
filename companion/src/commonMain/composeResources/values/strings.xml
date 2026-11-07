@@ -349,6 +349,14 @@
     <string name="session_menu_rename">Rename</string>
     <string name="session_rename_title">Rename session</string>
     <string name="session_rename_save">Save</string>
+    <string name="session_model_title">Change model</string>
+    <string name="session_model_hint">The next turn uses it. A turn in progress finishes with the current model.</string>
+    <string name="session_model_custom">Model id</string>
+    <string name="session_model_default">Default model</string>
+    <string name="session_model_failed">The list could not be loaded. Type a model id.</string>
+    <string name="session_model_apply">Switch</string>
+    <string name="session_model_change">Change the model</string>
+    <string name="input_session_model">Use a valid model id: letters, digits and . _ : / - (up to %1$d characters).</string>
     <string name="session_end_title">End this session?</string>
     <string name="session_end_body">The agent stops and the session's workspace is deleted. This cannot be undone.</string>
     <string name="new_session_overrides">Overrides · optional</string>

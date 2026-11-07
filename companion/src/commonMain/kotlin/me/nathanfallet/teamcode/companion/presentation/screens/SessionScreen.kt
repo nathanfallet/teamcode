@@ -68,6 +68,16 @@ import com.adamglin.phosphoricons.regular.Play
 import com.adamglin.phosphoricons.regular.Stop
 import kotlinx.coroutines.flow.drop
 import me.nathanfallet.teamcode.companion.domain.models.CloudSession
+import me.nathanfallet.teamcode.companion.domain.models.ModelOption
+import me.nathanfallet.teamcode.companion.presentation.components.Chip
+import me.nathanfallet.teamcode.companion.resources.input_session_model
+import me.nathanfallet.teamcode.companion.resources.session_model_apply
+import me.nathanfallet.teamcode.companion.resources.session_model_change
+import me.nathanfallet.teamcode.companion.resources.session_model_custom
+import me.nathanfallet.teamcode.companion.resources.session_model_default
+import me.nathanfallet.teamcode.companion.resources.session_model_failed
+import me.nathanfallet.teamcode.companion.resources.session_model_hint
+import me.nathanfallet.teamcode.companion.resources.session_model_title
 import me.nathanfallet.teamcode.companion.domain.models.SessionHost
 import me.nathanfallet.teamcode.companion.domain.models.PendingMessage
 import me.nathanfallet.teamcode.companion.domain.models.SessionState
@@ -237,6 +247,7 @@ fun SessionScreen(
     val mode = currentSubagentPanelMode()
     val thread = state.thread?.takeIf { it in byId }
     val todo = state.todo
+    var choosingModel by rememberSaveable { mutableStateOf(false) }
     // The panel is there for the agents' work, and for the todo once the agent made one.
     val layout = subagentLayout(mode, work.hasContent || todo != null, state.panelOpen, state.panelHidden, thread != null)
     val canStop = live?.stoppable == true && messaging && state.agentRuns
@@ -266,7 +277,14 @@ fun SessionScreen(
             Row(Modifier.weight(1f).fillMaxWidth()) {
             Column(Modifier.weight(1f).fillMaxHeight(), horizontalAlignment = Alignment.CenterHorizontally) {
                 Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    state.session?.let { Summary(it, state) }
+                    state.session?.let { session ->
+                        val canChangeModel = state.modelChanges && state.canControl && ControlSessionUseCase.canChangeModel(session)
+                        Summary(session, state, onModel = if (canChangeModel) ({ choosingModel = true }) else null)
+                        if (choosingModel && canChangeModel) ModelPickerDialog(
+                            current = session.model, options = state.models, failed = state.modelsFailed, busy = state.acting, onLoad = viewModel::loadModels,
+                            onConfirm = { choosingModel = false; viewModel.setModel(it) }, onDismiss = { choosingModel = false },
+                        )
+                    }
                     state.session?.let { session ->
                         when {
                             // Not a failure of the session: its device went quiet, and it goes on once the device is back.
@@ -338,6 +356,42 @@ fun SessionScreen(
     }
 }
 
+/**
+ * The model of the session's agent, like `/model` in a terminal: the models the team's policy allows, or any other id
+ * typed in (the server checks it against the policy). Switching is offered once another model is chosen.
+ */
+@Composable
+private fun ModelPickerDialog(current: String?, options: List<ModelOption>?, failed: Boolean, busy: Boolean, onLoad: () -> Unit, onConfirm: (String) -> Unit, onDismiss: () -> Unit) {
+    val colors = TeamCode.colors
+    var chosen by rememberSaveable { mutableStateOf(current.orEmpty()) }
+    LaunchedEffect(Unit) { onLoad() }
+    val sent = chosen.trim()
+    val valid = ControlSessionUseCase.validModel(sent)
+    val canSwitch = valid && sent != current && !busy
+    Dialog(onDismissRequest = onDismiss) {
+        Column(
+            Modifier.widthIn(max = 420.dp).fillMaxWidth().clip(Radii.card).background(colors.panel).border(1.dp, colors.line, Radii.card).padding(18.dp).testTag("model-dialog"),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Text(stringResource(Res.string.session_model_title), color = colors.text, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+            Text(stringResource(Res.string.session_model_hint), color = colors.muted, fontSize = 13.sp, lineHeight = 18.sp)
+            if (!options.isNullOrEmpty()) FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                for (option in options) ChoiceChip(option.label, selected = sent == option.id, onClick = { chosen = option.id }, tag = "model-option-${option.id}")
+            }
+            if (failed) Text(stringResource(Res.string.session_model_failed), color = colors.warn, fontSize = 12.5.sp)
+            TcTextField(
+                chosen, { chosen = it }, label = stringResource(Res.string.session_model_custom), mono = true, error = !valid && chosen.isNotEmpty(),
+                hint = if (!valid && chosen.isNotEmpty()) stringResource(Res.string.input_session_model, ControlSessionUseCase.MAX_MODEL) else null,
+                tag = "model-id", onSubmit = { if (canSwitch) onConfirm(sent) },
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TcButton(stringResource(Res.string.action_cancel), onClick = onDismiss, kind = ButtonKind.SECONDARY, modifier = Modifier.weight(1f))
+                TcButton(stringResource(Res.string.session_model_apply), onClick = { onConfirm(sent) }, enabled = canSwitch, modifier = Modifier.weight(1f).testTag("model-apply"))
+            }
+        }
+    }
+}
+
 /** "…": pause, resume, rename or end (owner and administrators; rename and end are shared with the sessions list's menu), and the artifacts this session published. */
 @Composable
 private fun SessionMenu(state: SessionUiState, viewModel: SessionViewModel, onOpenArtifacts: () -> Unit, menuItems: @Composable (CloudSession, () -> Unit) -> Unit) {
@@ -375,7 +429,7 @@ private fun SessionMenu(state: SessionUiState, viewModel: SessionViewModel, onOp
 
 /** State, stream and the one-line details; a tap shows every detail. */
 @Composable
-private fun Summary(session: CloudSession, state: SessionUiState) {
+private fun Summary(session: CloudSession, state: SessionUiState, onModel: (() -> Unit)?) {
     val colors = TeamCode.colors
     var expanded by rememberSaveable { mutableStateOf(false) }
     Column(
@@ -391,6 +445,12 @@ private fun Summary(session: CloudSession, state: SessionUiState) {
                 itemVerticalAlignment = Alignment.CenterVertically,
             ) {
                 StateChip(session.state)
+                // The model that runs; for the owner it opens the picker, like `/model` in a terminal.
+                if (session.model != null || onModel != null) {
+                    val label = session.model ?: stringResource(Res.string.session_model_default)
+                    val changeLabel = stringResource(Res.string.session_model_change)
+                    Chip(label, Modifier.testTag("model-chip").let { if (onModel != null) it.clickable(role = Role.Button, onClickLabel = changeLabel, onClick = onModel) else it }, tone = Tone.MUTED)
+                }
                 if (session.remote) KindChips(session)
                 if (session.permissionBypass) Chip(stringResource(Res.string.session_bypass_on), modifier = Modifier.testTag("bypass-chip"))
                 LiveLabel(state)
@@ -401,7 +461,7 @@ private fun Summary(session: CloudSession, state: SessionUiState) {
             )
         }
         if (!expanded) {
-            val line = listOfNotNull(session.agentKind, session.model, session.effort, session.host?.directoryName, session.repositories.firstOrNull()?.let { if (session.repositories.size > 1) "$it +${session.repositories.size - 1}" else it })
+            val line = listOfNotNull(session.agentKind, session.effort, session.host?.directoryName, session.repositories.firstOrNull()?.let { if (session.repositories.size > 1) "$it +${session.repositories.size - 1}" else it })
             Text(line.joinToString(" · "), style = MetaStyle, color = colors.muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
         } else {
             Detail(stringResource(Res.string.session_detail_runs_on), when {

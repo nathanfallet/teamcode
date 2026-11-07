@@ -301,6 +301,11 @@ data class RunnerInputsRequest(
      * (`task_stop_unsupported`) instead of being delivered, so an older runner never reads it as a message.
      */
     val acceptsTaskStops: Boolean = false,
+    /**
+     * The runner takes a model change ([CloudModels.KIND] inputs); without it, such an input is rejected
+     * (`model_change_unsupported`) instead of being delivered, so an older runner never reads it as a message.
+     */
+    val acceptsModelChanges: Boolean = false,
 )
 /** [files]: what a message carries; download each from `GET /cloud/runner/files/{id}` and check its [RunnerFileView.sha256]. */
 @Serializable

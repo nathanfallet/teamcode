@@ -110,6 +110,26 @@ class SessionActionUseCasesTest {
         assertFalse(ControlSessionUseCase.canEnd(ended)); assertTrue(ControlSessionUseCase.canEnd(failed)); assertTrue(ControlSessionUseCase.canEnd(paused))
     }
 
+    @Test fun theModelChangesOnlyWhereTheServerTakesItWithTheServersIdRules() = runTest {
+        val control = ControlSessionUseCase(sessions, guard, SequenceIds(), features)
+        assertFalse(control.supportsModelChange("a1"))
+        assertFailsWith<CompanionException.Unsupported> { control.setModel("a1", "s1", "claude-sonnet-5-5") }
+        assertFailsWith<CompanionException.Unsupported> { control.models("a1", cloudSession("s1")) }
+        features.features += "cloud.sessions.model.v1"
+        assertTrue(control.supportsModelChange("a1"))
+        assertEquals("claude-sonnet-5-5", control.setModel("a1", "s1", "  claude-sonnet-5-5  ").model)
+        assertTrue(sessions.calls.contains("setModel s1 claude-sonnet-5-5"))
+        for (bad in listOf("", "   ", "two words", "x".repeat(121), "semi;colon", "line\nbreak")) assertFailsWith<InvalidInput>(bad) { control.setModel("a1", "s1", bad) }
+        assertEquals(1, sessions.calls.count { it.startsWith("setModel") })
+        assertEquals(listOf("claude-opus-5-5", "claude-sonnet-5-5"), control.models("a1", cloudSession("s1")).map { it.id })
+        assertTrue(sessions.calls.contains("models claude"), "The list is the one of the session's agent")
+        assertTrue(ControlSessionUseCase.validModel("x".repeat(120)) && ControlSessionUseCase.validModel("gpt-6-sol") && ControlSessionUseCase.validModel("a.b_c:d/e-f"))
+        // Offered for any session that has not ended, except a local one: its agent is its terminal's.
+        assertTrue(ControlSessionUseCase.canChangeModel(cloudSession("p", SessionState.PAUSED)))
+        assertFalse(ControlSessionUseCase.canChangeModel(cloudSession("e", SessionState.TERMINATED)))
+        assertFalse(ControlSessionUseCase.canChangeModel(cloudSession("l").copy(kind = me.nathanfallet.teamcode.companion.domain.models.SessionKind.LOCAL)))
+    }
+
     @Test fun creationTrimsAndSendsTheFirstMessageOnlyWhenTheServerTakesIt() = runTest {
         features.features += "cloud.sessions.initial-message.v1"
         val create = CreateSessionUseCase(sessions, features, guard)

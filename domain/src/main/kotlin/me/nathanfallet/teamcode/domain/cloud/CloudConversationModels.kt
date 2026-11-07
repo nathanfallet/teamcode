@@ -37,7 +37,9 @@ enum class CloudInputKind(val wire: String) {
     /** The answer to a `permission.request`; its text is the encoded answer, read by the runner. */
     PERMISSION("permission"),
     /** Stops one background task of the running agent; its text is the task id. Delivered only to a runner that takes it. */
-    STOP_TASK("stop_task");
+    STOP_TASK("stop_task"),
+    /** Changes the model of the running agent from its next turn on; its text is the model. Delivered only to a runner that takes it. */
+    SET_MODEL("set_model");
     companion object { fun parse(value: String) = entries.singleOrNull { it.wire == value } }
 }
 

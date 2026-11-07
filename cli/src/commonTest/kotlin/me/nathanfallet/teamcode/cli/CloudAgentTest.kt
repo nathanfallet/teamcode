@@ -1326,6 +1326,51 @@ class CloudAgentTest {
         job.cancel()
     }
 
+    @Test fun aModelChangeReachesTheAgentForItsNextTurn() {
+        // Claude Code: the SDK's `set_model` control request, and the model a later start of the process uses.
+        val adapter = ClaudeStreamJsonAdapter(claude)
+        assertTrue("opus" in adapter.command(null).arguments)
+        val change = obj(adapter.setModel("claude-sonnet-5-5").single())
+        assertEquals("control_request", change.str("type"))
+        assertEquals("set_model", change["request"]!!.jsonObject.str("subtype")); assertEquals("claude-sonnet-5-5", change["request"]!!.jsonObject.str("model"))
+        val args = adapter.command(null).arguments
+        assertEquals("claude-sonnet-5-5", args[args.indexOf("--model") + 1])
+
+        // Codex: no request; the next `turn/start` carries the model (only after a change: the thread already runs the session's).
+        val codexAdapter = CodexAppServerAdapter(codex, "1.0")
+        val startup = codexAdapter.startup(null, "/workspace").map(::obj)
+        val ready = codexAdapter.parse("""{"id":${startup[2].str("id")},"result":{"thread":{"id":"th-1"},"model":"gpt-5"}}""")
+        assertTrue(ready.replies.isEmpty())
+        assertTrue(codexAdapter.setModel("gpt-6-sol").isEmpty())
+        val turn = obj(codexAdapter.message("go").single())
+        assertEquals("turn/start", turn.str("method")); assertEquals("gpt-6-sol", turn["params"]!!.jsonObject.str("model"))
+        val untouched = CodexAppServerAdapter(codex, "1.0")
+        val started = untouched.startup(null, "/workspace").map(::obj)
+        untouched.parse("""{"id":${started[2].str("id")},"result":{"thread":{"id":"th-2"},"model":"gpt-5"}}""")
+        assertFalse("model" in obj(untouched.message("go").single())["params"]!!.jsonObject, "A session never switched names no model per turn")
+    }
+
+    @Test fun hostSwitchesTheModelOfARunningAgentAndNeverStartsOne() = runTest {
+        val channel = FakeChannel()
+        val started = mutableListOf<Pair<AgentCommand, FakeProcess>>()
+        val job = launch { host(channel, MemoryState(), started).run() }
+        // No agent runs: the server already recorded the model, which the agent reads when it starts.
+        channel.inputs.send(listOf(RunnerInputView("model-0", CloudModels.KIND, "claude-sonnet-5-5", 1)))
+        until { channel.acks.isNotEmpty() }
+        assertEquals(RunnerInputAckView("model-0", CloudInputStatuses.CONSUMED), channel.acks.single())
+        assertTrue(started.isEmpty(), "A model change never starts an agent")
+        channel.inputs.send(listOf(RunnerInputView("in-1", "message", "Hello", 1)))
+        until { channel.acks.size == 2 }
+        val process = started.single().second
+        channel.inputs.send(listOf(RunnerInputView("model-1", CloudModels.KIND, "claude-opus-5-5", 1), RunnerInputView("model-2", CloudModels.KIND, "not a model", 1)))
+        until { channel.acks.size == 4 }
+        assertEquals(RunnerInputAckView("model-1", CloudInputStatuses.CONSUMED), channel.acks[2])
+        assertEquals(RunnerInputAckView("model-2", CloudInputStatuses.REJECTED, "invalid_input"), channel.acks[3])
+        assertTrue(process.written.any { "\"set_model\"" in it && "claude-opus-5-5" in it })
+        assertFalse(process.written.any { "not a model" in it })
+        job.cancel()
+    }
+
     @Test fun logsShowTheBackgroundTasksInOneLine() {
         val tasks = buildJsonObject { putJsonArray("tasks") { addJsonObject { put("id", "b1"); put("description", "npm test") }; addJsonObject { put("id", "a1"); put("description", "Review") } } }
         assertTrue(CloudEventView(1, CloudEventTypes.TASKS, 0, 1, tasks).render().endsWith("[tasks] 2 running: npm test, Review"))

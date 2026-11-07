@@ -349,6 +349,14 @@
     <string name="session_menu_rename">Renommer</string>
     <string name="session_rename_title">Renommer la session</string>
     <string name="session_rename_save">Enregistrer</string>
+    <string name="session_model_title">Changer de modèle</string>
+    <string name="session_model_hint">Le prochain tour l'utilise. Un tour en cours se termine avec le modèle actuel.</string>
+    <string name="session_model_custom">Identifiant du modèle</string>
+    <string name="session_model_default">Modèle par défaut</string>
+    <string name="session_model_failed">La liste n'a pas pu être chargée. Saisis un identifiant de modèle.</string>
+    <string name="session_model_apply">Changer</string>
+    <string name="session_model_change">Changer de modèle</string>
+    <string name="input_session_model">Utilise un identifiant valide : lettres, chiffres et . _ : / - (%1$d caractères au maximum).</string>
     <string name="session_end_title">Terminer cette session ?</string>
     <string name="session_end_body">L'agent s'arrête et le workspace de la session est supprimé. Cette action est irréversible.</string>
     <string name="new_session_overrides">Personnalisation · facultatif</string>
