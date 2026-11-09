@@ -10,6 +10,8 @@ data class DeviceView(
     val platform: String? = null, val osVersion: String? = null,
     /** The device's TeamCode daemon (`cloud.sessions.remote.daemon.v1`); null when it never connected or said it stopped. */
     val daemon: DaemonPresenceView? = null,
+    /** The installation registered for push notifications. */
+    val push: Boolean = false,
 )
 /**
  * [online]: the daemon polled less than a minute ago; only an online device accepts a session started from elsewhere.

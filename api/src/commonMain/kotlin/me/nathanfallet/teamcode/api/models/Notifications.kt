@@ -5,6 +5,8 @@ import kotlinx.serialization.Serializable
 /** Wire names of notifications (`notifications.v1`, docs/notifications.md). A client must tolerate an unknown channel or kind from a newer server. */
 object Notifications {
     const val CAPABILITY = "notifications.v1"
+    /** The server has the push channel: the apps register their device with `PUT /api/v1/devices/current/push`. */
+    const val PUSH_CAPABILITY = "notifications.push.v1"
     /** What a member is told about, one switch per channel. */
     val kinds = listOf("waiting", "turn_completed", "turn_failed", "session_failed")
 }

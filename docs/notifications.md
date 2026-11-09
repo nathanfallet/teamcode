@@ -8,13 +8,15 @@ TeamCode tells a member when something needs them or is done: an agent waits for
 | --- | --- |
 | Events, channels and the router: kinds, per-member switches, a worker that turns journal events into deliveries with retries (`notifications.v1`) | Implemented |
 | `GET`/`PUT /api/v1/notifications/settings`: a member's own switches | Implemented |
-| Push channel: FCM tokens on devices, end-to-end encrypted content, the TeamCode Push relay (`push.teamcode.nathanfallet.me`) or a team's own Firebase project | Planned |
+| Push channel: FCM tokens on devices (`notifications.push.v1`), end-to-end encrypted content, the relay client and a team's own Firebase project, chosen per team on the dashboard | Implemented |
+| The TeamCode Push relay itself (`push.teamcode.nathanfallet.me`, Kotlin/Native on Cloud Run) | Planned: until it is deployed, choosing the relay queues pushes that are retried, then given up |
 | Companion apps: Android and iOS push, desktop native notifications from the event feed | Planned |
 | Slack and Discord channels: linking a member's chat account, one message per notification | Planned |
-| Settings screen in the companion apps and on the dashboard | Planned |
+| Push provider on the dashboard (Settings → Push notifications) and `GET`/`PUT /api/v1/notifications/push/settings`, with a test push | Implemented |
+| Members' switches in the companion apps and on the dashboard | Planned |
 | Notifications for a bare `teamcode run` waiting for a person (its `waiting_for_human` activity has no journal event yet) | Planned |
 
-A server without a configured channel keeps the settings routes and sends nothing.
+A server without the encryption key (`TEAMCODE_ENCRYPTION_KEY`) has no push channel: it keeps the settings routes and sends nothing. With it, the push channel is offered, and each team's pushes go nowhere until an administrator chooses a provider.
 
 ## What notifies whom
 
@@ -59,6 +61,60 @@ A channel implements `NotificationChannel`:
 
 - `id`: stored with settings and deliveries (`push`, later `slack`, `discord`);
 - `reachable(teamId, memberIds)`: which members it can reach now, in one read (members with a device that registered a push token, members who linked a chat account);
-- `deliver(notification)`: sends to every destination of the member on this channel and answers delivered, retry or failed.
+- `deliver(notifications)`: sends a batch, each notification to every destination of its member on this channel, reading the destinations once for the batch, and answers delivered, retry or failed per notification.
 
 The channel owns its destinations and how a notification looks there; the router decides what is sent and to whom, the same for every channel. The composition root (`Application.kt`) lists the channels this server offers.
+
+## Push
+
+### Devices
+
+The iOS and Android apps register the installation they run on, with the session of their login (an app login has a device; a browser session and a service key have none):
+
+```http
+PUT /api/v1/devices/current/push
+{"token":"<FCM registration token>","publicKey":"<P-256 public key, SubjectPublicKeyInfo DER, base64>"}
+
+DELETE /api/v1/devices/current/push
+```
+
+The app sends both at every start and when FCM rotates the token; a new value replaces the old one on the device's row (`devices.push_token`, `push_public_key`, `push_token_updated_at`). The dashboard and the API only say whether a device has push on, never its token. A desktop device is refused (`push_unsupported`): desktop apps notify from the event feed. Pushes go only to devices that still have a signed-in session; a token the provider no longer knows is cleared, unless the app already replaced it.
+
+### Push payload
+
+The text of a notification exists in clear only on the server and on the device. Each push is encrypted for the device's key (ECIES on P-256):
+
+```
+base64( 0x01 | ephemeral public key (65 bytes, uncompressed point) | nonce (12 bytes) | AES-256-GCM ciphertext and 16-byte tag )
+key = HKDF-SHA256(ECDH(ephemeral private, device public), salt = ephemeral point | device point, info = "teamcode-push-v1", 32 bytes)
+```
+
+The plaintext is the JSON of `PushPayload` (API module): `v`, `id`, `origin` (the server's public URL), `memberId`, `kind` (a notification kind, or `test`), `title`, `body`, `sessionId`, `waitId`, `at`. `origin` and `memberId` tell an app signed in to several servers or accounts which one it is for. The collapse key the provider sees is a hash of the team and the notification's collapse key: pushes about the same wait replace one another without saying which wait.
+
+### What the provider sees
+
+The relay and the team's own Firebase project send the same FCM message: the token, the data `{"p": <encrypted payload>, "v": "1"}`, and
+
+- **iOS**: a generic visible alert ("TeamCode", "New activity in TeamCode") with `mutable-content: 1`, `apns-collapse-id` and an expiry of one hour; the notification service extension decrypts the payload and replaces the text. If it cannot (an old app, no time), the generic alert shows.
+- **Android**: a high-priority data message with the collapse key and a one-hour TTL; the app decrypts and shows it.
+
+### Providers
+
+An administrator chooses the team's provider on the dashboard (Settings → Push notifications) or with `GET`/`PUT /api/v1/notifications/push/settings`:
+
+| Provider | For | What is stored |
+| --- | --- | --- |
+| `off` (default) | | Nothing is sent; devices still register |
+| `relay` | The published TeamCode apps (App Store, Google Play), whose Firebase project only the relay holds | The relay URL, default `https://push.teamcode.nathanfallet.me` (https, no path, no link-local or metadata address) |
+| `firebase` | Apps the team builds and signs itself with its own Firebase project | A Google service account JSON key with the Firebase Cloud Messaging API Admin role, sealed with the server's key (`push-firebase:<team>`); its `token_uri` must be Google's. Choosing another provider deletes it |
+
+"Send a test to my phone" (`POST /api/v1/notifications/push/test`) sends a `test` notification to the administrator's own phones at once and shows each installation's result. Every save is audited (`push.settings_updated`, `push.firebase_key_saved`).
+
+### Relay protocol (`push.v1`)
+
+The relay sees an instance, a token and an encrypted blob: never a member, a session or the text. The `PushRelay` models of the API module are the wire format; `RelayPushSender` (infrastructure) speaks it and a test of the app module holds the two together.
+
+- **Identity.** At the first push the server makes an Ed25519 key pair, shared by every replica (`push_relay_instances`, the private key sealed with the server's key) and registers its public key: `POST /v1/instances {"publicKey": "<raw 32 bytes, base64url>"}` → `{"instanceId": "..."}`. The same key gets the same id.
+- **Signature.** Every other request carries `TeamCode-Instance`, `TeamCode-Timestamp` (Unix seconds, at most 300 s off) and `TeamCode-Signature`: Ed25519 over `POST\n<path>\n<timestamp>\n<sha256 of the body, lowercase hex>`, base64url without padding.
+- **Send.** `POST /v1/send {"token", "platform": "ios"|"android", "payload", "collapseKey", "ttlSeconds"}` → `{"status": "sent"|"unregistered"|"retry"|"rejected", "retryAfterSeconds"?, "error"?}`.
+- **Outcomes.** `sent` delivers; `unregistered` clears the token; `retry`, 408, 429 and 5xx are retried; `401` (the relay no longer knows the key) registers the same key again at the next push; `403` (the instance is blocked) and other refusals fail.

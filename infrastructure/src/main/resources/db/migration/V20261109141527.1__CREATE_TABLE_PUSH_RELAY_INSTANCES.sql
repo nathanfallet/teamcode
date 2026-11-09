@@ -1,0 +1,1 @@
+CREATE TABLE IF NOT EXISTS push_relay_instances (relay_url VARCHAR(255) PRIMARY KEY, public_key VARCHAR(64) NOT NULL, private_key text NOT NULL, instance_id VARCHAR(64) NULL, created_at BIGINT NOT NULL);
