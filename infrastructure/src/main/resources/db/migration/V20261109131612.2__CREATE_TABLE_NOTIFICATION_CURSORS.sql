@@ -1,0 +1,1 @@
+CREATE TABLE IF NOT EXISTS notification_cursors (team_id VARCHAR(36) PRIMARY KEY, fanout_seq BIGINT NOT NULL);

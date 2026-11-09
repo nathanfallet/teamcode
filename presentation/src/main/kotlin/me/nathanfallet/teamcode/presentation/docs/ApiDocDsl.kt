@@ -46,6 +46,7 @@ internal val apiOperations: List<ApiOperation> by lazy {
         automationOperations()
         waitOperations()
         todoOperations()
+        notificationOperations()
         workflowOperations()
         artifactOperations()
         artifactTicketOperations()
@@ -86,6 +87,7 @@ internal object ApiTags {
     const val AUTOMATIONS = "Automations"
     const val WAITS = "Waits"
     const val TODOS = "Todos"
+    const val NOTIFICATIONS = "Notifications"
     const val WORKFLOWS = "Workflows"
     const val ARTIFACTS_ADMIN = "Artifact administration"
     const val ARTIFACTS = "Artifacts"

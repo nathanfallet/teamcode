@@ -142,6 +142,27 @@ fun main() {
             }
         }
     }
+    // Notifications: the journal's events, turned into one delivery per member and channel by a worker. The channels this
+    // server offers (push, later Slack and Discord) are listed here; with none, members keep their settings and nothing is sent.
+    val notificationStore = database?.let { me.nathanfallet.teamcode.infrastructure.database.SqlNotificationStore(it) }
+    val notificationChannels = emptyList<me.nathanfallet.teamcode.domain.notifications.NotificationChannel>()
+    val notifications = notificationStore?.let { me.nathanfallet.teamcode.domain.notifications.NotificationService(it, notificationChannels.map { channel -> channel.id }) }
+    if (notificationStore != null && notificationChannels.isNotEmpty()) {
+        val work = SqlScheduledWork(database!!)
+        val delivery = me.nathanfallet.teamcode.domain.notifications.DeliverNotificationsUseCase(notificationStore, notificationChannels)
+        workers.launch {
+            while (isActive) {
+                try {
+                    work.runDue("notifications/deliver", intervalMillis = 1_000, timeoutMillis = 40_000) { delivery.run() }
+                    work.runDue("notifications/maintain", intervalMillis = 60_000) { notificationStore.maintain(500) }
+                }
+                catch (_: TimeoutCancellationException) { System.err.println("TeamCode notification delivery deadline exceeded.") }
+                catch (error: CancellationException) { throw error }
+                catch (_: Exception) { System.err.println("TeamCode notification delivery is temporarily unavailable.") }
+                delay(1_000)
+            }
+        }
+    }
     // Artifacts: the bucket and its settings live in the database, configured on the dashboard; no deployment variable.
     val artifactHttp = HttpClient(CIO) {
         followRedirects = false; expectSuccess = false
@@ -268,7 +289,7 @@ fun main() {
             connectors.add(EngineConnectorBuilder().also { it.host = host; it.port = port })
             shutdownGracePeriod = shutdownGrace; shutdownTimeout = 620_000
         }) { configureGateway(koin.koin.get(), token, team, origin, accounts, admission, directives, modelPolicies, readiness = { database?.ready() ?: true }, routes = routes, cancellation = cancellation, devices = devices, serviceKeys = serviceKeys, audit = audit, pacingSettings = pacingSettings, forecasts = forecasts, groups = if (groups != null) koin.koin.get() else null, runs = if (runs != null) koin.koin.get() else null, budgetOverrides = if (budgetOverrides != null) koin.koin.get() else null, reconciliation = if (reconciliation != null) koin.koin.get() else null, variants = variants, environment = environment, skills = skills, hooks = hooks, mcp = mcp, mcpAccess = mcpAccess, hostedMcp = hostedMcp,
-            cloudRuntime = cloud?.runtime, cloudSessions = cloud?.sessions, cloudAdmin = cloud?.admin, cloudRunner = cloud?.runner, github = cloud?.github, cloudConversation = cloud?.conversation, cloudTransfers = cloud?.transfers, webhooks = webhooks, automations = cloud?.automations, waits = cloud?.waits, workflows = cloud?.workflows, workflowRuns = cloud?.workflowRuns, todos = cloud?.todos,
+            cloudRuntime = cloud?.runtime, cloudSessions = cloud?.sessions, cloudAdmin = cloud?.admin, cloudRunner = cloud?.runner, github = cloud?.github, cloudConversation = cloud?.conversation, cloudTransfers = cloud?.transfers, webhooks = webhooks, automations = cloud?.automations, waits = cloud?.waits, notifications = notifications, workflows = cloud?.workflows, workflowRuns = cloud?.workflowRuns, todos = cloud?.todos,
             apiPrices = apiPrices, poolSizing = poolSizing, artifactAdmin = artifactAdmin, artifacts = artifacts, artifactViewing = artifactViewing, deviceDaemons = cloud?.daemons, trustedProxies = trustedProxies) }.start(wait = true)
     } finally { runBlocking { workers.coroutineContext[Job]?.cancelAndJoin() }; koin.close(); cloud?.close(); providerHttp.close(); mcpHttp.close(); mcpHost?.close(); mcpHostHttp?.close(); webhookSender?.close(); artifactHttp.close(); database?.close() }
 }
