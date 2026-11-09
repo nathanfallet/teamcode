@@ -1,5 +1,6 @@
 package me.nathanfallet.teamcode.domain.cloud
 
+import java.security.MessageDigest
 import java.util.UUID
 import kotlinx.coroutines.delay
 import kotlinx.serialization.json.Json
@@ -97,7 +98,9 @@ class RunnerConversationUseCase(
         val input = CloudInput(
             id = UUID.randomUUID().toString(), teamId = session.teamId, sessionId = session.id, kind = CloudInputKind.PERMISSION, status = CloudInputStatus.QUEUED,
             authorId = bypass.memberId, credentialId = bypass.credentialId, text = text, wake = false, clientKey = "bypass:$requestId",
-            requestDigest = "permission\n$text", createdAt = store.now(),
+            // A SHA-256 like a member's answer (`request_digest` holds 64 characters): the text itself does not fit.
+            requestDigest = MessageDigest.getInstance("SHA-256").digest("permission\n$text".encodeToByteArray()).joinToString("") { "%02x".format(it) },
+            createdAt = store.now(),
         )
         val check = { context: AnswerContext ->
             if ((context.state != READY && context.state != ACTIVE) || context.desiredState != DesiredState.RUNNING)
