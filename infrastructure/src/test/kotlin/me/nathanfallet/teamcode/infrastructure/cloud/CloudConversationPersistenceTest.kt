@@ -83,6 +83,39 @@ class CloudConversationPersistenceTest {
         }
     }
 
+    @Test fun theStandingApprovalAllowsARequestWithoutFailingTheUpload() = runBlocking {
+        MySQLContainer("mysql:8.4").withDatabaseName("teamcode").withTmpFs(mapOf("/var/lib/mysql" to "rw,nosuid,size=1g")).use { container ->
+            container.start()
+            Database(container.jdbcUrl, container.username, container.password).use { a ->
+            Database(container.jdbcUrl, container.username, container.password).use { b ->
+                coroutineScope { listOf(a, b).map { async(Dispatchers.IO) { it.migrate() } }.awaitAll() }
+                val cluster = FakeClusterPort()
+                val cipher = CredentialCipher(ByteArray(32) { 41 })
+                val groups = Groups()
+                val ra = Replica(a, cluster, cipher, groups); val rb = Replica(b, cluster, cipher, groups)
+                val (admin, colleague, other) = members(a)
+                val profile = administration(ra, admin, setOf(colleague.member.id, other.member.id))
+                val s = ready(ra, rb, admin, colleague, profile)
+                val team = admin.teamId
+                ra.sessions.setPermissionBypass(colleague, null, s.id, true)
+                // Claude Code's request ids are UUIDs: the allow it gets is longer than the 64 characters of a request digest.
+                val requestId = "77bc5ca5-c72e-404e-b297-1dfd1d892ad9"
+                val batch = listOf(
+                    RunnerEvent(1, CloudEventType.TURN, """{"phase":"started"}""", turn = TurnMarker.STARTED),
+                    RunnerEvent(2, CloudEventType.PERMISSION_REQUEST, """{"requestId":"$requestId","toolName":"Bash","input":{"command":"ls"},"question":false}"""),
+                )
+                assertEquals(2, ra.agent.events(team, s.id, 1, batch).acceptedThrough)
+                // The runner sends a batch again when it missed the acknowledgement: the request is still allowed once.
+                assertEquals(2, rb.agent.events(team, s.id, 1, batch).acceptedThrough)
+                val allow = rb.agent.inputs(team, s.id, 1, 0).single()
+                assertEquals(CloudInputKind.PERMISSION, allow.kind)
+                assertEquals(colleague.member.id, allow.authorId)
+                assertEquals(CloudConversationRules.bypassAllowText(requestId), allow.text)
+                assertEquals(64, allow.requestDigest?.length, "The digest is a SHA-256, like a member's answer")
+            } }
+        }
+    }
+
     private suspend fun members(a: Database): Triple<Principal, Principal, Principal> {
         val team = SqlTeamService(a)
         val password = team.bootstrap()!!
