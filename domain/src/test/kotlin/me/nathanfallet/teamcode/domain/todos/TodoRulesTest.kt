@@ -139,6 +139,22 @@ class TodoRulesTest {
         assertEquals("item_closed", code { TodoRules.requestDrop(l, "a", "why") })
     }
 
+    @Test fun anAttestedItemStaysDoneAtTheFinalVerification() {
+        val attested = listOf(TodoCheck.Attested("Published the summary"))
+        var l = list(item("a", checks = attested), item("b"))
+        l = done(done(l, "a"), "b")
+        // The hook has no proof to give for an attested check at this phase and reports it as not passed.
+        val noProof = TodoRules.settle(l, mapOf("a" to listOf(TodoCheckResult(attested[0], false, "This check is attested: give proof.text")), "b" to pass(l, "b")), 400L)
+        assertEquals(TodoListStatus.DONE, noProof.status)
+        assertEquals(TodoItemStatus.DONE, noProof.item("a")!!.status)
+        // Another check of the same item still reopens it.
+        val mixed = list(item("c", checks = attested + TodoCheck.PrMerged(repo)))
+        val closed = done(mixed, "c")
+        val reverted = TodoRules.settle(closed, mapOf("c" to listOf(TodoCheckResult(attested[0], false, "no proof"), TodoCheckResult(TodoCheck.PrMerged(repo), false, "PR reverted"))), 400L)
+        assertEquals(TodoItemStatus.TODO, reverted.item("c")!!.status)
+        assertEquals("PR reverted", reverted.item("c")!!.proof!!.text)
+    }
+
     @Test fun theListIsDoneOnlyAfterTheFinalVerification() {
         var l = list(item("a"), item("b"))
         l = done(done(l, "a"), "b")
