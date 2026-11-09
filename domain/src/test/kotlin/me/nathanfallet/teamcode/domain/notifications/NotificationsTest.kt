@@ -78,7 +78,7 @@ class NotificationsTest {
     private class FakeChannel(override val id: String, val reach: Set<String>, var result: suspend () -> ChannelResult = { ChannelResult.DELIVERED }) : NotificationChannel {
         val sent = mutableListOf<Notification>()
         override suspend fun reachable(teamId: String, memberIds: Set<String>) = memberIds intersect reach
-        override suspend fun deliver(notification: Notification): ChannelResult { sent += notification; return result() }
+        override suspend fun deliver(notifications: List<Notification>) = notifications.associate { sent += it; it.id to result() }
     }
 
     private fun MemoryStore.waitFor(member: String, seq: Long) {

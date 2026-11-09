@@ -22,7 +22,7 @@ class NotificationPersistenceTest {
         val sent = java.util.Collections.synchronizedList(mutableListOf<Notification>())
         var result: ChannelResult = ChannelResult.DELIVERED
         override suspend fun reachable(teamId: String, memberIds: Set<String>) = memberIds intersect reach()
-        override suspend fun deliver(notification: Notification): ChannelResult { sent += notification; return result }
+        override suspend fun deliver(notifications: List<Notification>) = notifications.associate { sent += it; it.id to result }
     }
 
     @Test @Timeout(240)

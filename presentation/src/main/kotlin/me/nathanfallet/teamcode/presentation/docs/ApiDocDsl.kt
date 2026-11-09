@@ -47,6 +47,8 @@ internal val apiOperations: List<ApiOperation> by lazy {
         waitOperations()
         todoOperations()
         notificationOperations()
+        pushOperations()
+        pushAdminOperations()
         workflowOperations()
         artifactOperations()
         artifactTicketOperations()

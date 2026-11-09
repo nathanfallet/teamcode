@@ -7,6 +7,8 @@ data class Device(
     val platform: String? = null, val osVersion: String? = null,
     /** The device's daemon (`cloud.sessions.remote.daemon.v1`); null when it never connected or said it stopped. */
     val daemon: DaemonPresence? = null,
+    /** The installation registered a push destination (`PUT /api/v1/devices/current/push`). The token itself never leaves persistence. */
+    val push: Boolean = false,
 )
 data class MemberSession(
     val id: String, val memberId: String, val name: String, val deviceId: String?,

@@ -8,7 +8,7 @@ import java.util.Locale
 import me.nathanfallet.teamcode.domain.team.Principal
 
 /** Dashboard areas whose routes are installed; the menu never links to a page this server does not serve. */
-internal enum class DashboardFeature { GROUPS, RUNS, ACCOUNTS, CAPACITY, USAGE_REVIEW, GUIDANCE, FORECASTS, MODEL_POLICY, ROUTES, DEVICES, SERVICE_KEYS, AUDIT, SKILLS, HOOKS, VARIANTS, MCP, CLOUD, GITHUB, WEBHOOKS, ARTIFACT_SETTINGS, ARTIFACTS,
+internal enum class DashboardFeature { GROUPS, RUNS, ACCOUNTS, CAPACITY, USAGE_REVIEW, GUIDANCE, FORECASTS, MODEL_POLICY, ROUTES, DEVICES, SERVICE_KEYS, AUDIT, SKILLS, HOOKS, VARIANTS, MCP, CLOUD, GITHUB, WEBHOOKS, ARTIFACT_SETTINGS, ARTIFACTS, PUSH_SETTINGS,
     /** Not a route set: cloud sessions are enabled in the stored runtime right now. */
     CLOUD_RUNNING,
     /** Not a route set: artifacts are active for the signed-in member's team right now (a tested bucket and the switch on). */
@@ -63,6 +63,7 @@ internal val DASHBOARD_MENU = listOf(
         SETTINGS_LINK,
         DashboardLink("/dashboard/cloud", "Cloud sessions", "Turn cloud sessions on, choose the runner image, connect Kubernetes clusters, and set retention, limits and transfers.", DashboardFeature.CLOUD, adminOnly = true),
         DashboardLink(ARTIFACT_SETTINGS_PATH, "Artifacts", "The S3-compatible bucket artifacts are stored in, its connection test, and who may publish and share them.", DashboardFeature.ARTIFACT_SETTINGS, adminOnly = true),
+        DashboardLink(PUSH_SETTINGS_PATH, "Push notifications", "Who sends notifications to members' phones: the TeamCode Push relay or your own Firebase project.", DashboardFeature.PUSH_SETTINGS, adminOnly = true),
         DashboardLink("/dashboard/github", "GitHub", "The team's GitHub App, and the GitHub account your cloud sessions use.", DashboardFeature.GITHUB),
         DashboardLink("/dashboard/devices", "Devices", "The computers signed in to your account, and their sessions.", DashboardFeature.DEVICES),
         DashboardLink("/dashboard/service-keys", "Service keys", "Scoped keys for CI and services, sharing your quotas.", DashboardFeature.SERVICE_KEYS),

@@ -18,6 +18,12 @@ object Devices : Table("devices") {
     val daemonVersion = varchar("daemon_version", 32).nullable()
     /** What the daemon announced at the same poll, comma-separated (`resume.v1`); null for an older daemon. */
     val daemonFeatures = varchar("daemon_features", 255).nullable()
+    /** The installation's current FCM registration token (iOS and Android); a rotation replaces it. Never shown, never logged. */
+    val pushToken = varchar("push_token", 512).nullable()
+    /** The device's P-256 public key (SubjectPublicKeyInfo, DER, base64) notifications are encrypted for. */
+    val pushPublicKey = varchar("push_public_key", 255).nullable()
+    /** When the app last sent its token: an old one is likely stale. */
+    val pushTokenUpdatedAt = long("push_token_updated_at").nullable()
     override val primaryKey = PrimaryKey(id)
     init { uniqueIndex("device_member_installation", memberId, installationId) }
 }

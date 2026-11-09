@@ -64,8 +64,11 @@ interface NotificationChannel {
     /** The members of [memberIds] this channel can reach now, in one read whatever their number. */
     suspend fun reachable(teamId: String, memberIds: Set<String>): Set<String>
 
-    /** Delivers to every destination of the member on this channel. Bounded by the caller's deadline. */
-    suspend fun deliver(notification: Notification): ChannelResult
+    /**
+     * Delivers each notification to every destination of its member on this channel, the batch together so destinations
+     * are read once. Answers per notification id; a missing answer is retried. Bounded by the caller's deadline.
+     */
+    suspend fun deliver(notifications: List<Notification>): Map<String, ChannelResult>
 }
 
 /** A member's switch for one kind on one channel. Without a stored switch, the kind is on. */
@@ -214,8 +217,8 @@ class DeliverNotificationsUseCase(
     suspend fun run(): Int {
         fanOut()
         val due = store.claimDue(BATCH, LEASE_MILLIS)
-        // Together, each with its own deadline: one slow provider delays neither the others nor its own backoff.
-        coroutineScope { due.map { async { attempt(it) } }.awaitAll() }
+        // One batch per channel, the channels together: one slow provider delays neither the others nor its own backoff.
+        coroutineScope { due.groupBy { it.channel }.map { (channel, batch) -> async { attempt(channel, batch) } }.awaitAll() }
         return due.size
     }
 
@@ -240,11 +243,19 @@ class DeliverNotificationsUseCase(
         return queued
     }
 
-    private suspend fun attempt(due: NotificationDelivery) {
-        val channel = channels[due.channel]
-        val result = if (channel == null) ChannelResult.failed("channel_unavailable") else try {
-            withTimeout(SEND_DEADLINE_MILLIS) { channel.deliver(due.notification) }
-        } catch (_: TimeoutCancellationException) { ChannelResult.retry("timeout") }
+    private suspend fun attempt(channelId: String, batch: List<NotificationDelivery>) {
+        val channel = channels[channelId]
+        val results = if (channel == null) emptyMap() else try {
+            withTimeout(SEND_DEADLINE_MILLIS) { channel.deliver(batch.map { it.notification }) }
+        } catch (_: TimeoutCancellationException) { null }
+        for (due in batch) record(due, when {
+            channel == null -> ChannelResult.failed("channel_unavailable")
+            results == null -> ChannelResult.retry("timeout")
+            else -> results[due.notification.id] ?: ChannelResult.retry("no_result")
+        })
+    }
+
+    private suspend fun record(due: NotificationDelivery, result: ChannelResult) {
         val attempts = due.attempts + 1
         val id = due.notification.id
         when {

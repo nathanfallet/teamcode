@@ -1,0 +1,1 @@
+CREATE TABLE IF NOT EXISTS push_settings (team_id VARCHAR(36) PRIMARY KEY, provider VARCHAR(16) NOT NULL, relay_url VARCHAR(255) NOT NULL, firebase_project_id VARCHAR(64) NULL, firebase_client_email VARCHAR(255) NULL, firebase_credentials text NULL, version INT NOT NULL, updated_at BIGINT NOT NULL);

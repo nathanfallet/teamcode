@@ -106,6 +106,7 @@ internal fun settingsContent(actor: Principal, features: Set<DashboardFeature>):
         if (on(DashboardFeature.MCP)) add(Triple("/dashboard/mcp", "MCP tool policies", "Which tools each MCP server exposes."))
         if (on(DashboardFeature.SKILLS)) add(Triple("/dashboard/skills", "Skills", "Pinned versions and assignments."))
         if (on(DashboardFeature.HOOKS)) add(Triple("/dashboard/hooks", "Team hooks", "Pinned versions and assignments."))
+        if (on(DashboardFeature.PUSH_SETTINGS)) add(Triple(PUSH_SETTINGS_PATH, "Push notifications", "The TeamCode Push relay or your own Firebase project."))
         if (on(DashboardFeature.GITHUB)) add(Triple("/dashboard/github", "GitHub App", "The team's GitHub App used by cloud sessions."))
     }
     val own = buildList {
