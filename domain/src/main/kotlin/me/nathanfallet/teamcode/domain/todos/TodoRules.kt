@@ -284,17 +284,19 @@ object TodoRules {
 
     /**
      * The final verification once every item is closed: [results] maps the id of each done item to its checks' outcomes. An item
-     * whose conditions no longer all pass (a reverted PR, a deleted release) is reopened; if none is, the list is done.
+     * whose conditions no longer all pass (a reverted PR, a deleted release) is reopened; if none is, the list is done. An
+     * `attested` check is never re-run: its proof was given once with the completion and nothing can observe it again, so the
+     * hook's "no proof" at this phase must not undo what the agent validated.
      */
     fun settle(list: TodoList, results: Map<String, List<TodoCheckResult>>, now: Long): TodoList {
         if (list.status != TodoListStatus.ACTIVE || !list.allClosed) return list
         val reopened = list.items.filter { item ->
-            item.status == TodoItemStatus.DONE && item.doneWhen.checks.any { check -> results[item.id]?.firstOrNull { it.check == check }?.passed == false }
+            item.status == TodoItemStatus.DONE && item.doneWhen.checks.any { check -> check !is TodoCheck.Attested && results[item.id]?.firstOrNull { it.check == check }?.passed == false }
         }.map { it.id }.toSet()
         if (reopened.isEmpty()) return list.copy(status = TodoListStatus.DONE)
         return list.copy(items = list.items.map { item ->
             if (item.id !in reopened) item else {
-                val failed = results.getValue(item.id).filter { it.passed == false }
+                val failed = results.getValue(item.id).filter { it.passed == false && it.check !is TodoCheck.Attested }
                 item.copy(status = TodoItemStatus.TODO, proof = TodoProof(now, false, failed.joinToString("; ") { it.observed }.take(MAX_PROOF), failed.flatMap { it.urls }.distinct().take(10)))
             }
         })
