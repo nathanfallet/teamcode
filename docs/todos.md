@@ -19,7 +19,7 @@ A session keeps one todo: a free-text `reference` (usually a link to the plan) a
 
 ### Domain rules (`TodoRules`)
 
-- One list per session, active at once (`create`, `requireNoList`). At most 50 items; ids are slugs of at most 40 characters; a description is 80 to 4 000 characters; a list refuses unknown or circular dependencies, an item without a typed check, and a guessed PR number or version (`guessed_number`).
+- One list per session, active at once (`create`, `requireNoList`). At most 500 items; ids are slugs of at most 40 characters; a description is 80 to 4 000 characters; a list refuses unknown or circular dependencies, an item without a typed check, and a guessed PR number or version (`guessed_number`).
 - Check types: `pr_merged`, `pr_closed`, `release_contains`, `ci_green`, `command`, `artifact_published`, `wait_answered`, `attested`. A check never names a PR number: the PR is found by the marker `TodoRules.marker` returns.
 - `next`: the first `todo` item whose dependencies are done. A dropped dependency counts as settled, so a dropped item never stalls the list.
 - `start`: one item `doing` at a time, except an item given to a background agent.
