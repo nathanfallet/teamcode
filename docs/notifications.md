@@ -9,7 +9,8 @@ TeamCode tells a member when something needs them or is done: an agent waits for
 | Events, channels and the router: kinds, per-member switches, a worker that turns journal events into deliveries with retries (`notifications.v1`) | Implemented |
 | `GET`/`PUT /api/v1/notifications/settings`: a member's own switches | Implemented |
 | Push channel: FCM tokens on devices (`notifications.push.v1`), end-to-end encrypted content, the relay client and a team's own Firebase project, chosen per team on the dashboard | Implemented |
-| The TeamCode Push relay itself (`push.teamcode.nathanfallet.me`, Kotlin/Native on Cloud Run) | Planned: until it is deployed, choosing the relay queues pushes that are retried, then given up |
+| The TeamCode Push relay (`push` module, Kotlin/Native, image and Cloud Run service in `push/`; see [push/README.md](../push/README.md)) | Implemented |
+| The relay deployed at `push.teamcode.nathanfallet.me` | Planned: until then, choosing the relay queues pushes that are retried, then given up |
 | Companion apps: Android and iOS push, desktop native notifications from the event feed | Planned |
 | Slack and Discord channels: linking a member's chat account, one message per notification | Planned |
 | Push provider on the dashboard (Settings → Push notifications) and `GET`/`PUT /api/v1/notifications/push/settings`, with a test push | Implemented |
@@ -114,7 +115,8 @@ An administrator chooses the team's provider on the dashboard (Settings → Push
 
 The relay sees an instance, a token and an encrypted blob: never a member, a session or the text. The `PushRelay` models of the API module are the wire format; `RelayPushSender` (infrastructure) speaks it and a test of the app module holds the two together.
 
-- **Identity.** At the first push the server makes an Ed25519 key pair, shared by every replica (`push_relay_instances`, the private key sealed with the server's key) and registers its public key: `POST /v1/instances {"publicKey": "<raw 32 bytes, base64url>"}` → `{"instanceId": "..."}`. The same key gets the same id.
+- **Identity.** At the first push the server makes an Ed25519 key pair, shared by every replica (`push_relay_instances`, the private key sealed with the server's key) and registers its public key: `POST /v1/instances {"publicKey": "<raw 32 bytes, base64url>"}` → `{"instanceId": "..."}`. The same key gets the same id; the relay answers the key itself, so the server must not assume anything about the id's form.
 - **Signature.** Every other request carries `TeamCode-Instance`, `TeamCode-Timestamp` (Unix seconds, at most 300 s off) and `TeamCode-Signature`: Ed25519 over `POST\n<path>\n<timestamp>\n<sha256 of the body, lowercase hex>`, base64url without padding.
 - **Send.** `POST /v1/send {"token", "platform": "ios"|"android", "payload", "collapseKey", "ttlSeconds"}` → `{"status": "sent"|"unregistered"|"retry"|"rejected", "retryAfterSeconds"?, "error"?}`.
+- **The relay's side** ([push/README.md](../push/README.md)). The instance id is the public key itself, so the relay keeps no registry. Per minute it enforces three quotas: per instance (600), per token (20) and in total (6000); going over gets `429` with `Retry-After`. A request copied within the skew window is not sent twice. An instance listed in `TEAMCODE_PUSH_BLOCKED_INSTANCES` gets `403`. The body is limited to 8 KiB, and the token must be at most 512 characters. The payload must be base64 of at most 3000 characters. The collapse key must be lowercase hex, and the TTL at most one day.
 - **Outcomes.** `sent` delivers; `unregistered` clears the token; `retry`, 408, 429 and 5xx are retried; `401` (the relay no longer knows the key) registers the same key again at the next push; `403` (the instance is blocked) and other refusals fail.
