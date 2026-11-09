@@ -6,7 +6,7 @@ import me.nathanfallet.teamcode.domain.team.TeamFailure
 object TodoRules {
     const val MAX_REFERENCE = 4_000
     const val MAX_REFS = 10
-    const val MAX_ITEMS = 50
+    const val MAX_ITEMS = 500
     const val MAX_ID = 40
     const val MAX_NAME = 80
     const val MIN_DESCRIPTION = 80

@@ -192,7 +192,7 @@ internal class TodoMcpServer(
                 "Example item: {\"id\":\"fix-login\",\"name\":\"Fix the login redirect\",\"description\":\"...80+ characters...\",\"dependsOn\":[],\"doneWhen\":{\"text\":\"The PR is merged\",\"checks\":[{\"type\":\"pr_merged\",\"repo\":\"acme/web\"}]}}.", schema(listOf("reference", "items")) {
                 text("reference", "One paragraph in Markdown, at most 4000 characters: a link to the plan artifact, or the person's request as written.")
                 putJsonObject("refs") { put("type", "array"); put("description", "Optional structured references: {kind: artifact|session|url, id|url, title}.") }
-                putJsonObject("items") { put("type", "array"); put("items", ITEM_SCHEMA); put("description", "Every step of the plan, in order, at most 50.") }
+                putJsonObject("items") { put("type", "array"); put("items", ITEM_SCHEMA); put("description", "Every step of the plan, in order, at most 500.") }
             })
             tool("todo_show", "The todo as it stands: the reference, the items with their last proof, and the next item. Call it after a pause or when you lose track.", schema(emptyList()) {})
             tool("todo_start", "Put an item in progress before you work on it. For an item whose condition is a pull request it returns the marker to put, as is, in the PR body: the PR is found and linked by it, whatever its number. Refused while a dependency is not done.", schema(listOf("id")) {

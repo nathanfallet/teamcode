@@ -35,7 +35,7 @@ class TodoRulesTest {
         assertEquals("dependency_cycle", code { list(item("a", "a")) })
         assertEquals("invalid_todo", code { list(item("Bad Id")) })
         assertEquals("invalid_todo", code { list() })
-        assertEquals("too_many_items", code { list(*(1..51).map { item("i$it") }.toTypedArray()) })
+        assertEquals("too_many_items", code { list(*(1..501).map { item("i$it") }.toTypedArray()) })
         assertEquals("invalid_check", code { list(item("a", checks = listOf(TodoCheck.PrMerged("nope")))) })
         assertEquals("invalid_check", code { list(item("a", checks = listOf(TodoCheck.ReleaseContains(repo)))) })
         assertEquals("invalid_check", code { list(item("a", checks = listOf(TodoCheck.Command("true", timeoutSeconds = 500)))) })
