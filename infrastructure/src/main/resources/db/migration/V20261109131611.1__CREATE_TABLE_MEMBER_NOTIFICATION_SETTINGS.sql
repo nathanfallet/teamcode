@@ -1,0 +1,1 @@
+CREATE TABLE IF NOT EXISTS member_notification_settings (member_id VARCHAR(36), channel VARCHAR(16), kind VARCHAR(24), enabled BOOLEAN NOT NULL, CONSTRAINT pk_member_notification_settings PRIMARY KEY (member_id, channel, kind), CONSTRAINT member_notification_settings_member FOREIGN KEY (member_id) REFERENCES members(id) ON DELETE CASCADE);
