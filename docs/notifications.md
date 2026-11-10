@@ -10,7 +10,7 @@ TeamCode tells a member when something needs them or is done: an agent waits for
 | `GET`/`PUT /api/v1/notifications/settings`: a member's own switches | Implemented |
 | Push channel: FCM tokens on devices (`notifications.push.v1`), end-to-end encrypted content, the relay client and a team's own Firebase project, chosen per team on the dashboard | Implemented |
 | The TeamCode Push relay (`push` module, Kotlin/Native, image and Cloud Run service in `push/`; see [push/README.md](../push/README.md)) | Implemented |
-| The relay deployed at `push.teamcode.nathanfallet.me` | Planned: until then, choosing the relay queues pushes that are retried, then given up |
+| The relay deployed at `push.teamcode.nathanfallet.me` (Cloud Run, `europe-west1`, Firebase project `teamcode-companion`) | Implemented |
 | Companion apps: Android and iOS push (FCM token and device key registered with every signed-in account's server, payload decrypted on the device, a tap opens the session), desktop native notifications from the event feed | Implemented. Not yet tried on devices against the deployed relay; see [Apps](#apps) |
 | Slack and Discord channels: linking a member's chat account, one message per notification | Planned |
 | Push provider on the dashboard (Settings → Push notifications) and `GET`/`PUT /api/v1/notifications/push/settings`, with a test push | Implemented |

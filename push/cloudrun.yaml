@@ -22,13 +22,14 @@ spec:
       containerConcurrency: 200
       timeoutSeconds: 30
       containers:
-        - image: REGION-docker.pkg.dev/PROJECT_ID/teamcode/teamcode-push:VERSION
+        # Published by CI to Docker Hub with the server and MCP images: `latest` and `sha-<commit>` from main, the version from tags.
+        - image: docker.io/nathanfallet/teamcode-push:VERSION
           ports:
             - containerPort: 8080
           resources:
             limits:
               cpu: "1"
-              memory: 256Mi
+              memory: 512Mi  # The gen2 environment refuses less.
           env:
             - name: TEAMCODE_PUSH_PROJECT_ID
               value: PROJECT_ID
