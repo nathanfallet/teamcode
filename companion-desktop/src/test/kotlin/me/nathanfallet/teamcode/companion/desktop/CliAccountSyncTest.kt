@@ -23,7 +23,7 @@ private class RecordingAuth : AuthRepository {
     override suspend fun discover(origin: String): ServerInfo = error("unused")
     override suspend fun capabilities(origin: String, token: String): ServerCapabilities = error("unused")
     override suspend fun capabilities(accountId: String): ServerCapabilities = error("unused")
-    override suspend fun login(origin: String, username: String, password: String, deviceName: String, installationId: String): LoginSession = error("unused")
+    override suspend fun login(origin: String, username: String, password: String, deviceName: String, installationId: String, platform: String?): LoginSession = error("unused")
     override suspend fun changePassword(origin: String, token: String, current: String, replacement: String) = error("unused")
     override suspend fun me(accountId: String): Member = error("unused")
     override suspend fun logout(accountId: String) { calls += "logout $accountId" }
