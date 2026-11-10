@@ -1,3 +1,5 @@
 <resources>
     <string name="app_name">TeamCode</string>
+    <!-- The notification channel of pushes, shown in the system settings. -->
+    <string name="push_channel">Activity</string>
 </resources>

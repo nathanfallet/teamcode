@@ -4,6 +4,8 @@
     <uses-permission android:name="android.permission.INTERNET"/>
     <!-- The composer's microphone: the system's speech recognizer listens, asked on the first tap. -->
     <uses-permission android:name="android.permission.RECORD_AUDIO"/>
+    <!-- Pushes (Android 13+ asks the member, after their first sign-in). -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
 
     <!-- Android 11+ hides the speech recognition service from the app unless it says it looks for one. -->
     <queries>
@@ -48,6 +50,14 @@
                 <data android:mimeType="text/plain"/>
             </intent-filter>
         </activity>
+        <!-- Pushes: FCM data messages, decrypted on the phone (docs/notifications.md, "Push"). -->
+        <service
+                android:name=".TeamCodeMessagingService"
+                android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT"/>
+            </intent-filter>
+        </service>
         <!-- The camera app writes a photo for the session's paperclip into the cache through this provider (no camera permission). -->
         <provider
                 android:name="androidx.core.content.FileProvider"

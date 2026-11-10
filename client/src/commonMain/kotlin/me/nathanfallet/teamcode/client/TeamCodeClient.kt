@@ -227,6 +227,17 @@ class TeamCodeClient(
         return request("/api/v1/devices/$id", HttpMethod.Patch, RenameDeviceRequest(name))
     }
     suspend fun revokeDevice(id: String) = revoke("devices", id)
+    /** Registers this installation's FCM token and public key for push (`notifications.push.v1`); an app login only. */
+    suspend fun registerPush(token: String, publicKey: String) {
+        checkResponse(http.request("$origin/api/v1/devices/current/push") {
+            method = HttpMethod.Put; authenticate(); timeout { requestTimeoutMillis = 10_000 }
+            contentType(ContentType.Application.Json); setBody(DevicePushRequest(token, publicKey))
+        })
+    }
+    /** Stops push to this installation, before a sign-out or when notifications are turned off. */
+    suspend fun clearPush() {
+        checkResponse(http.delete("$origin/api/v1/devices/current/push") { authenticate(); timeout { requestTimeoutMillis = 10_000 } })
+    }
     suspend fun revokeAuthSession(id: String) = revoke("auth/sessions", id)
     /** The folders one of the caller's own devices offers, and whether its daemon is online (`cloud.sessions.remote.daemon.v1`). */
     suspend fun deviceFolders(id: String): DeviceFoldersView { identifier(id); return request("/api/v1/devices/$id/folders", HttpMethod.Get) }

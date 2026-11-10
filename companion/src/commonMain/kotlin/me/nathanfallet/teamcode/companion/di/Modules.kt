@@ -15,6 +15,12 @@ import me.nathanfallet.teamcode.companion.domain.usecases.auth.RefreshAccountUse
 import me.nathanfallet.teamcode.companion.domain.usecases.auth.RenameDeviceUseCase
 import me.nathanfallet.teamcode.companion.domain.usecases.auth.SignInUseCase
 import me.nathanfallet.teamcode.companion.domain.usecases.auth.SignOutUseCase
+import me.nathanfallet.teamcode.companion.domain.usecases.push.ClearPushUseCase
+import me.nathanfallet.teamcode.companion.domain.usecases.push.SyncPushUseCase
+import me.nathanfallet.teamcode.companion.domain.usecases.push.ReadPushUseCase
+import me.nathanfallet.teamcode.companion.domain.usecases.push.WatchActivityUseCase
+import me.nathanfallet.teamcode.companion.demo.DemoContent
+import me.nathanfallet.teamcode.companion.domain.repositories.PushRepository
 import me.nathanfallet.teamcode.companion.infrastructure.client.TeamCodeClientProvider
 import me.nathanfallet.teamcode.companion.infrastructure.repositories.RemoteAuthRepository
 import me.nathanfallet.teamcode.companion.infrastructure.settings.SettingsAccountRepository
@@ -59,6 +65,7 @@ import me.nathanfallet.teamcode.companion.domain.usecases.sessions.LoadDeviceFol
 import me.nathanfallet.teamcode.companion.domain.usecases.sessions.LoadResumableSessionsUseCase
 import me.nathanfallet.teamcode.companion.domain.usecases.sessions.LoadHostDevicesUseCase
 import me.nathanfallet.teamcode.companion.infrastructure.repositories.RemoteDeviceRepository
+import me.nathanfallet.teamcode.companion.infrastructure.repositories.RemotePushRepository
 import me.nathanfallet.teamcode.companion.demo.DemoCredentialStore
 import me.nathanfallet.teamcode.companion.demo.demoModule
 import org.koin.dsl.module
@@ -85,6 +92,7 @@ val infrastructureModule = module {
     single { RemoteArtifactRepository(get()) }
     single { RemoteSessionFileRepository(get()) }
     single { RemoteDeviceRepository(get()) }
+    single<PushRepository> { RemotePushRepository(get()) }
 }
 
 /** The account checks go through [DemoCredentialStore]: the demo account has no token, and none is read or deleted for it. */
@@ -92,7 +100,13 @@ val domainModule = module {
     single { InspectServerUseCase(get()) }
     single { SignInUseCase(get(), get(), get(), get(), get()) }
     single { ChangePasswordUseCase(get(), get()) }
-    single { SignOutUseCase(get(), get(), get<DemoCredentialStore>()) }
+    single { ClearPushUseCase(get(), get()) }
+    single { SignOutUseCase(get(), get(), get<DemoCredentialStore>(), get()) }
+    // Resolved only where a PushPlatform exists (the phones' platform modules); see startPush.
+    single { SyncPushUseCase(get(), get(), get(), get()) }
+    single { ReadPushUseCase(get(), get()) }
+    // The desktop's notifications (companion-desktop), from the shared event feed.
+    single { WatchActivityUseCase(get(), get(), get(), get(), skip = { it == DemoContent.ACCOUNT_ID }) }
     single { RefreshAccountUseCase(get(), get(), get<DemoCredentialStore>(), get()) }
     single { RenameDeviceUseCase(get(), get(), get<DemoCredentialStore>()) }
     single { AccountGuard(get()) }

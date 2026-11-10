@@ -1,20 +1,50 @@
 package me.nathanfallet.teamcode.companion.android
 
+import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
+import me.nathanfallet.teamcode.companion.domain.repositories.AccountRepository
+import org.koin.core.context.GlobalContext
 import me.nathanfallet.teamcode.companion.App
 import me.nathanfallet.teamcode.companion.presentation.navigation.IncomingLinks
 
 class MainActivity : ComponentActivity() {
+    private val notificationPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         // A recreated activity (a rotation) already handled the link that started it.
         if (savedInstanceState == null) handle(intent)
         setContent { App() }
+        askForNotifications()
+    }
+
+    /**
+     * Android 13+ shows pushes only with the member's permission: asked once, when an account is first signed in (a
+     * prompt before any sign-in would not say what for). Refused, it stays off until the member turns it on in Settings.
+     */
+    private fun askForNotifications() {
+        if (!PushNotifications.configured || Build.VERSION.SDK_INT < 33) return
+        if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) return
+        val preferences = getSharedPreferences(PUSH_PREFERENCES, MODE_PRIVATE)
+        if (preferences.getBoolean(ASKED, false)) return
+        val accounts = GlobalContext.get().get<AccountRepository>()
+        lifecycleScope.launch {
+            accounts.accounts.first { list -> list.any { it.signedIn } }
+            if (preferences.getBoolean(ASKED, false)) return@launch
+            preferences.edit().putBoolean(ASKED, true).apply()
+            notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -37,5 +67,7 @@ class MainActivity : ComponentActivity() {
 
     private companion object {
         const val MAX_LINK = 4_096
+        const val PUSH_PREFERENCES = "teamcode_push"
+        const val ASKED = "notifications_asked"
     }
 }

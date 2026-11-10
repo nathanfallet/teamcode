@@ -56,4 +56,6 @@ object Features {
     const val TODOS = "todos.v1"
     /** The feed carries `cloud.todo`: asked for only then (an older server refuses a type it does not know). */
     const val TODOS_LIVE = "todos.live.v1"
+    /** Push to this phone: the app registers its FCM token and public key (`PUT /devices/current/push`). */
+    const val PUSH = "notifications.push.v1"
 }

@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "120649657744",
+    "project_id": "teamcode-companion",
+    "storage_bucket": "teamcode-companion.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:120649657744:android:d1894b9e2e7f65052b9715",
+        "android_client_info": {
+          "package_name": "me.nathanfallet.teamcode"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDGSfc6_Lwp2g-Ku6OVtrGOZ4FIyjoBUPA"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

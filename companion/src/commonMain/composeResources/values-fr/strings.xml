@@ -1296,4 +1296,11 @@
     <string name="todo_add_hint">Que doit ajouter l'agent ?</string>
     <string name="todo_add_action">Demander à l'agent de l'ajouter</string>
     <string name="todo_panel_title">Todo</string>
+    <!-- Desktop notifications, from the event feed (WatchActivityUseCase). -->
+    <string name="activity_permission">L'agent demande ton autorisation.</string>
+    <string name="activity_question">L'agent a une question pour toi.</string>
+    <string name="activity_wait">On t'attend : %1$s</string>
+    <string name="activity_turn_completed">L'agent a terminé son tour.</string>
+    <string name="activity_turn_failed">Le tour de l'agent a échoué.</string>
+    <string name="activity_session_failed">La session a échoué.</string>
 </resources>

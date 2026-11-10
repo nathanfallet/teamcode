@@ -17,7 +17,9 @@ import androidx.compose.ui.input.key.KeyShortcut
 import androidx.compose.ui.res.loadImageBitmap
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.MenuBar
+import androidx.compose.ui.window.Notification
 import androidx.compose.ui.window.Tray
+import androidx.compose.ui.window.rememberTrayState
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
 import androidx.compose.runtime.snapshotFlow
@@ -47,6 +49,9 @@ import me.nathanfallet.teamcode.companion.presentation.components.WindowTitleBar
 import me.nathanfallet.teamcode.companion.presentation.navigation.AppCommand
 import me.nathanfallet.teamcode.companion.presentation.navigation.AppCommands
 import me.nathanfallet.teamcode.companion.di.initKoin
+import me.nathanfallet.teamcode.companion.domain.usecases.push.WatchActivityUseCase
+import me.nathanfallet.teamcode.companion.presentation.navigation.IncomingLinks
+import me.nathanfallet.teamcode.companion.presentation.notifications.text
 
 /**
  * The desktop app. Closing the window keeps it in the menu bar (the notification area on Windows and Linux); Quit leaves
@@ -85,7 +90,26 @@ fun main(args: Array<String>) {
             if (Desktop.isDesktopSupported() && Desktop.getDesktop().isSupported(Desktop.Action.APP_EVENT_REOPENED))
                 Desktop.getDesktop().addAppEventListener(java.awt.desktop.AppReopenedListener { visible = true })
         }
-        if (tray) Tray(icon = icon, tooltip = "TeamCode", onAction = { visible = true }, menu = {
+        // Notifications (docs/notifications.md, "Desktop"): what the server would push to the member, seen on the event feed,
+        // shown by the menu bar icon while the window is hidden or in the background. Activating the icon soon after one
+        // opens what it was about.
+        val trayState = rememberTrayState()
+        val mainWindow = remember { arrayOfNulls<java.awt.Window>(1) }
+        val lastNotice = remember { arrayOfNulls<Pair<String, Long>>(1) }
+        if (tray) LaunchedEffect(Unit) {
+            koin.get<WatchActivityUseCase>()().collect { notice ->
+                if (visible && mainWindow[0]?.isActive == true) return@collect
+                val (title, body) = notice.text()
+                lastNotice[0] = notice.link to System.currentTimeMillis()
+                trayState.sendNotification(Notification(title, body, Notification.Type.Info))
+            }
+        }
+        fun openFromTray() {
+            visible = true
+            lastNotice[0]?.takeIf { System.currentTimeMillis() - it.second < 60_000 }?.let { IncomingLinks.open(it.first) }
+            lastNotice[0] = null
+        }
+        if (tray) Tray(icon = icon, state = trayState, tooltip = "TeamCode", onAction = ::openFromTray, menu = {
             Item(desktopLabel(DesktopLabel.TRAY_OPEN), onClick = { visible = true })
             Separator()
             Item(desktopLabel(DesktopLabel.TRAY_QUIT), onClick = ::exitApplication)
@@ -125,6 +149,7 @@ fun main(args: Array<String>) {
             // the window first shows. Windows and Linux keep their own bar: drawing it needs the JetBrains Runtime (Jewel's
             // DecoratedWindow), which the app does not ship, and an undecorated window loses snapping, resize borders and the shadow.
             if (mac) remember { window.drawUnderMacTitleBar() }
+            remember { mainWindow[0] = window }
             // Wide enough for the sidebar and a readable panel: the window never falls back to the phone layout.
             LaunchedEffect(Unit) { window.minimumSize = Dimension(WindowPlacementStore.MIN_WIDTH, WindowPlacementStore.MIN_HEIGHT) }
             MenuBar {

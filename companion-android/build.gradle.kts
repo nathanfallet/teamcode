@@ -12,6 +12,8 @@ kotlin {
 dependencies {
     implementation(projects.companion)
     implementation(libs.androidx.activity.compose)
+    implementation(platform(libs.firebase.bom))
+    implementation(libs.firebase.messaging)
     implementation(libs.compose.ui.tooling.preview)
     debugImplementation(libs.compose.ui.tooling)
 }
@@ -26,6 +28,24 @@ check(semver[0] <= 20 && companionVersionCode in 1..2_100_000_000) { "versionCod
 // The upload key stays on the maintainer's Mac (fastlane/keystore.jks, git-ignored) with its passwords in SIGNING_*.
 val uploadKeystore = rootProject.file("fastlane/keystore.jks")
 
+// Push (docs/notifications.md, "Push"): the Firebase project of the published app, read from google-services.json when the
+// file is there. Without it the app builds and runs without push. The Google Services plugin is not used: these four
+// values are all FCM needs, and the app initializes Firebase with them (CompanionApplication).
+val firebase: Map<String, String> = file("google-services.json").takeIf { it.exists() }?.let { json ->
+    @Suppress("UNCHECKED_CAST")
+    val root = groovy.json.JsonSlurper().parse(json) as Map<String, Any?>
+    val project = root["project_info"] as Map<String, Any?>
+    val client = (root["client"] as List<Map<String, Any?>>).firstOrNull {
+        ((it["client_info"] as Map<String, Any?>)["android_client_info"] as Map<String, Any?>)["package_name"] == "me.nathanfallet.teamcode"
+    } ?: error("google-services.json has no Android app me.nathanfallet.teamcode.")
+    mapOf(
+        "FIREBASE_APP_ID" to (client["client_info"] as Map<String, Any?>)["mobilesdk_app_id"].toString(),
+        "FIREBASE_API_KEY" to ((client["api_key"] as List<Map<String, Any?>>).first()["current_key"]).toString(),
+        "FIREBASE_PROJECT_ID" to project["project_id"].toString(),
+        "FIREBASE_SENDER_ID" to project["project_number"].toString(),
+    )
+} ?: emptyMap()
+
 android {
     namespace = "me.nathanfallet.teamcode.companion.android"
     compileSdk = libs.versions.android.appCompileSdk.get().toInt()
@@ -36,7 +56,10 @@ android {
         targetSdk = libs.versions.android.targetSdk.get().toInt()
         versionCode = companionVersionCode
         versionName = project.version.toString()
+        for (name in listOf("FIREBASE_APP_ID", "FIREBASE_API_KEY", "FIREBASE_PROJECT_ID", "FIREBASE_SENDER_ID"))
+            buildConfigField("String", name, "\"${firebase[name].orEmpty()}\"")
     }
+    buildFeatures { buildConfig = true }
     packaging {
         resources { excludes += "/META-INF/{AL2.0,LGPL2.1,INDEX.LIST,io.netty.versions.properties}" }
     }
