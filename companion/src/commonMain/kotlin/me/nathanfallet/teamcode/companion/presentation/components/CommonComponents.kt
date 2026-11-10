@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
@@ -582,12 +583,21 @@ fun TcTextField(
 
 // ---- Screen frames -------------------------------------------------------------------------------------------------
 
-/** A tab's large title, under the status bar, with its actions at the end. */
+/**
+ * A tab's large title, under the status bar, with its actions at the end. The title keeps its own width: when the actions
+ * do not fit beside it (a narrow phone, several buttons), they move to a line of their own under it instead of squeezing
+ * the title into a column of letters.
+ */
 @Composable
 fun LargeTitle(title: String, modifier: Modifier = Modifier, actions: @Composable RowScope.() -> Unit = {}) {
-    Row(modifier.fillMaxWidth().heightIn(min = 44.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text(title, style = androidx.compose.material3.MaterialTheme.typography.headlineMedium, color = TeamCode.colors.text, modifier = Modifier.weight(1f).semantics { heading() })
-        actions()
+    FlowRow(
+        modifier.fillMaxWidth().heightIn(min = 44.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+        itemVerticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(title, style = androidx.compose.material3.MaterialTheme.typography.headlineMedium, color = TeamCode.colors.text, maxLines = 1, modifier = Modifier.semantics { heading() })
+        Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End), verticalAlignment = Alignment.CenterVertically, content = actions)
     }
 }
 
