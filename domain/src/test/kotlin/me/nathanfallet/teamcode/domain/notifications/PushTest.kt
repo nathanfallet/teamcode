@@ -182,7 +182,7 @@ class PushTest {
     }
 
     @Test
-    fun anAdministratorTestsTheirOwnPhones() = runTest {
+    fun aMemberTestsTheirOwnPhones() = runTest {
         val phone = pair()
         val store = Store(listOf(PushTarget("d9", "root", token, phone.publicBase64(), "android")))
         val sender = Sender()
@@ -193,7 +193,8 @@ class PushTest {
             override suspend fun save(actor: Principal, provider: PushProvider, relayUrl: String, serviceAccount: FirebaseServiceAccount?, version: Int) = PushSettings(provider, relayUrl, serviceAccount?.projectId, serviceAccount?.clientEmail, version + 1)
             override suspend fun connections(teamIds: Set<String>) = emptyMap<String, PushConnection>()
         }
-        val service = PushAdministrationService(settings, channel)
+        var now = 1_000_000L
+        val service = PushAdministrationService(settings, channel, clock = { now })
         assertEquals("push_off", assertFailsWith<TeamFailure> { service.test(admin) }.code)
         on = true
         val result = service.test(admin)
@@ -201,9 +202,16 @@ class PushTest {
         val json = Json.parseToJsonElement(decrypt(phone.private, phone.publicBase64(), sender.sent.single().payload)).jsonObject
         assertEquals("test", json["kind"]!!.jsonPrimitive.content)
         assertEquals("root", json["memberId"]!!.jsonPrimitive.content)
+        assertEquals("push_test_rate_limited", assertFailsWith<TeamFailure> { service.test(admin) }.code, "one test per member every ten seconds")
+        assertEquals(1, sender.sent.size)
+        now += PushAdministrationService.TEST_COOLDOWN_MILLIS
         store.targets = emptyList()
         assertEquals("push_no_device", assertFailsWith<TeamFailure> { service.test(admin) }.code)
-        assertFailsWith<TeamFailure> { service.test(alice) }
+        // Any member tests their own phones; the settings stay the administrators'.
+        store.targets = listOf(PushTarget("d3", "alice", token, phone.publicBase64(), "ios"))
+        assertTrue(service.test(alice).ok)
+        assertEquals("alice", Json.parseToJsonElement(decrypt(phone.private, phone.publicBase64(), sender.sent.last().payload)).jsonObject["memberId"]!!.jsonPrimitive.content)
+        assertFailsWith<TeamFailure> { service.test(key) }
         assertFailsWith<TeamFailure> { service.settings(alice) }
     }
 

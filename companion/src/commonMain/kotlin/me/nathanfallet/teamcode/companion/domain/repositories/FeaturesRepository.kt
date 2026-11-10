@@ -60,4 +60,6 @@ object Features {
     const val TODOS_LIVE = "todos.live.v1"
     /** Push to this phone: the app registers its FCM token and public key (`PUT /devices/current/push`). */
     const val PUSH = "notifications.push.v1"
+    /** Any member may send the test push to their own phones (`POST /notifications/push/test`); before it, administrators only. */
+    const val PUSH_TEST = "notifications.push.test.v1"
 }

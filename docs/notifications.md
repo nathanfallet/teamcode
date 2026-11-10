@@ -14,7 +14,8 @@ TeamCode tells a member when something needs them or is done: an agent waits for
 | Companion apps: Android and iOS push (FCM token and device key registered with every signed-in account's server, payload decrypted on the device, a tap opens the session), desktop native notifications from the event feed | Implemented. Not yet tried on devices against the deployed relay; see [Apps](#apps) |
 | Slack and Discord channels: linking a member's chat account, one message per notification | Planned |
 | Push provider on the dashboard (Settings → Push notifications) and `GET`/`PUT /api/v1/notifications/push/settings`, with a test push | Implemented |
-| Members' switches in the companion apps and on the dashboard | Planned |
+| Members' switches and a test push in the companion apps (Account → Notifications; see [companion](companion.md)) | Implemented |
+| Members' switches on the dashboard | Planned |
 | Notifications for a bare `teamcode run` waiting for a person (its `waiting_for_human` activity has no journal event yet) | Planned |
 
 A server without the encryption key (`TEAMCODE_ENCRYPTION_KEY`) has no push channel: it keeps the settings routes and sends nothing. With it, the push channel is offered, and each team's pushes go nowhere until an administrator chooses a provider.
@@ -131,7 +132,7 @@ An administrator chooses the team's provider on the dashboard (Settings → Push
 | `relay` | The published TeamCode apps (App Store, Google Play), whose Firebase project only the relay holds | The relay URL, default `https://push.teamcode.nathanfallet.me` (https, no path, no link-local or metadata address) |
 | `firebase` | Apps the team builds and signs itself with its own Firebase project | A Google service account JSON key with the Firebase Cloud Messaging API Admin role, sealed with the server's key (`push-firebase:<team>`); its `token_uri` must be Google's. Choosing another provider deletes it |
 
-"Send a test to my phone" (`POST /api/v1/notifications/push/test`) sends a `test` notification to the administrator's own phones at once and shows each installation's result. Every save is audited (`push.settings_updated`, `push.firebase_key_saved`).
+"Send a test to my phone" (`POST /api/v1/notifications/push/test`) sends a `test` notification to the caller's own phones at once and shows each installation's result. Any member signed in interactively may send it, from the apps' Notifications screen, once every ten seconds per replica (`push_test_rate_limited`, 429); a server that allows it announces `notifications.push.test.v1` (before, administrators only). Every save is audited (`push.settings_updated`, `push.firebase_key_saved`).
 
 ### Relay protocol (`push.v1`)
 

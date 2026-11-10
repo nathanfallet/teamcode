@@ -58,8 +58,17 @@ fun interface PushSenders {
     suspend fun senders(teamIds: Set<String>): Map<String, PushSender>
 }
 
-/** Push administration: interactive administrators only. */
-class PushAdministrationService(private val store: PushSettingsStore, private val channel: PushChannel) {
+/**
+ * Push administration: the settings are for interactive administrators only; the test push is for every interactive
+ * member, to their own phones, at most once per [TEST_COOLDOWN_MILLIS] on a replica.
+ */
+class PushAdministrationService(
+    private val store: PushSettingsStore,
+    private val channel: PushChannel,
+    private val clock: () -> Long = System::currentTimeMillis,
+) {
+    private val lastTests = java.util.concurrent.ConcurrentHashMap<String, Long>()
+
     suspend fun settings(actor: Principal): PushSettings { actor.requireAdmin(); return store.settings(actor) }
 
     suspend fun save(actor: Principal, input: PushSettingsInput): PushSettings {
@@ -70,13 +79,23 @@ class PushAdministrationService(private val store: PushSettingsStore, private va
         return store.save(actor, input.provider, relayUrl, account, input.version)
     }
 
-    /** Sends a test notification to the administrator's own installations, through the provider in force. */
+    /** Sends a test notification to the caller's own installations, through the provider in force. */
     suspend fun test(actor: Principal): PushTestResult {
-        actor.requireAdmin()
-        return channel.test(actor.teamId, actor.member.id)
+        actor.requireInteractive()
+        val now = clock()
+        val key = "${actor.teamId}/${actor.member.id}"
+        // A member's own phones only, yet a button pressed in a loop would still spend the provider's quotas.
+        if (lastTests.size > MAX_TRACKED_TESTS) lastTests.entries.removeIf { now - it.value >= TEST_COOLDOWN_MILLIS }
+        val previous = lastTests[key]
+        if (previous != null && now - previous < TEST_COOLDOWN_MILLIS) throw TeamFailure("push_test_rate_limited", 429, "Wait a few seconds before sending another test.")
+        val result = channel.test(actor.teamId, actor.member.id)
+        lastTests[key] = now
+        return result
     }
 
     companion object {
+        const val TEST_COOLDOWN_MILLIS = 10_000L
+        private const val MAX_TRACKED_TESTS = 10_000
         const val DEFAULT_RELAY_URL = "https://push.teamcode.nathanfallet.me"
         const val MAX_SERVICE_ACCOUNT_CHARS = 16_384
         /** The only token endpoint a stored key may name: the server posts the signed assertion there. */
