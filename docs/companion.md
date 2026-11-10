@@ -18,6 +18,7 @@ The companion app is a TeamCode client for iOS, Android and the desktop (macOS, 
 | Sessions on an online device (`cloud.sessions.remote.daemon.v1`): "Cloud \| Online device" in New session, the device's published folders, the permission mode kept from the last launch, waiting for the device and its refusal worded | Implemented |
 | Continue a conversation of the device (`cloud.sessions.remote.resume.v1`): a picker under the folder, empty by default, listing the folder's Claude Code conversations on the device | Implemented (Claude Code only, from the online-device sheet and "On this device" on the desktop; Codex: planned) |
 | Artifacts: gallery, session artifacts, viewer (web view on iOS and Android, browser on the desktop), versions, links (`teamcode://`, shared text, pasted link) | Implemented |
+| Notifications ([notifications.md](notifications.md#apps)): push on Android and iOS (`notifications.push.v1`, payload decrypted on the device, a tap opens the session), native notifications from the event feed on the desktop | Implemented |
 | Subscription accounts: the pool for administrators, adding one with a provider sign-in in the browser (`teamcode accounts add` in the app) | Implemented |
 | GitHub link: which GitHub account is linked, linking one with GitHub's device flow with the code copied and the page opened (`teamcode github link` in the app), unlinking | Implemented |
 | MCP servers: the team's MCP servers assigned to the member, their transport and a hosted command's state, read-only | Implemented |
@@ -127,7 +128,7 @@ It is kept current by the app's one feed (`SessionFeed`), never by polling: the 
 
 **Stepping through sessions.** On a wide window (the desktop, a tablet with a keyboard), Cmd+Shift+] (Ctrl+Shift+] elsewhere) opens the next session of the sessions list and Cmd+Shift+[ the previous one, also in the View menu on the desktop. They follow the list as the active filter shows it, in full (not only the sidebar's first rows), from the session open: it stops at either end rather than wrapping, and with no session open (another screen, or one the filter hides) next opens the first and previous the last. The opened row is marked read like any opened session. A phone-width window has no list beside the open session: the keys do nothing there. Texts in English and French; tests: `SessionStepTest`, and `DesktopShellTest` (the keys, and the steps).
 
-**Menu bar.** Closing the window keeps the app in the menu bar (the notification area on Windows and Linux): **Open TeamCode**, and **Quit TeamCode (sessions on this device keep running)**. Without a tray (some Linux desktops), closing the window quits. On macOS, the Dock icon brings the window back.
+**Menu bar.** Closing the window keeps the app in the menu bar (the notification area on Windows and Linux): **Open TeamCode**, and **Quit TeamCode (sessions on this device keep running)**. Without a tray (some Linux desktops), closing the window quits. On macOS, the Dock icon brings the window back. The icon also shows the [desktop notifications](notifications.md#desktop) while the window is hidden or in the background.
 
 **Build and run.**
 

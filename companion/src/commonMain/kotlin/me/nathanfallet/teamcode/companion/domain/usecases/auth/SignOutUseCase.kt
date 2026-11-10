@@ -5,6 +5,7 @@ import me.nathanfallet.teamcode.companion.domain.models.CompanionException
 import me.nathanfallet.teamcode.companion.domain.repositories.AccountRepository
 import me.nathanfallet.teamcode.companion.domain.repositories.AuthRepository
 import me.nathanfallet.teamcode.companion.domain.services.CredentialStore
+import me.nathanfallet.teamcode.companion.domain.usecases.push.ClearPushUseCase
 
 /**
  * Revokes the login session on the server, then forgets the token and the account. Offline (or refused), the local
@@ -14,12 +15,15 @@ class SignOutUseCase(
     private val auth: AuthRepository,
     private val accounts: AccountRepository,
     private val credentials: CredentialStore,
+    /** The server stops pushing to this phone first, while the session can still say so. */
+    private val clearPush: ClearPushUseCase? = null,
 ) {
     /** Whether the server session is gone, and if not, why. */
     enum class Result { REVOKED, SERVER_UNREACHABLE, STORAGE_REFUSED }
 
     suspend operator fun invoke(accountId: String): Result {
         val account = accounts.accounts.value.firstOrNull { it.id == accountId } ?: return Result.REVOKED
+        if (account.signedIn) clearPush?.invoke(accountId)
         var result = if (!account.signedIn) Result.REVOKED else try {
             auth.logout(accountId)
             Result.REVOKED

@@ -115,13 +115,24 @@ fun TeamCodeNavHost(rootViewModel: RootViewModel = koinViewModel()) {
     val accountRepository: AccountRepository = koinInject()
     // A link to a server no account is on: shown before any sign-in page, with its origin in full.
     var newServer by remember { mutableStateOf<String?>(null) }
-    /** Opens an artifact link; false when it is not one. */
+    // The phone layout's tab: the panel opens on the same list, and the tab on the panel's first screen.
+    var tab by rememberSaveable(stateSaver = MainTabSaver) { mutableStateOf(MainTab.SESSIONS) }
+    /** Opens an artifact link or a tapped notification's; false when it is neither. */
     fun openLink(link: String): Boolean = when (val target = resolveLink(link)) {
         is LinkTarget.Artifact -> {
             val route = ArtifactRoute(target.accountId, target.artifactId, target.version)
             if (wide && navController.currentBackStackEntry?.destination?.hasRoute<MainRoute>() == true) detail.navigate(route) else navController.navigate(route)
             true
         }
+        is LinkTarget.Session -> {
+            accountRepository.setActive(target.accountId)
+            val route = SessionRoute(target.accountId, target.sessionId)
+            if (wide && navController.currentBackStackEntry?.destination?.hasRoute<MainRoute>() == true) detail.navigate(route) else navController.navigate(route)
+            true
+        }
+        // The waits are a tab, as the workflows' "open waits" shows them.
+        is LinkTarget.Waits -> { accountRepository.setActive(target.accountId); tab = MainTab.WAITS; navController.popBackStack(MainRoute, inclusive = false); true }
+        is LinkTarget.Home -> { accountRepository.setActive(target.accountId); true }
         is LinkTarget.SignInAgain -> { navController.navigate(LoginRoute(target.origin, target.username)); true }
         is LinkTarget.UnknownServer -> { newServer = target.origin; true }
         null -> false
@@ -137,8 +148,6 @@ fun TeamCodeNavHost(rootViewModel: RootViewModel = koinViewModel()) {
     // Narrow to wide, the screens pushed over the tabs move to the content panel; wide to narrow, the panel's screens
     // are pushed over the tabs.
     var pendingDetail by remember { mutableStateOf<List<Any>>(emptyList()) }
-    // The phone layout's tab: the panel opens on the same list, and the tab on the panel's first screen.
-    var tab by rememberSaveable(stateSaver = MainTabSaver) { mutableStateOf(MainTab.SESSIONS) }
     var wasWide by remember { mutableStateOf(wide) }
     LaunchedEffect(wide) {
         if (wide == wasWide) return@LaunchedEffect

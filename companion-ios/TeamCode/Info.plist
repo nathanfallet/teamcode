@@ -28,6 +28,8 @@
 	<string>Dictate a message to a session's agent instead of typing it.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>Turn what you dictate into the text of your message. On devices that support it, this happens on the device.</string>
+	<key>TeamCodePushKeychainGroup</key>
+	<string>$(AppIdentifierPrefix)me.nathanfallet.teamcode$(TEAM_ID).push</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 </dict>

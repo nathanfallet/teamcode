@@ -11,7 +11,7 @@ TeamCode tells a member when something needs them or is done: an agent waits for
 | Push channel: FCM tokens on devices (`notifications.push.v1`), end-to-end encrypted content, the relay client and a team's own Firebase project, chosen per team on the dashboard | Implemented |
 | The TeamCode Push relay (`push` module, Kotlin/Native, image and Cloud Run service in `push/`; see [push/README.md](../push/README.md)) | Implemented |
 | The relay deployed at `push.teamcode.nathanfallet.me` | Planned: until then, choosing the relay queues pushes that are retried, then given up |
-| Companion apps: Android and iOS push, desktop native notifications from the event feed | Planned |
+| Companion apps: Android and iOS push (FCM token and device key registered with every signed-in account's server, payload decrypted on the device, a tap opens the session), desktop native notifications from the event feed | Implemented. Not yet tried on devices against the deployed relay; see [Apps](#apps) |
 | Slack and Discord channels: linking a member's chat account, one message per notification | Planned |
 | Push provider on the dashboard (Settings → Push notifications) and `GET`/`PUT /api/v1/notifications/push/settings`, with a test push | Implemented |
 | Members' switches in the companion apps and on the dashboard | Planned |
@@ -91,6 +91,28 @@ key = HKDF-SHA256(ECDH(ephemeral private, device public), salt = ephemeral point
 ```
 
 The plaintext is the JSON of `PushPayload` (API module): `v`, `id`, `origin` (the server's public URL), `memberId`, `kind` (a notification kind, or `test`), `title`, `body`, `sessionId`, `waitId`, `at`. `origin` and `memberId` tell an app signed in to several servers or accounts which one it is for. The collapse key the provider sees is a hash of the team and the notification's collapse key: pushes about the same wait replace one another without saying which wait.
+
+### Apps
+
+The apps are built with the Firebase project of the published apps (`teamcode-companion`): `companion-android/google-services.json` and `companion-ios/TeamCode/GoogleService-Info.plist`. These files name the project and its client API key, which Firebase does not treat as a secret. A build without them runs without push.
+
+- **Registration** (shared code, `SyncPushUseCase`): once FCM gives a token, every signed-in account whose server announces `notifications.push.v1` receives `PUT /devices/current/push` with the token and the device's public key. This happens at each start of the app, when FCM rotates the token, and when an account signs in. A failure waits for the next of those. Signing out sends `DELETE /devices/current/push` first (best effort, `ClearPushUseCase`). The demo account is never registered: its features do not include push.
+- **Android**: the key pair is made with the JCA on first use. The private key is kept in the Keystore-sealed credential store (`push-device-key`, excluded from backups like the tokens). Firebase is initialized from the four values of `google-services.json`, read at build time, without the Google Services plugin. `TeamCodeMessagingService` decrypts the data message and finds the signed-in account its `origin` and `memberId` name. It shows nothing for an account signed out on the phone. Otherwise it posts one notification per session, so a newer one replaces the older. Android 13 and later ask for the notification permission once, after the first sign-in.
+- **iOS**: CryptoKit makes the key pair. The private key is kept in its own Keychain access group (`<team>.me.nathanfallet.teamcode.push`), the only group the notification service extension lists; the accounts' tokens stay in the app's default group. The `NotificationService` extension (Swift, without Firebase) decrypts the payload and replaces the generic alert's text. The app asks for the alert permission when it first registers with a server that offers push. A tap on a notification opens `teamcode://notification?origin=…&member=…&session=…`: the session, the waits of the account for a wait outside a session, or the sign-in when that account is signed out.
+
+The payload's decryption is tested against bytes produced by the server's `PushPayloads.encrypt`: on the JVM for Android (`PushCipherTest`), and with CryptoKit for the extension's code.
+
+## Desktop
+
+The desktop app has no push: it shows native notifications from the caller-wide event feed it already follows (`WatchActivityUseCase`, sharing `SessionFeed`'s connection). It keeps what the server would push to the member, by the same rules:
+
+- the agent of their session waits for them (`cloud.session.waiting`);
+- a wait a person resolves is assigned to them (`cloud.wait.created`, read from the first page of open waits);
+- the agent finished its turn (`cloud.turn` completed);
+- the agent's turn failed (the `turn_failed` wait);
+- their session failed (`cloud.session.ended` failed).
+
+Other members' sessions on an administrator's feed are left out. The notifications are shown by the menu bar icon, only while the window is hidden or in the background. Activating the icon within a minute of one opens what it was about. Without a menu bar icon (some Linux desktops) there are no notifications. The member's switches (`/notifications/settings`) are for server channels and do not apply here; the text is the app's own, in its language.
 
 ### What the provider sees
 

@@ -11,7 +11,8 @@ pluginManagement {
 }
 dependencyResolutionManagement {
     repositories {
-        google { mavenContent { includeGroupAndSubgroups("androidx"); includeGroupAndSubgroups("com.android"); includeGroupAndSubgroups("com.google.android"); includeGroupAndSubgroups("com.google.testing.platform") } }
+        // Firebase too, for the Android app's push (FCM).
+        google { mavenContent { includeGroupAndSubgroups("androidx"); includeGroupAndSubgroups("com.android"); includeGroupAndSubgroups("com.google.android"); includeGroupAndSubgroups("com.google.testing.platform"); includeGroupAndSubgroups("com.google.firebase") } }
         mavenCentral()
     }
 }
