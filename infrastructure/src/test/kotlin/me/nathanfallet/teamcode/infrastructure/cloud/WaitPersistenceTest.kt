@@ -57,6 +57,7 @@ class WaitPersistenceTest {
             sessionPermissionRequestsAreListedOnTheFirstPageOnly(a, w, session.id)
             pagingAndFilters(a, w, review)
             waitsEndWithTheirSession(a, w, review)
+            endingASessionCancelsItsOpenWaits(a, w)
             theAnswerWakesTheSession(w)
             anExecutionCredentialIsConfinedToItsSession(a, b, w)
             aFailedTurnOpensAWaitForTheOwner(w)
@@ -252,6 +253,36 @@ class WaitPersistenceTest {
         w.a.database.query { CloudSessions.deleteWhere { CloudSessions.id eq review.sessionId } }
         refusedWith("not_found") { a.service.get(w.admin, id) }
         assertEquals(0L, w.a.database.query { Waits.selectAll().count() })
+    }
+
+    /** Ending a session (`DELETE`, the app's "End session") cancels what still waits on it, in the same transaction, and nothing new can open. */
+    private suspend fun endingASessionCancelsItsOpenWaits(a: Replica, w: AutomationWorld) {
+        suspend fun draft(name: String) = (w.a.sessions.create(w.member, null, CloudSessionDraft(name, w.profile.id, null, null, null, emptyMap(), null), null) as CloudCreateOutcome.Created).session
+        val ended = draft("To end"); val other = draft("Stays")
+        fun wait(sessionId: String, title: String) = WaitDefinition(sessionId, title, assigneeId = w.admin.member.id, actions = listOf(WaitAction("done", "Done")))
+        val open1 = a.service.create(w.member, wait(ended.id, "Open one"), null).wait.id
+        val open2 = a.service.create(w.member, wait(ended.id, "Open two"), null).wait.id
+        val answered = a.service.create(w.member, wait(ended.id, "Answered"), null).wait.id
+        a.service.answer(w.admin, answered, "done", emptyMap())
+        val elsewhere = a.service.create(w.member, wait(other.id, "Other session"), null).wait.id
+        val feed = SqlTeamEventStore(w.a.database); val head = feed.head(w.teamId)
+
+        w.a.sessions.delete(w.member, null, ended.id)
+
+        for (id in listOf(open1, open2)) {
+            val cancelled = a.service.get(w.admin, id)
+            assertEquals(WaitStatus.CANCELLED, cancelled.status, "the open wait of an ended session is cancelled")
+            assertNotNull(cancelled.resolvedAt); assertNull(cancelled.answer)
+        }
+        assertEquals(WaitStatus.RESOLVED, a.service.get(w.admin, answered).status, "an answered wait is left as it was")
+        assertEquals(WaitStatus.OPEN, a.service.get(w.admin, elsewhere).status, "another session's wait is left open")
+        assertEquals(setOf(open1, open2), w.a.database.query { AuditEvents.selectAll().where { AuditEvents.action eq "wait.cancelled" }.map { it[AuditEvents.subjectId] }.toSet() }.intersect(setOf(open1, open2)))
+        val admin = TeamEventAudience(w.admin.member.id, sessions = true, runs = false, teamSessions = false, teamRuns = false)
+        assertEquals(setOf(open1, open2), feed.read(w.teamId, admin, head, setOf(TeamEventType.WAIT_CANCELLED), 100).events.map { it.subjectId }.toSet(), "the assignee's feed says they were cancelled")
+        refusedWith("session_not_running") { a.service.create(w.member, wait(ended.id, "Too late"), null) }
+        // Ending it again (idempotent) cancels nothing more and changes nothing.
+        w.a.sessions.delete(w.member, null, ended.id)
+        assertEquals(WaitStatus.CANCELLED, a.service.get(w.admin, open1).status)
     }
 
     /** The answer is a message of the session written by the one who answered; the same answer sent to the other replica queues nothing more. */

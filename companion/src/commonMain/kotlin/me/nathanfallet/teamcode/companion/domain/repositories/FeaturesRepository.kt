@@ -23,6 +23,8 @@ object Features {
     const val RENAME = "cloud.sessions.rename.v1"
     /** The owner changes the model of a session's agent (`PUT /cloud/sessions/{id}/model`) from the list of `GET /cloud/models`. */
     const val MODEL = "cloud.sessions.model.v1"
+    /** The owner changes the effort of a session's agent (`PUT /cloud/sessions/{id}/effort`). */
+    const val EFFORT = "cloud.sessions.effort.v1"
     /** Permission requests relayed from Claude Code, answered with `POST …/permissions`. */
     const val PERMISSIONS = "cloud.permissions.v1"
     /** The owner approves every tool use of a session in advance (`PUT …/permission-bypass`), and sessions say whether they did. */

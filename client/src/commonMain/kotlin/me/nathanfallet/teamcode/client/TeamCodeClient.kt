@@ -375,6 +375,17 @@ class TeamCodeClient(
         checkResponse(response)
         return response.body()
     }
+    /** Changes the effort of a session's agent (`cloud.sessions.effort.v1`): its owner, or a cloud administrator, to any valid effort value (a team has no effort policy). */
+    suspend fun setCloudSessionEffort(id: String, effort: String, onBehalfOf: String? = null): CloudSessionView {
+        identifier(id); onBehalfOf?.let(::identifier)
+        val response = http.request("$origin/api/v1/cloud/sessions/$id/effort") {
+            method = HttpMethod.Put; authenticate(); timeout { requestTimeoutMillis = 10_000 }
+            onBehalfOf?.let { header(CloudHeaders.ON_BEHALF_OF, it) }
+            contentType(ContentType.Application.Json); setBody(SetCloudSessionEffortRequest(effort))
+        }
+        checkResponse(response)
+        return response.body()
+    }
     /** The models of [agent] (`claude` or `codex`) the team's policy lets the caller pick for a session (`cloud.sessions.model.v1`). */
     suspend fun cloudModels(agent: String): CloudModelsView {
         require(agent == "claude" || agent == "codex") { "Use the agent claude or codex." }

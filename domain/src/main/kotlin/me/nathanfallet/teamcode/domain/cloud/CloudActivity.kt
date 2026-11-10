@@ -32,6 +32,15 @@ fun interface CloudModelChanges {
     suspend fun announce(principal: me.nathanfallet.teamcode.domain.team.Principal, session: CloudSession, model: String)
 }
 
+/** Tells the running agent of a session that its effort changed; implemented by the conversation service. */
+fun interface CloudEffortChanges {
+    /**
+     * Queues the change of [session]'s agent to [effort] for its runner, when an agent runs; a session with none takes
+     * the recorded effort when it starts. Idempotent per session and effort: the same change twice queues nothing more.
+     */
+    suspend fun announceEffort(principal: me.nathanfallet.teamcode.domain.team.Principal, session: CloudSession, effort: String)
+}
+
 /**
  * The idle-pause rule: a `ready` session that wants to run, with no activity for its idle timeout, is paused. Activity is
  * the session row's (turns, readiness), the [CloudActivitySource]'s (attachments, waiting inputs) and the agent's

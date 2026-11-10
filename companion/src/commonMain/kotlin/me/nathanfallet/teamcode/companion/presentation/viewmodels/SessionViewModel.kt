@@ -121,6 +121,8 @@ data class SessionUiState(
     val bypassSupported: Boolean = false,
     /** The server changes the model of a session's agent (`cloud.sessions.model.v1`): the model chip opens the picker. */
     val modelChanges: Boolean = false,
+    /** The server changes the effort of a session's agent (`cloud.sessions.effort.v1`): the effort chip opens the picker. */
+    val effortChanges: Boolean = false,
     /** The models the picker offers, read when it opens; null until then (or when they could not be read, [modelsFailed]). */
     val models: List<ModelOption>? = null,
     val modelsFailed: Boolean = false,
@@ -232,6 +234,7 @@ class SessionViewModel(
         started = true
         if (!state.value.renames) viewModelScope.launch { if (control.supportsRename(route.accountId)) state.update { it.copy(renames = true) } }
         if (!state.value.bypassSupported) viewModelScope.launch { if (control.supportsBypass(route.accountId)) state.update { it.copy(bypassSupported = true) } }
+        if (!state.value.effortChanges) viewModelScope.launch { if (control.supportsEffortChange(route.accountId)) state.update { it.copy(effortChanges = true) } }
         if (!state.value.modelChanges) viewModelScope.launch { if (control.supportsModelChange(route.accountId)) state.update { it.copy(modelChanges = true) } }
         files?.load()
         if (followTodo != null && todoJob?.isActive != true) todoJob = viewModelScope.launch {
@@ -562,6 +565,9 @@ class SessionViewModel(
      * A refused model (the team's policy is the server's) is told in a notice.
      */
     fun setModel(model: String) = act { val session = control.setModel(route.accountId, route.sessionId, model); actions++; state.update { it.copy(session = session) } }
+
+    /** Switches the session's agent to [effort], like `/effort` in a terminal; the answer is the session with its new effort. */
+    fun setEffort(effort: String) = act { val session = control.setEffort(route.accountId, route.sessionId, effort); actions++; state.update { it.copy(session = session) } }
 
     /** Ends the session (its workspace is deleted): the header then reads the server's answer, "Ended" once it is done. */
     fun end() = act { control.end(route.accountId, route.sessionId); actions++; refreshSession() }

@@ -277,6 +277,19 @@ internal class AgentHost(
             if (child == null || lines.isEmpty()) return consumed
             return if (write(child, lines)) consumed else unavailable
         }
+        if (input.kind == CloudEfforts.KIND) {
+            // Never starts the agent: a stopped one reads the session's effort, which the server already changed, when it starts.
+            val effort = input.text?.takeIf { CloudEfforts.EFFORT.matches(it) } ?: return RunnerInputAckView(input.id, CloudInputStatuses.REJECTED, "invalid_input")
+            val (child, lines) = lock.withLock {
+                // The settings the next start of the agent reads (a restart of its process, a resumed conversation) follow too.
+                settings = settings?.copy(effort = effort)
+                val active = adapter
+                val lines = active?.setEffort(effort).orEmpty()
+                process.takeIf { active != null } to lines
+            }
+            if (child == null || lines.isEmpty()) return consumed
+            return if (write(child, lines)) consumed else unavailable
+        }
         if (input.kind == CloudTasks.KIND) {
             // Never starts the agent: only a running process has tasks to stop.
             val taskId = input.text?.takeIf { CloudTasks.TASK_ID.matches(it) } ?: return RunnerInputAckView(input.id, CloudInputStatuses.REJECTED, "invalid_input")

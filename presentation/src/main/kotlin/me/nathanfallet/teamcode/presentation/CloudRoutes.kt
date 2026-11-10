@@ -238,6 +238,10 @@ internal fun Route.cloudRoutes(sessions: CloudSessionService, admin: CloudAdmini
             val input = call.jsonBody<SetCloudSessionModelRequest>()
             call.respond(sessions.setModel(call.principal, call.onBehalfOf(), call.id(), input.model).view())
         }
+        put("/sessions/{id}/effort") {
+            val input = call.jsonBody<SetCloudSessionEffortRequest>()
+            call.respond(sessions.setEffort(call.principal, call.onBehalfOf(), call.id(), input.effort).view())
+        }
         put("/sessions/{id}/github") {
             val input = call.jsonBody<CloudGitHubAccessRequest>()
             val access = CloudGitHubAccess.parse(input.access) ?: throw TeamFailure("invalid_github_access", 400, "Use access owner, shared or none.")

@@ -146,6 +146,8 @@ class DemoSessionRepository(private val demo: DemoMode) : SessionRepository {
     override suspend fun setPermissionBypass(accountId: String, sessionId: String, enabled: Boolean): CloudSession = demo.store().setPermissionBypass(sessionId, enabled)
     override suspend fun setModel(accountId: String, sessionId: String, model: String): CloudSession = demo.store().setModel(sessionId, model)
 
+    override suspend fun setEffort(accountId: String, sessionId: String, effort: String): CloudSession = demo.store().setEffort(sessionId, effort)
+
     override suspend fun models(accountId: String, agent: String): List<ModelOption> = DemoContent.models
 
     override suspend fun end(accountId: String, sessionId: String) { demo.store().move(sessionId, SessionState.TERMINATED) }

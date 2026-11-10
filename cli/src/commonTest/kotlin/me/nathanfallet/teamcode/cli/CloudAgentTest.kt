@@ -1371,6 +1371,52 @@ class CloudAgentTest {
         job.cancel()
     }
 
+    @Test fun anEffortChangeReachesTheAgentForItsNextTurn() {
+        // Claude Code: the SDK's `apply_flag_settings` control request with `effortLevel`, and the effort a later start of the process uses.
+        val adapter = ClaudeStreamJsonAdapter(claude)
+        val before = adapter.command(null).arguments
+        assertEquals("high", before[before.indexOf("--effort") + 1])
+        val change = obj(adapter.setEffort("max").single())
+        assertEquals("control_request", change.str("type"))
+        val request = change["request"]!!.jsonObject
+        assertEquals("apply_flag_settings", request.str("subtype")); assertEquals("max", request["settings"]!!.jsonObject.str("effortLevel"))
+        val args = adapter.command(null).arguments
+        assertEquals("max", args[args.indexOf("--effort") + 1])
+
+        // Codex: no request; every `turn/start` carries the effort, so the next one names the new level.
+        fun ready(): CodexAppServerAdapter {
+            val codexAdapter = CodexAppServerAdapter(codex, "1.0")
+            val startup = codexAdapter.startup(null, "/workspace").map(::obj)
+            codexAdapter.parse("""{"id":${startup[2].str("id")},"result":{"thread":{"id":"th-1"},"model":"gpt-5"}}""")
+            return codexAdapter
+        }
+        assertEquals("medium", obj(ready().message("go").single())["params"]!!.jsonObject.str("effort"))
+        val changed = ready()
+        assertTrue(changed.setEffort("xhigh").isEmpty())
+        assertEquals("xhigh", obj(changed.message("go").single())["params"]!!.jsonObject.str("effort"))
+    }
+
+    @Test fun hostSwitchesTheEffortOfARunningAgentAndNeverStartsOne() = runTest {
+        val channel = FakeChannel()
+        val started = mutableListOf<Pair<AgentCommand, FakeProcess>>()
+        val job = launch { host(channel, MemoryState(), started).run() }
+        // No agent runs: the server already recorded the effort, which the agent reads when it starts.
+        channel.inputs.send(listOf(RunnerInputView("effort-0", CloudEfforts.KIND, "max", 1)))
+        until { channel.acks.isNotEmpty() }
+        assertEquals(RunnerInputAckView("effort-0", CloudInputStatuses.CONSUMED), channel.acks.single())
+        assertTrue(started.isEmpty(), "An effort change never starts an agent")
+        channel.inputs.send(listOf(RunnerInputView("in-1", "message", "Hello", 1)))
+        until { channel.acks.size == 2 }
+        val process = started.single().second
+        channel.inputs.send(listOf(RunnerInputView("effort-1", CloudEfforts.KIND, "low", 1), RunnerInputView("effort-2", CloudEfforts.KIND, "not an effort", 1)))
+        until { channel.acks.size == 4 }
+        assertEquals(RunnerInputAckView("effort-1", CloudInputStatuses.CONSUMED), channel.acks[2])
+        assertEquals(RunnerInputAckView("effort-2", CloudInputStatuses.REJECTED, "invalid_input"), channel.acks[3])
+        assertTrue(process.written.any { "\"apply_flag_settings\"" in it && "\"low\"" in it })
+        assertFalse(process.written.any { "not an effort" in it })
+        job.cancel()
+    }
+
     @Test fun logsShowTheBackgroundTasksInOneLine() {
         val tasks = buildJsonObject { putJsonArray("tasks") { addJsonObject { put("id", "b1"); put("description", "npm test") }; addJsonObject { put("id", "a1"); put("description", "Review") } } }
         assertTrue(CloudEventView(1, CloudEventTypes.TASKS, 0, 1, tasks).render().endsWith("[tasks] 2 running: npm test, Review"))

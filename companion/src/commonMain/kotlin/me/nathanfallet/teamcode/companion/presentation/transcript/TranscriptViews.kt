@@ -99,7 +99,7 @@ fun Modifier.atMostBubbleWidth(): Modifier = layout { measurable, constraints ->
 /**
  * One item. [subagents] names a subagent card's state ([TranscriptItem.Subagent]); [onOpenSubagent] opens its thread,
  * null where the panel is not offered (its steps then stay folded in the card). [today] is the current UTC day
- * ([utcEpochDay]) that dated lines compare with: they show the date too on another day, and always while it is null.
+ * ([localEpochDay]) that dated lines compare with: they show the date too on another day, and always while it is null.
  */
 @Composable
 fun TranscriptItemView(

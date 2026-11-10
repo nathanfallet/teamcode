@@ -43,8 +43,12 @@ class SqlWaitStore(private val database: Database, private val cipher: Credentia
 
     private fun JdbcTransaction.insertWait(auditTeam: String, auditActor: String, credential: String?, wait: Wait, idempotencyKey: String?, limit: Int): WaitChange {
         // The session's row serializes its creations, so two replicas cannot pass the cap together.
-        CloudSessions.select(CloudSessions.id).where { (CloudSessions.id eq wait.sessionId!!) and (CloudSessions.teamId eq wait.teamId) }.forUpdate().singleOrNull()
+        val session = CloudSessions.select(CloudSessions.id, CloudSessions.state, CloudSessions.desiredState)
+            .where { (CloudSessions.id eq wait.sessionId!!) and (CloudSessions.teamId eq wait.teamId) }.forUpdate().singleOrNull()
             ?: throw TeamFailure("not_found", 404, "Session not found.")
+        // Ending a session cancels its open waits; one opened after that (a runner still winding down) would stay open for good.
+        if (session[CloudSessions.desiredState] == "terminated" || session[CloudSessions.state] in setOf("terminated", "failed"))
+            throw TeamFailure("session_not_running", 409, "The session has ended: it holds no new wait.")
         if (idempotencyKey != null) {
             Waits.select(Waits.id).where { (Waits.createdById eq auditActor) and (Waits.idempotencyKey eq idempotencyKey) }.singleOrNull()
                 ?.let { return WaitChange(read(wait.teamId, it[Waits.id])!!, false) }

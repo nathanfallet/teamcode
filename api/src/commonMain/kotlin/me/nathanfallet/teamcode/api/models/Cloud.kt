@@ -224,6 +224,27 @@ object CloudModels {
     /** Rejected by a runner that cannot change the model of its agent while it runs. */
     const val UNSUPPORTED = "model_change_unsupported"
 }
+/** `PUT /cloud/sessions/{id}/effort` ([CloudEfforts.FEATURE]): the effort the session's agent uses from its next turn on. Owner only. */
+@Serializable
+data class SetCloudSessionEffortRequest(val effort: String)
+
+/**
+ * `cloud.sessions.effort.v1`: the owner of a cloud or remote session changes the effort (reasoning level) of its agent
+ * while it runs, as `/model` does for the model. The session's recorded effort changes at once; a running agent takes it
+ * for its next turn. Effort has no team policy: any value the agent accepts is sent through.
+ */
+object CloudEfforts {
+    const val FEATURE = "cloud.sessions.effort.v1"
+    /** The input kind that carries the effort to a running agent; its text is the effort. */
+    const val KIND = "set_effort"
+    /** The efforts the server takes: the creation's rule (letters, digits and `. _ : / -`, 1 to 120 characters). */
+    val EFFORT = Regex("[a-zA-Z0-9._:/-]{1,120}")
+    /** What the pickers suggest per agent, lowest first; a suggestion, not a limit. */
+    val CLAUDE = listOf("low", "medium", "high", "xhigh", "max")
+    val CODEX = listOf("low", "medium", "high", "xhigh")
+    /** Rejected by a runner that cannot change the effort of its agent while it runs. */
+    const val UNSUPPORTED = "effort_change_unsupported"
+}
 /** `PUT /cloud/sessions/{id}/github` (`cloud.sessions.github-access.v1`): `owner`, `shared` or `none`. Owner only. */
 @Serializable
 data class CloudGitHubAccessRequest(val access: String)

@@ -299,7 +299,7 @@ internal fun Route.cloudRunnerConversationRoutes(channel: CloudRunnerChannel, co
         val body = call.boundedJson<RunnerInputsRequest>(4_096)
         val pod = channel.authenticate(call.token(), body.teamId, body.sessionId, body.epoch)
         val polled = runner.poll(pod.teamId, pod.sessionId, pod.epoch, body.waitMillis, body.desiredState, acceptsFiles = body.acceptsFiles && conversation.files != null,
-            acceptsTaskStops = body.acceptsTaskStops, acceptsModelChanges = body.acceptsModelChanges)
+            acceptsTaskStops = body.acceptsTaskStops, acceptsModelChanges = body.acceptsModelChanges, acceptsEffortChanges = body.acceptsEffortChanges)
         call.respond(RunnerInputsView(polled.inputs.map { RunnerInputView(it.id, it.kind.wire, it.text, it.attempts, it.files.map { file -> file.view() }) }, polled.desiredState.wire))
     }
     conversation.files?.let { files ->

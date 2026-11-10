@@ -48,7 +48,9 @@ enum class CloudInputKind(val wire: String) {
     /** Stops one background task of the running agent; its text is the task id. Delivered only to a runner that takes it. */
     STOP_TASK("stop_task"),
     /** Changes the model of the running agent from its next turn on; its text is the model. Delivered only to a runner that takes it. */
-    SET_MODEL("set_model");
+    SET_MODEL("set_model"),
+    /** Changes the effort of the running agent from its next turn on; its text is the effort. Delivered only to a runner that takes it. */
+    SET_EFFORT("set_effort");
     companion object { fun parse(value: String) = entries.singleOrNull { it.wire == value } }
 }
 

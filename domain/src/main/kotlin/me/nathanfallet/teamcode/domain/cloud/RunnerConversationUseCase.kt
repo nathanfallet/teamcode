@@ -132,8 +132,9 @@ class RunnerConversationUseCase(
      * a message, so a stop is rejected for it with `task_stop_unsupported` instead.
      * [acceptsModelChanges]: the runner changes its agent's model. An older runner would hand the model to the agent as a
      * message, so a change is rejected for it with `model_change_unsupported` instead.
+     * [acceptsEffortChanges]: the same for the effort (`effort_change_unsupported`).
      */
-    suspend fun poll(teamId: String, sessionId: String, epoch: Int, waitMillis: Long, known: String?, acceptsFiles: Boolean = false, acceptsTaskStops: Boolean = false, acceptsModelChanges: Boolean = false): RunnerInputs {
+    suspend fun poll(teamId: String, sessionId: String, epoch: Int, waitMillis: Long, known: String?, acceptsFiles: Boolean = false, acceptsTaskStops: Boolean = false, acceptsModelChanges: Boolean = false, acceptsEffortChanges: Boolean = false): RunnerInputs {
         // Only the two states a runner acts on: a deleted session fences the call anyway.
         val knownState = known?.let { wire -> DesiredState.entries.firstOrNull { it.wire == wire && it != DesiredState.TERMINATED }
             ?: throw TeamFailure("invalid_state", 400, "Send the desired state as running or paused.") }
@@ -144,12 +145,14 @@ class RunnerConversationUseCase(
             if (session.desiredState == DesiredState.RUNNING && (session.state == READY || session.state == ACTIVE)) {
                 val delivered = store.deliver(sessionId, epoch, DELIVERY_BATCH).let { inputs ->
                     val unsupported = inputs.filter {
-                        (!acceptsFiles && it.files.isNotEmpty()) || (!acceptsTaskStops && it.kind == CloudInputKind.STOP_TASK) || (!acceptsModelChanges && it.kind == CloudInputKind.SET_MODEL)
+                        (!acceptsFiles && it.files.isNotEmpty()) || (!acceptsTaskStops && it.kind == CloudInputKind.STOP_TASK) || (!acceptsModelChanges && it.kind == CloudInputKind.SET_MODEL) ||
+                        (!acceptsEffortChanges && it.kind == CloudInputKind.SET_EFFORT)
                     }
                     if (unsupported.isNotEmpty()) store.acknowledge(sessionId, epoch, unsupported.map {
                         RunnerInputAck(it.id, false, when {
                             it.kind == CloudInputKind.STOP_TASK && !acceptsTaskStops -> "task_stop_unsupported"
                             it.kind == CloudInputKind.SET_MODEL && !acceptsModelChanges -> "model_change_unsupported"
+                            it.kind == CloudInputKind.SET_EFFORT && !acceptsEffortChanges -> "effort_change_unsupported"
                             else -> "files_unsupported"
                         })
                     })

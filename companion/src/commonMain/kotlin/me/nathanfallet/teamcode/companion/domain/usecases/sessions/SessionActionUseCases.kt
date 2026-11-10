@@ -176,6 +176,23 @@ class ControlSessionUseCase(private val sessions: SessionRepository, private val
         sessions.setPermissionBypass(accountId, sessionId, enabled)
     }
 
+    /** Whether the server changes the effort of a session's agent (`cloud.sessions.effort.v1`); the effort chip opens the picker only then. */
+    suspend fun supportsEffortChange(accountId: String): Boolean = try {
+        Features.EFFORT in features.features(accountId)
+    } catch (error: kotlinx.coroutines.CancellationException) {
+        throw error
+    } catch (_: Exception) {
+        false
+    }
+
+    /** Switches the agent to [effort]; the value is checked here as the server checks it (it has no policy for effort). */
+    suspend fun setEffort(accountId: String, sessionId: String, effort: String): CloudSession = guard(accountId) {
+        val sent = effort.trim()
+        requireInput(validEffort(sent), InvalidInput.Problem.SESSION_EFFORT, MAX_MODEL, "Use a valid effort: letters, digits and . _ : / - (up to $MAX_MODEL characters).")
+        if (Features.EFFORT !in features.features(accountId)) throw CompanionException.Unsupported(Features.EFFORT)
+        sessions.setEffort(accountId, sessionId, sent)
+    }
+
     /** The models the team's policy lets the member pick for [session]'s agent, best first. */
     suspend fun models(accountId: String, session: CloudSession): List<ModelOption> = guard(accountId) {
         if (Features.MODEL !in features.features(accountId)) throw CompanionException.Unsupported(Features.MODEL)
@@ -197,6 +214,10 @@ class ControlSessionUseCase(private val sessions: SessionRepository, private val
         private val MODEL = Regex("[a-zA-Z0-9._:/-]+")
         /** The server's model rules (as at creation): 1 to [MAX_MODEL] letters, digits and `. _ : / -`. */
         fun validModel(model: String): Boolean = model.length in 1..MAX_MODEL && MODEL.matches(model)
+        /** The server's effort rules (as at creation): the same shape as a model id. */
+        fun validEffort(effort: String): Boolean = validModel(effort)
+        /** What the effort picker suggests for [agent] (`claude` or `codex`), lowest first; any other valid value can be typed. */
+        fun effortLevels(agent: String): List<String> = if (agent == "codex") listOf("low", "medium", "high", "xhigh") else listOf("low", "medium", "high", "xhigh", "max")
         /** Pause and resume are offered to the session's owner: a role opens nobody else's session. */
         fun canControl(account: Account, session: CloudSession): Boolean = session.ownerId == account.memberId
         fun canPause(session: CloudSession): Boolean = !session.local && session.state in setOf(SessionState.READY, SessionState.ACTIVE, SessionState.RESUMING)

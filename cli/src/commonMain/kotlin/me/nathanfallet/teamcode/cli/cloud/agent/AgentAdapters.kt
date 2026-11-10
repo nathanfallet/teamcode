@@ -94,6 +94,12 @@ interface AgentAdapter {
      * use it; a turn in flight keeps the model it started with.
      */
     fun setModel(model: String): List<String> = emptyList()
+    /**
+     * Lines switching the agent to [effort] from its next turn on (Claude Code's `apply_flag_settings` control request;
+     * Codex takes the effort with every `turn/start`, so it needs none). Always remembers [effort], so the agent's later
+     * requests use it; a turn in flight keeps the effort it started with.
+     */
+    fun setEffort(effort: String): List<String> = emptyList()
     /** The empty `tasks` event to upload when the process stops while it still listed tasks; null when there is nothing to clear. */
     fun tasksEnded(): AgentEvent? = null
     /** Records [count] scheduled wake-ups (the `Stop` hook's `session_crons`); the `tasks` event to upload when that changed it. */
@@ -212,6 +218,18 @@ class ClaudeStreamJsonAdapter(private val settings: AgentSettings, private val n
         }.toString())
     }
 
+    /** The effort the agent runs with: the session's, then the member's choice. */
+    private var effort = settings.effort
+
+    override fun setEffort(effort: String): List<String> {
+        this.effort = effort
+        return listOf(buildJsonObject {
+            // The control request the Agent SDK's `applyFlagSettings` sends: Claude Code takes `effortLevel` for its next turn.
+            put("type", "control_request"); put("request_id", Uuid.random().toString())
+            putJsonObject("request") { put("subtype", "apply_flag_settings"); putJsonObject("settings") { put("effortLevel", effort) } }
+        }.toString())
+    }
+
     override fun tasksEnded(): AgentEvent? {
         if (!settings.backgroundTasks || (reportedTasks.isNullOrEmpty() && reportedScheduled == 0)) return null
         // Wake-ups fire only while the process runs; `--resume` restores them, and the next `Stop` reports them again.
@@ -231,7 +249,7 @@ class ClaudeStreamJsonAdapter(private val settings: AgentSettings, private val n
         if (settings.liveText) add("--include-partial-messages")
         readableDirectories.forEach { addAll(listOf("--add-dir", it)) }
         model?.let { addAll(listOf("--model", it)) }
-        settings.effort?.let { addAll(listOf("--effort", it)) }
+        effort?.let { addAll(listOf("--effort", it)) }
         resume?.let { addAll(listOf("--resume", it)) }
         if (fork && resume != null) add("--fork-session")
     })
@@ -554,6 +572,9 @@ class CodexAppServerAdapter(private val settings: AgentSettings, private val cli
     private var model = settings.model
     private var modelChanged = false
     override fun setModel(model: String): List<String> { this.model = model; modelChanged = true; return emptyList() }
+    /** The effort every `turn/start` carries: the session's, then the member's choice. */
+    private var effort = settings.effort
+    override fun setEffort(effort: String): List<String> { this.effort = effort; return emptyList() }
     override fun command(resume: String?, fork: Boolean) = AgentCommand("codex", listOf("app-server", "-c", "approval_policy=\"never\"", "-c", "sandbox_mode=\"$sandbox\""))
 
     private fun request(method: String, params: JsonObject): String {
@@ -590,7 +611,7 @@ class CodexAppServerAdapter(private val settings: AgentSettings, private val cli
         else {
             turnStarting = true
             listOf(request("turn/start", buildJsonObject {
-                put("threadId", thread); put("input", input(text)); settings.effort?.let { put("effort", it) }
+                put("threadId", thread); put("input", input(text)); effort?.let { put("effort", it) }
                 // Only after a change: the thread already runs with the session's model, and a turn that names it again is the same.
                 if (modelChanged) model?.let { put("model", it) }
             }))

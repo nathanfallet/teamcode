@@ -162,6 +162,10 @@ It is cut at 32,000 characters, the most a message holds (the todo block gives w
 
 A session whose agent holds its owner's GitHub token takes instructions from its owner only (`github_owner_only`, [cloud sessions](cloud-sessions.md)): an assignee who is not the owner gets that `403` **before** the answer is stored, so a wait never ends up answered but undeliverable. A wait cancelled by someone else does not wake the session.
 
+## When a session ends
+
+Ending a session (`DELETE /cloud/sessions/{id}`, "End session" in the app), a session that fails, expires or is lost, cancels every wait still open for it. The cancellation commits with the change of the session: the waits become `cancelled` (no answer, `resolvedAt` set), each is audited as `wait.cancelled` by `system` and published as `cloud.wait.cancelled` to its assignee, so "Waiting for you" empties without anyone dismissing the cards. Answered waits are left as they were. A session that has ended opens no new wait (`409 session_not_running`): a runner still winding down cannot leave one open for good. A workflow step blocked on a cancelled wait fails with `wait_cancelled`. It costs one read and one update through the `wait_session` index, and runs twice at most in a session's life (when it is asked to end, and when it is gone).
+
 ## Failed turns
 
 When a runner reports a turn that ended with an error (`phase: failed`), the server opens a `turn_failed` wait for the session's owner, in the same transaction as the runner events, so the owner sees it in "Waiting for you" without the agent having to ask. It has a `note` text field and two actions: `retry` and `dismiss`.

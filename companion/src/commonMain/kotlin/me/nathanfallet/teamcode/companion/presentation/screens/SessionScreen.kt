@@ -72,6 +72,12 @@ import me.nathanfallet.teamcode.companion.domain.models.ModelOption
 import me.nathanfallet.teamcode.companion.presentation.components.Chip
 import me.nathanfallet.teamcode.companion.resources.input_session_model
 import me.nathanfallet.teamcode.companion.resources.session_model_apply
+import me.nathanfallet.teamcode.companion.resources.session_effort_change
+import me.nathanfallet.teamcode.companion.resources.session_effort_custom
+import me.nathanfallet.teamcode.companion.resources.session_effort_default
+import me.nathanfallet.teamcode.companion.resources.session_effort_hint
+import me.nathanfallet.teamcode.companion.resources.session_effort_title
+import me.nathanfallet.teamcode.companion.resources.input_session_effort
 import me.nathanfallet.teamcode.companion.resources.session_model_change
 import me.nathanfallet.teamcode.companion.resources.session_model_custom
 import me.nathanfallet.teamcode.companion.resources.session_model_default
@@ -248,6 +254,7 @@ fun SessionScreen(
     val thread = state.thread?.takeIf { it in byId }
     val todo = state.todo
     var choosingModel by rememberSaveable { mutableStateOf(false) }
+    var choosingEffort by rememberSaveable { mutableStateOf(false) }
     // The panel is there for the agents' work, and for the todo once the agent made one.
     val layout = subagentLayout(mode, work.hasContent || todo != null, state.panelOpen, state.panelHidden, thread != null)
     val canStop = live?.stoppable == true && messaging && state.agentRuns
@@ -279,7 +286,13 @@ fun SessionScreen(
                 Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     state.session?.let { session ->
                         val canChangeModel = state.modelChanges && state.canControl && ControlSessionUseCase.canChangeModel(session)
-                        Summary(session, state, onModel = if (canChangeModel) ({ choosingModel = true }) else null)
+                        // The effort follows the model's rules: the owner, while the session is not over, where the server takes it.
+                        val canChangeEffort = state.effortChanges && state.canControl && ControlSessionUseCase.canChangeModel(session)
+                        Summary(session, state, onModel = if (canChangeModel) ({ choosingModel = true }) else null, onEffort = if (canChangeEffort) ({ choosingEffort = true }) else null)
+                        if (choosingEffort && canChangeEffort) EffortPickerDialog(
+                            current = session.effort, levels = ControlSessionUseCase.effortLevels(session.agentKind), busy = state.acting,
+                            onConfirm = { choosingEffort = false; viewModel.setEffort(it) }, onDismiss = { choosingEffort = false },
+                        )
                         if (choosingModel && canChangeModel) ModelPickerDialog(
                             current = session.model, options = state.models, failed = state.modelsFailed, busy = state.acting, onLoad = viewModel::loadModels,
                             onConfirm = { choosingModel = false; viewModel.setModel(it) }, onDismiss = { choosingModel = false },
@@ -320,14 +333,14 @@ fun SessionScreen(
                 }
                 if (layout.threadReplacesMain && thread != null) {
                     ThreadBar(byId[thread], backToMain, onBack = viewModel::backToMain, besideMain = false)
-                    key(thread) { ConfirmingLinks { Transcript(state, thread, byId, memberId, viewModel, openThread, utcEpochDay(now), Modifier.weight(1f)) } }
-                } else key(null) { ConfirmingLinks { Transcript(state, null, byId, memberId, viewModel, openThread.takeIf { work.hasContent }, utcEpochDay(now), Modifier.weight(1f)) } }
+                    key(thread) { ConfirmingLinks { Transcript(state, thread, byId, memberId, viewModel, openThread, localEpochDay(now), Modifier.weight(1f)) } }
+                } else key(null) { ConfirmingLinks { Transcript(state, null, byId, memberId, viewModel, openThread.takeIf { work.hasContent }, localEpochDay(now), Modifier.weight(1f)) } }
             }
             if (layout.threadBeside && thread != null) {
                 Box(Modifier.width(1.dp).fillMaxHeight().background(colors.line))
                 Column(Modifier.weight(1f).fillMaxHeight().testTag("thread-column")) {
                     ThreadBar(byId[thread], backToMain, onBack = viewModel::backToMain, besideMain = true)
-                    key(thread) { ConfirmingLinks { Transcript(state, thread, byId, memberId, viewModel, openThread, utcEpochDay(now), Modifier.weight(1f)) } }
+                    key(thread) { ConfirmingLinks { Transcript(state, thread, byId, memberId, viewModel, openThread, localEpochDay(now), Modifier.weight(1f)) } }
                 }
             }
             if (layout.panel == PanelPlacement.SIDE) {
@@ -392,6 +405,40 @@ private fun ModelPickerDialog(current: String?, options: List<ModelOption>?, fai
     }
 }
 
+/**
+ * The effort of the session's agent: the usual levels of its agent as chips, or any other value typed in. Switching is
+ * offered once another effort is chosen; the next turn uses it.
+ */
+@Composable
+private fun EffortPickerDialog(current: String?, levels: List<String>, busy: Boolean, onConfirm: (String) -> Unit, onDismiss: () -> Unit) {
+    val colors = TeamCode.colors
+    var chosen by rememberSaveable { mutableStateOf(current.orEmpty()) }
+    val sent = chosen.trim()
+    val valid = ControlSessionUseCase.validEffort(sent)
+    val canSwitch = valid && sent != current && !busy
+    Dialog(onDismissRequest = onDismiss) {
+        Column(
+            Modifier.widthIn(max = 420.dp).fillMaxWidth().clip(Radii.card).background(colors.panel).border(1.dp, colors.line, Radii.card).padding(18.dp).testTag("effort-dialog"),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Text(stringResource(Res.string.session_effort_title), color = colors.text, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+            Text(stringResource(Res.string.session_effort_hint), color = colors.muted, fontSize = 13.sp, lineHeight = 18.sp)
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                for (level in levels) ChoiceChip(level, selected = sent == level, onClick = { chosen = level }, tag = "effort-option-$level")
+            }
+            TcTextField(
+                chosen, { chosen = it }, label = stringResource(Res.string.session_effort_custom), mono = true, error = !valid && chosen.isNotEmpty(),
+                hint = if (!valid && chosen.isNotEmpty()) stringResource(Res.string.input_session_effort, ControlSessionUseCase.MAX_MODEL) else null,
+                tag = "effort-id", onSubmit = { if (canSwitch) onConfirm(sent) },
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TcButton(stringResource(Res.string.action_cancel), onClick = onDismiss, kind = ButtonKind.SECONDARY, modifier = Modifier.weight(1f))
+                TcButton(stringResource(Res.string.session_model_apply), onClick = { onConfirm(sent) }, enabled = canSwitch, modifier = Modifier.weight(1f).testTag("effort-apply"))
+            }
+        }
+    }
+}
+
 /** "…": pause, resume, rename or end (owner and administrators; rename and end are shared with the sessions list's menu), and the artifacts this session published. */
 @Composable
 private fun SessionMenu(state: SessionUiState, viewModel: SessionViewModel, onOpenArtifacts: () -> Unit, menuItems: @Composable (CloudSession, () -> Unit) -> Unit) {
@@ -429,7 +476,7 @@ private fun SessionMenu(state: SessionUiState, viewModel: SessionViewModel, onOp
 
 /** State, stream and the one-line details; a tap shows every detail. */
 @Composable
-private fun Summary(session: CloudSession, state: SessionUiState, onModel: (() -> Unit)?) {
+private fun Summary(session: CloudSession, state: SessionUiState, onModel: (() -> Unit)?, onEffort: (() -> Unit)? = null) {
     val colors = TeamCode.colors
     var expanded by rememberSaveable { mutableStateOf(false) }
     Column(
@@ -450,6 +497,12 @@ private fun Summary(session: CloudSession, state: SessionUiState, onModel: (() -
                     val label = session.model ?: stringResource(Res.string.session_model_default)
                     val changeLabel = stringResource(Res.string.session_model_change)
                     Chip(label, Modifier.testTag("model-chip").let { if (onModel != null) it.clickable(role = Role.Button, onClickLabel = changeLabel, onClick = onModel) else it }, tone = Tone.MUTED)
+                }
+                // The effort, the same way: for the owner it opens its picker.
+                if (session.effort != null || onEffort != null) {
+                    val label = session.effort ?: stringResource(Res.string.session_effort_default)
+                    val changeLabel = stringResource(Res.string.session_effort_change)
+                    Chip(label, Modifier.testTag("effort-chip").let { if (onEffort != null) it.clickable(role = Role.Button, onClickLabel = changeLabel, onClick = onEffort) else it }, tone = Tone.MUTED)
                 }
                 if (session.remote) KindChips(session)
                 if (session.permissionBypass) Chip(stringResource(Res.string.session_bypass_on), modifier = Modifier.testTag("bypass-chip"))

@@ -94,7 +94,7 @@ internal fun WaitCard(
     modifier: Modifier = Modifier,
 ) {
     val colors = TeamCode.colors
-    val today = utcEpochDay(now)
+    val today = localEpochDay(now)
     TcCard(modifier.testTag("wait-${wait.id}"), borderColor = if (wait.open) colors.accentDim else colors.line) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
             Chip(
@@ -241,7 +241,7 @@ internal fun InProgressCard(
     modifier: Modifier = Modifier,
 ) {
     val colors = TeamCode.colors
-    val today = utcEpochDay(now)
+    val today = localEpochDay(now)
     val event = wait.resolver == WaitResolver.EVENT
     val at = wait.dueOrTimeout?.let { formatEventTime(it, today) }.orEmpty()
     TcCard(modifier.testTag("in-progress-${wait.id}"), borderColor = colors.line) {

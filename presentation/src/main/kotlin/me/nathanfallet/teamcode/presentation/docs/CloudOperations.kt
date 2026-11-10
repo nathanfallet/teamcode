@@ -324,6 +324,26 @@ private fun ApiCatalog.cloudSessions() {
             conflict("The session is terminated or being deleted (`session_not_running`), or changed concurrently (`session_busy`).")
         }
     }
+    put("/api/v1/cloud/sessions/{id}/effort") {
+        operationId = "setCloudSessionEffort"; tag(ApiTags.CLOUD_SESSIONS)
+        summary = "Change the effort of a session's agent"
+        description = "Like `/effort` in a terminal, for a cloud or remote session (`cloud.sessions.effort.v1`). The owner only, " +
+            "signed in or with a `cloud:write` key (a role, an administrator's included, opens nobody else's session). There is no team policy for " +
+            "effort: any valid value is recorded (`low`, `medium`, `high`, `xhigh`, `max` for Claude Code). The recorded effort changes at once and is audited as " +
+            "`cloud.session.effort_changed`; a running agent takes it for its next turn (a turn in flight ends with the old effort), and a session that is not running " +
+            "starts with it. Choosing the current effort changes nothing."
+        parameters {
+            sessionId()
+            onBehalfOf()
+        }
+        body<SetCloudSessionEffortRequest>("`effort`: the effort value.")
+        responses {
+            ok<CloudSessionView>("The session with its new `agent.effort`.")
+            badRequest("An invalid effort (`invalid_agent`).")
+            notFound("No such session (`not_found`).")
+            conflict("The session is terminated or being deleted (`session_not_running`), or changed concurrently (`session_busy`).")
+        }
+    }
     put("/api/v1/cloud/sessions/{id}/github") {
         operationId = "setCloudSessionGitHubAccess"; tag(ApiTags.CLOUD_SESSIONS)
         summary = "Choose who instructs an agent that holds your GitHub token"

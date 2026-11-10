@@ -2,6 +2,10 @@ package me.nathanfallet.teamcode.infrastructure.database
 
 import me.nathanfallet.teamcode.domain.cloud.*
 import me.nathanfallet.teamcode.domain.team.*
+import me.nathanfallet.teamcode.domain.waits.WaitRules
+import me.nathanfallet.teamcode.domain.waits.WaitStatus
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import me.nathanfallet.teamcode.infrastructure.database.tables.*
 import org.jetbrains.exposed.v1.core.*
 import org.jetbrains.exposed.v1.core.statements.UpdateBuilder
@@ -143,8 +147,32 @@ class SqlCloudSessionStore(private val database: Database) : CloudSessionStore {
             if (actor != null) audit(expected.teamId, actor.principal.member.id, action, expected.id, actor.effectiveMemberId, actor.principal.tokenId)
             else audit(expected.teamId, "system", action, expected.id, expected.ownerId, null)
         }
+        // Ending the session closes what was still waiting on it, in the same transaction as the change.
+        if (next.ended && (!expected.ended || (next.state.terminal && !expected.state.terminal))) cancelOpenWaits(expected, now)
         publishSessionChange(expected, next, write.auditAction, now)
         next.copy(generation = expected.generation + 1)
+    }
+
+    /**
+     * Cancels every wait still open for [session], as the reconciler (`system`) rather than a member: an ended session
+     * can no longer be woken by an answer, so a wait left open would sit in the members' "Waiting" list for good. Each is
+     * audited as `wait.cancelled` and published as `cloud.wait.cancelled`, like a member's own cancellation. One read, one update and one batch of feed
+     * events through the index `wait_session`, plus one audit row per wait (a session holds at most [WaitRules.MAX_OPEN_PER_SESSION] open waits).
+     */
+    private fun JdbcTransaction.cancelOpenWaits(session: CloudSession, at: Long) {
+        val open = Waits.select(Waits.id, Waits.kind, Waits.assigneeId).where { (Waits.sessionId eq session.id) and (Waits.status eq WaitStatus.OPEN.wire) }
+            .limit(WaitRules.MAX_OPEN_PER_SESSION).toList()
+        if (open.isEmpty()) return
+        Waits.update({ (Waits.sessionId eq session.id) and (Waits.status eq WaitStatus.OPEN.wire) }) {
+            it[status] = WaitStatus.CANCELLED.wire; it[resolvedAt] = at
+        }
+        open.forEach { audit(session.teamId, "system", "wait.cancelled", it[Waits.id], null, null, related = it[Waits.assigneeId]) }
+        // Last in the transaction, in one batch: see [publishTeamEvents].
+        publishTeamEvents(session.teamId, open.map { row ->
+            PendingTeamEvent(TeamEventType.WAIT_CANCELLED, row[Waits.id], row[Waits.assigneeId], buildJsonObject {
+                put("waitId", row[Waits.id]); put("sessionId", session.id); put("waitKind", row[Waits.kind]); put("assigneeId", row[Waits.assigneeId]); put("kind", session.kind.wire)
+            }, at)
+        })
     }
 
     override suspend fun startExecution(expected: CloudSession, next: CloudSession, execution: CloudExecution, leaseOwner: String, memberRunningLimit: Int): StartOutcome = database.query {
@@ -407,3 +435,6 @@ internal fun writeExecution(it: UpdateBuilder<*>, e: CloudExecution) {
     it[CloudExecutions.endedAt] = e.endedAt; it[CloudExecutions.exitReason] = e.exitReason?.take(64); it[CloudExecutions.checkpoint] = e.checkpoint
     it[CloudExecutions.ownerId] = e.ownerId
 }
+
+/** Ended: terminated, failed, or asked to terminate (the reconciler is only finishing the cleanup). */
+private val CloudSession.ended: Boolean get() = state.terminal || desiredState == DesiredState.TERMINATED

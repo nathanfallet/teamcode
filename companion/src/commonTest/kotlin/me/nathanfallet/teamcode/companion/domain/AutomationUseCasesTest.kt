@@ -9,6 +9,7 @@ import me.nathanfallet.teamcode.companion.domain.usecases.automations.*
 import kotlin.test.*
 
 class AutomationUseCasesTest {
+    init { me.nathanfallet.teamcode.companion.presentation.screens.utcOffsetMinutes = { 0 } } // times are asserted in UTC, whatever the machine's zone
     private val repository = FakeAutomationRepository()
     private val features = FakeFeatures(setOf("automations.v1"))
     private fun access(role: String = "MEMBER"): AutomationAccess {
@@ -109,8 +110,8 @@ class AutomationUseCasesTest {
     }
 
     @Test fun timesAreWrittenInUtc() {
-        assertEquals("1970-01-01 00:00 UTC", me.nathanfallet.teamcode.companion.presentation.screens.formatUtc(0))
-        assertEquals("2026-10-28 21:00 UTC", me.nathanfallet.teamcode.companion.presentation.screens.formatUtc(1_793_221_200_000L))
-        assertEquals("1969-12-31 23:59 UTC", me.nathanfallet.teamcode.companion.presentation.screens.formatUtc(-60_000L))
+        assertEquals("1970-01-01 00:00", me.nathanfallet.teamcode.companion.presentation.screens.formatLocal(0))
+        assertEquals("2026-10-28 21:00", me.nathanfallet.teamcode.companion.presentation.screens.formatLocal(1_793_221_200_000L))
+        assertEquals("1969-12-31 23:59", me.nathanfallet.teamcode.companion.presentation.screens.formatLocal(-60_000L))
     }
 }

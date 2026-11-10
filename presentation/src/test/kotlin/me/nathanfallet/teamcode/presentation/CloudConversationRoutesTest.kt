@@ -931,4 +931,65 @@ class CloudConversationRoutesTest {
         assertEquals("claude-sonnet-5-5", store.sessions.getValue("s1").agentModel)
         assertEquals(before, conversations.inputs.size)
     }
+
+    /** `cloud.sessions.effort.v1`: the owner switches the effort of a session's agent; a running agent is told through an input only a runner announcing it receives. */
+    @Test fun theOwnerSwitchesTheEffortOfARunningAgent() = testApplication {
+        val store = Sessions(listOf(admin, colleague, other))
+        val conversations = Conversations().also { c -> c.sessionOf = { store.sessions[it] } }
+        val access = CloudAccessService(conversations, store)
+        val service = CloudConversationService(conversations, store, access, { _, _ -> false })
+        val policies = object : me.nathanfallet.teamcode.domain.policy.ModelPolicyStore {
+            override suspend fun get(teamId: String) = me.nathanfallet.teamcode.domain.policy.ModelPolicy(allowedModels = listOf("claude-*"), deniedModels = listOf("*haiku*"))
+            override suspend fun save(actor: Principal, policy: me.nathanfallet.teamcode.domain.policy.ModelPolicy) = policy
+        }
+        val sessions = CloudSessionService(store, access = access, modelPolicies = policies, modelChanges = service, effortChanges = service)
+        application {
+            configureGateway(gateway, team = team(), cloudSessions = sessions, cloudAdmin = CloudAdministrationService(object : CloudAdminStore {
+                override suspend fun clusters(actor: Principal) = emptyList<CloudCluster>()
+                override suspend fun saveCluster(actor: Principal, id: String?, expectedVersion: Int?, input: CloudClusterInput) = error("unused")
+                override suspend fun profiles(actor: Principal) = emptyList<CloudProfile>()
+                override suspend fun member(actor: Principal, memberId: String): Member? = null
+                override suspend fun saveProfile(actor: Principal, id: String?, expectedVersion: Int, name: String, spec: CloudProfileSpec, assignedMemberIds: Set<String>) = error("unused")
+                override suspend fun settings(actor: Principal) = CloudSettings()
+                override suspend fun saveSettings(actor: Principal, settings: CloudSettings) = settings
+            }, cluster), cloudRunner = CloudRunnerChannel(RunnerChannelUseCase(store), AuthenticateRunnerUseCase(store, cluster)),
+                cloudConversation = CloudConversation(service, access, RunnerConversationUseCase(store, conversations, { _, _ -> false }, sleep = { })),
+                modelPolicies = policies, publicOrigin = "http://localhost")
+        }
+        val created = (sessions.create(Principal(colleague, "colleague-session", "default"), null, CloudSessionDraft("Run", "profile-id", null, "claude-opus-5-5", null, emptyMap(), null), null) as CloudCreateOutcome.Created).session
+        store.sessions.clear()
+        store.sessions["s1"] = created.copy(id = "s1", currentEpoch = 1, generation = 1, state = CloudSessionState.READY)
+        store.runs["s1" to 1] = CloudExecution("s1", 1, "tc-s1-e1", ExecutionState.RUNNING, 1)
+        val features = Serialization.json.decodeFromString<Capabilities>(client.get("/api/v1/capabilities") { bearerAuth("colleague") }.bodyAsText()).features
+        assertTrue(CloudEfforts.FEATURE in features)
+        suspend fun switch(token: String, body: String) = client.put("/api/v1/cloud/sessions/s1/effort") { bearerAuth(token); contentType(ContentType.Application.Json); setBody(body) }
+        assertEquals(HttpStatusCode.NotFound, switch("other", """{"effort":"max"}""").status, "Only the owner switches the effort")
+        assertEquals(HttpStatusCode.Forbidden, switch("colleague-read", """{"effort":"max"}""").status, "A read-only key switches nothing")
+        assertEquals(HttpStatusCode.BadRequest, switch("colleague", """{"effort":"not an effort"}""").status)
+        val switched = switch("colleague", """{"effort":"max"}""")
+        assertEquals(HttpStatusCode.OK, switched.status, switched.bodyAsText())
+        assertEquals("max", Serialization.json.decodeFromString<CloudSessionView>(switched.bodyAsText()).agent.effort)
+        assertEquals("max", store.sessions.getValue("s1").agentEffort)
+        assertEquals("claude-opus-5-5", store.sessions.getValue("s1").agentModel, "the model is untouched")
+        val input = conversations.inputs.values.single { it.kind == CloudInputKind.SET_EFFORT }
+        assertEquals("max", input.text); assertFalse(input.wake)
+        val runner = TeamCodeClient("http://localhost", { "projected-pod-token-1" }) { config -> createClient { config(this) } }
+        try {
+            // An older runner would read the effort as a message: the change is rejected for it instead.
+            assertTrue(runner.runnerInputs(RunnerInputsRequest("default", "s1", 1, 0, acceptsTaskStops = true, acceptsModelChanges = true)).inputs.isEmpty())
+            assertEquals(CloudEfforts.UNSUPPORTED, conversations.inputs.getValue(input.id).reason)
+            assertEquals(HttpStatusCode.OK, switch("colleague", """{"effort":"low"}""").status)
+            val delivered = runner.runnerInputs(RunnerInputsRequest("default", "s1", 1, 0, acceptsEffortChanges = true)).inputs.single()
+            assertEquals(RunnerInputView(delivered.id, CloudEfforts.KIND, "low", 1), delivered)
+        } finally { runner.close() }
+        // Choosing the effort it already has again tells the agent nothing more.
+        val before = conversations.inputs.size
+        assertEquals(HttpStatusCode.OK, switch("colleague", """{"effort":"low"}""").status)
+        assertEquals(before, conversations.inputs.size)
+        // A session that is not running takes the effort without any input: it starts with it.
+        store.sessions["s1"] = store.sessions.getValue("s1").copy(state = CloudSessionState.PAUSED, desiredState = DesiredState.PAUSED, generation = 9)
+        assertEquals(HttpStatusCode.OK, switch("colleague", """{"effort":"high"}""").status)
+        assertEquals("high", store.sessions.getValue("s1").agentEffort)
+        assertEquals(before, conversations.inputs.size)
+    }
 }

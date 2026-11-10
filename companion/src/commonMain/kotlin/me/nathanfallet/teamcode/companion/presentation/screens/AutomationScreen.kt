@@ -158,7 +158,7 @@ private fun Overview(automation: Automation, state: AutomationUiState, now: Long
             Text(stringResource(Res.string.automation_version, automation.version), style = MetaStyle, color = colors.muted)
         }
         automation.nextRunAt?.takeIf { automation.enabled }?.let {
-            Text(stringResource(Res.string.automation_next_run, untilTime(it, now), formatUtc(it)), style = MetaStyle, color = colors.muted, modifier = Modifier.testTag("automation-next"))
+            Text(stringResource(Res.string.automation_next_run, untilTime(it, now), formatLocal(it)), style = MetaStyle, color = colors.muted, modifier = Modifier.testTag("automation-next"))
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             if (state.canEnable) TcButton(stringResource(Res.string.automation_enable), onClick = onToggle, enabled = !state.busy, modifier = Modifier.weight(1f).testTag("automation-enable"))
@@ -181,7 +181,7 @@ private fun TriggerCard(automation: Automation, state: AutomationUiState, now: L
                 automation.trigger.catchup?.let { Text(stringResource(if (it == "skip") Res.string.automation_catchup_skip else Res.string.automation_catchup_once), color = colors.muted, fontSize = 13.sp) }
                 if (automation.upcomingRuns.isNotEmpty()) {
                     Text(stringResource(Res.string.automation_upcoming), color = colors.muted, fontSize = 12.5.sp)
-                    automation.upcomingRuns.forEach { Text(formatUtc(it), style = MetaStyle, color = colors.text) }
+                    automation.upcomingRuns.forEach { Text(formatLocal(it), style = MetaStyle, color = colors.text) }
                 }
             }
             TriggerKind.WEBHOOK -> {
@@ -206,7 +206,7 @@ private fun TriggerCard(automation: Automation, state: AutomationUiState, now: L
                     }
                 }
                 automation.webhook?.previousSecretValidUntil?.takeIf { it > now }?.let {
-                    Text(stringResource(Res.string.automation_previous_secret, formatUtc(it)), color = colors.warn, fontSize = 12.5.sp, modifier = Modifier.testTag("automation-previous-secret"))
+                    Text(stringResource(Res.string.automation_previous_secret, formatLocal(it)), color = colors.warn, fontSize = 12.5.sp, modifier = Modifier.testTag("automation-previous-secret"))
                 }
             }
             TriggerKind.UNKNOWN -> Text(automation.trigger.rawKind, color = colors.muted)
@@ -295,7 +295,7 @@ private fun RunRow(run: AutomationRun, canCancel: Boolean, onOpenSession: (Strin
     val colors = TeamCode.colors
     TcCard(Modifier.testTag("run-${run.id}"), padding = 10.dp, spacing = 5.dp) {
         FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(4.dp), itemVerticalAlignment = Alignment.CenterVertically) {
-            Text(formatUtc(run.scheduledFor ?: run.queuedAt), style = MetaStyle, color = colors.muted)
+            Text(formatLocal(run.scheduledFor ?: run.queuedAt), style = MetaStyle, color = colors.muted)
             Chip(runSourceWords(run.source), tone = if (run.source == me.nathanfallet.teamcode.companion.domain.models.RunSource.TEST) Tone.WARN else Tone.MUTED, modifier = Modifier.testTag("run-source-${run.id}"))
             Chip(runStatusWords(run.status), tone = runStatusTone(run.status), modifier = Modifier.testTag("run-status-${run.id}"))
         }

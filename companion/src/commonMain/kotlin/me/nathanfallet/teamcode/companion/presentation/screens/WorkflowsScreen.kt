@@ -174,7 +174,7 @@ private fun RunsList(state: WorkflowRunsUiState, viewModel: WorkflowRunsViewMode
 @Composable
 private fun RunCard(run: WorkflowRun, state: WorkflowRunsUiState, now: Long, team: Boolean, onOpen: () -> Unit, onOpenWaits: () -> Unit) {
     val colors = TeamCode.colors
-    val today = utcEpochDay(now)
+    val today = localEpochDay(now)
     TcCard(Modifier.testTag("workflow-run-${run.id}"), onClick = onOpen) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(run.workflowName, color = colors.text, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
