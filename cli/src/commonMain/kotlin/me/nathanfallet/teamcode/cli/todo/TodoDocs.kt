@@ -30,6 +30,10 @@ internal object TodoDocs {
         - ci_green {repo, of: <item id>}, command {run} (may cite ${'$'}{pr:<item>.number},
           ${'$'}{pr:<item>.mergeSha}, ${'$'}{release:<item>.tag}), artifact_published {id},
           wait_answered {}, attested {what} (unverified: last resort).
+        A check must stay true once the work moves on: never test a passing state (a PR
+        that is still open, a branch or a worktree that is removed after the merge). An
+        item that delivers a PR ends on pr_merged, even when a person merges it: ask
+        with ask_human and wait.
         Most items can be checked. An item of research, writing or analysis ends on
         artifact_published (publish what you found as an artifact); an item that needs
         a person's decision ends on wait_answered (ask with ask_human). Use attested
@@ -61,6 +65,10 @@ internal object TodoDocs {
         Check types: pr_merged {repo}, pr_closed {repo, reason}, release_contains {repo, of | commit}, ci_green {repo, of | ref, workflow?},
         command {run, cwd?, expectExit?, timeoutSeconds?}, artifact_published {id?, minVersion?}, wait_answered {action?}, attested {what}.
         Never write a PR number or a version: use pr_merged and the marker todo_start returns.
+        A check is read again at every stop, long after you wrote it: write it so that a later state still passes. Never test a
+        transient state (`gh pr list --state open` fails once the PR is merged; use pr_merged, or `--state all` in a command), and never
+        depend on a branch, a worktree or a file that the work removes (the worktree is deleted after the merge). There is no "PR is
+        open" check: an item that ends on a PR ends on pr_merged, and a person's merge is waited with ask_human or wait_for.
         Prefer a check that can be observed: research, writing and analysis end on artifact_published, a decision on wait_answered;
         attested is the last resort and is shown as unverified.
 
