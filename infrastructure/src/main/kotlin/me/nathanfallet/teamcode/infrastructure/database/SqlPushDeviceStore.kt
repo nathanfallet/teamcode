@@ -15,9 +15,11 @@ class SqlPushDeviceStore(private val database: Database) : PushDeviceStore {
             .singleOrNull()?.let { PushDevice(it[Devices.id], it[Devices.memberId], it[Devices.platform]) }
     }
 
-    override suspend fun register(deviceId: String, token: String, publicKey: String) = database.query {
+    override suspend fun register(deviceId: String, token: String, publicKey: String, platform: String?) = database.query {
         val now = nowMillis()
         Devices.update({ Devices.id eq deviceId }) { it[pushToken] = token; it[pushPublicKey] = publicKey; it[pushTokenUpdatedAt] = now }
+        // Only a device whose login reported nothing: the login's own report stays.
+        if (platform != null) Devices.update({ (Devices.id eq deviceId) and Devices.platform.isNull() }) { it[Devices.platform] = platform }
         Unit
     }
 

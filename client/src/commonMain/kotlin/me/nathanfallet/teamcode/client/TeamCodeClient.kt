@@ -228,10 +228,10 @@ class TeamCodeClient(
     }
     suspend fun revokeDevice(id: String) = revoke("devices", id)
     /** Registers this installation's FCM token and public key for push (`notifications.push.v1`); an app login only. */
-    suspend fun registerPush(token: String, publicKey: String) {
+    suspend fun registerPush(token: String, publicKey: String, platform: String? = null) {
         checkResponse(http.request("$origin/api/v1/devices/current/push") {
             method = HttpMethod.Put; authenticate(); timeout { requestTimeoutMillis = 10_000 }
-            contentType(ContentType.Application.Json); setBody(DevicePushRequest(token, publicKey))
+            contentType(ContentType.Application.Json); setBody(DevicePushRequest(token, publicKey, platform))
         })
     }
     /** Stops push to this installation, before a sign-out or when notifications are turned off. */

@@ -74,12 +74,12 @@ The iOS and Android apps register the installation they run on, with the session
 
 ```http
 PUT /api/v1/devices/current/push
-{"token":"<FCM registration token>","publicKey":"<P-256 public key, SubjectPublicKeyInfo DER, base64>"}
+{"token":"<FCM registration token>","publicKey":"<P-256 public key, SubjectPublicKeyInfo DER, base64>","platform":"ios"}
 
 DELETE /api/v1/devices/current/push
 ```
 
-The app sends both at every start and when FCM rotates the token; a new value replaces the old one on the device's row (`devices.push_token`, `push_public_key`, `push_token_updated_at`). The dashboard and the API only say whether a device has push on, never its token. A desktop device is refused (`push_unsupported`): desktop apps notify from the event feed. Pushes go only to devices that still have a signed-in session; a token the provider no longer knows is cleared, unless the app already replaced it.
+The app sends both at every start and when FCM rotates the token; a new value replaces the old one on the device's row (`devices.push_token`, `push_public_key`, `push_token_updated_at`). The dashboard and the API only say whether a device has push on, never its token. Only a device known as `ios` or `android` is accepted; a desktop device is refused (`push_unsupported`): desktop apps notify from the event feed. The platform is the one the login reported (the apps send it at sign-in). For a device whose login reported none, as every companion login before 1.7.1, the `platform` of this request is recorded instead; a platform the login reported is never replaced. Pushes go only to devices that still have a signed-in session; a token the provider no longer knows is cleared, unless the app already replaced it.
 
 ### Push payload
 

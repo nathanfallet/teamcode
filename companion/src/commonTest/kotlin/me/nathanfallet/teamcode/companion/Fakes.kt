@@ -42,8 +42,8 @@ class FakeAuthRepository : AuthRepository {
         return announced
     }
     override suspend fun capabilities(accountId: String): ServerCapabilities { calls += "capabilities $accountId"; return announced }
-    override suspend fun login(origin: String, username: String, password: String, deviceName: String, installationId: String): LoginSession {
-        calls += "login $origin $username $password $deviceName $installationId"
+    override suspend fun login(origin: String, username: String, password: String, deviceName: String, installationId: String, platform: String?): LoginSession {
+        calls += "login $origin $username $password $deviceName $installationId $platform"
         loginFailure?.let { throw it }
         return if (sessions.size > 1) sessions.removeFirst() else sessions.first()
     }

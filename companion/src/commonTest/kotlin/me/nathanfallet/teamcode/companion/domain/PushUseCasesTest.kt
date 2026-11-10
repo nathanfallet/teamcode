@@ -25,6 +25,7 @@ import kotlin.test.assertNull
 // The sync runs in backgroundScope, which advanceUntilIdle leaves alone: runCurrent runs it.
 class PushUseCasesTest {
     private class FakePushPlatform : PushPlatform {
+        override val platform = "ios"
         override val token = MutableStateFlow<String?>(null)
         override suspend fun publicKey() = "spki"
         // The "encryption" of these tests: a payload is its JSON reversed.
@@ -35,9 +36,11 @@ class PushUseCasesTest {
         val registered = mutableListOf<Triple<String, String, String>>()
         val cleared = mutableListOf<String>()
         var failing = false
-        override suspend fun register(accountId: String, token: String, publicKey: String) {
+        val platforms = mutableSetOf<String>()
+        override suspend fun register(accountId: String, token: String, publicKey: String, platform: String) {
             if (failing) error("offline")
             registered += Triple(accountId, token, publicKey)
+            platforms += platform
         }
         override suspend fun clear(accountId: String) {
             if (failing) error("offline")
@@ -58,6 +61,7 @@ class PushUseCasesTest {
         platform.token.value = "t1"
         runCurrent()
         assertEquals(listOf(Triple("a1", "t1", "spki")), push.registered)
+        assertEquals(setOf("ios"), push.platforms, "the platform goes with the token")
 
         // A new sign-in registers that account alone.
         accounts.save(account("a3"))

@@ -27,7 +27,7 @@ class PushRoutesTest {
     private class Devices : PushDeviceStore {
         var token: String? = null
         override suspend fun currentDevice(actor: Principal) = PushDevice("d1", actor.member.id, "ios")
-        override suspend fun register(deviceId: String, token: String, publicKey: String) { this.token = token }
+        override suspend fun register(deviceId: String, token: String, publicKey: String, platform: String?) { this.token = token }
         override suspend fun clear(deviceId: String, onlyToken: String?) { token = null }
         override suspend fun targets(teamId: String, memberIds: Set<String>) =
             token?.let { listOf(PushTarget("d1", memberIds.first(), it, KEY, "ios")) }.orEmpty()

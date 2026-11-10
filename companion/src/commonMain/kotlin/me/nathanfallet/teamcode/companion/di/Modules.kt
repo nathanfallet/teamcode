@@ -98,7 +98,7 @@ val infrastructureModule = module {
 /** The account checks go through [DemoCredentialStore]: the demo account has no token, and none is read or deleted for it. */
 val domainModule = module {
     single { InspectServerUseCase(get()) }
-    single { SignInUseCase(get(), get(), get(), get(), get()) }
+    single { SignInUseCase(get(), get(), get(), get(), get(), get()) }
     single { ChangePasswordUseCase(get(), get()) }
     single { ClearPushUseCase(get(), get()) }
     single { SignOutUseCase(get(), get(), get<DemoCredentialStore>(), get()) }

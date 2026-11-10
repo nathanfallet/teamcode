@@ -38,7 +38,7 @@ class SyncPushUseCase(
 
     private suspend fun register(accountId: String, token: String): Boolean = try {
         if (Features.PUSH !in features.features(accountId)) false
-        else { push.register(accountId, token, platform.publicKey()); true }
+        else { push.register(accountId, token, platform.publicKey(), platform.platform); true }
     } catch (error: CancellationException) { throw error } catch (_: Exception) { false }
 }
 
