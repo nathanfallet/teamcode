@@ -158,6 +158,11 @@ class WaitPersistenceTest {
         assertEquals(w.admin.member.id, wait.assigneeId); assertEquals("Fix the login", wait.sessionName); assertEquals(w.member.member.id, wait.createdById)
         assertEquals(listOf("approve", "request_changes"), wait.actions.map { it.id }); assertEquals(listOf("feedback"), wait.actions[1].requires)
         assertEquals(listOf(WaitRef("artifact", id = "a1")), wait.refs); assertEquals(WaitStatus.OPEN, wait.status)
+        // The assignee can be named by username as well as by id (the member's id is a uuid nobody knows by heart).
+        val byName = b.service.create(w.member, review.copy(assigneeId = w.admin.member.username), null).wait
+        assertEquals(w.admin.member.id, byName.assigneeId); assertEquals(w.admin.member.username, byName.assigneeName)
+        a.service.cancel(w.member, byName.id) // the session keeps room for the cap test below
+        refusedWith("invalid_assignee") { a.service.create(w.member, review.copy(assigneeId = "nobody-by-that-name"), null) }
         assertEquals(created.wait.id, b.service.get(w.member, created.wait.id).id, "the asker reads it too")
         a.service.cancel(w.member, created.wait.id)
     }

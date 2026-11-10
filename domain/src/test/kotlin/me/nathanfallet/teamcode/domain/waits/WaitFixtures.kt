@@ -8,12 +8,16 @@ object WaitFixtures {
     val po = Member("po", "po", Role.MEMBER, false, false)
     val gone = Member("gone", "gone", Role.MEMBER, true, false)
     val admin = Member("admin", "admin", Role.ADMIN, false, false)
+    /** A member whose id is a uuid, as in a real team: named by "lyes". */
+    val lyes = Member("5b1f0c2e-77aa-4d0e-9d1a-3c1e8f2a9b10", "lyes", Role.MEMBER, false, false)
+    /** A disabled member whose username spells another member's id. */
+    val tricky = Member("t-1", "po", Role.MEMBER, true, false)
     fun principal(who: Member, scopes: Set<ServiceScope>? = null) = Principal(who, "token-${who.id}", "team", scopes)
 
     /** An in-memory store with the atomic semantics the SQL one must keep. */
     class FakeStore : WaitStore {
         var clock = 1_000L
-        val members = listOf(ada, bob, po, gone, admin).associateBy { it.id }
+        val members = listOf(ada, bob, po, gone, admin, lyes, tricky).associateBy { it.id }
         val sessions = mutableMapOf("s1" to WaitSession("s1", "team", "ada", "Fix the login", "claude"), "s2" to WaitSession("s2", "team", "bob", null, "codex"))
         val waits = linkedMapOf<String, Wait>()
         val keys = mutableMapOf<Pair<String, String>, String>()
@@ -21,6 +25,7 @@ object WaitFixtures {
         override suspend fun now() = clock
         override suspend fun revalidate(actor: Principal) {}
         override suspend fun member(teamId: String, memberId: String) = members[memberId]
+        override suspend fun memberByReference(teamId: String, reference: String) = members[reference] ?: members.values.firstOrNull { it.username == reference }
         override suspend fun session(teamId: String, sessionId: String) = sessions[sessionId]
         /** Token id → session, for execution credentials. */
         val executions = mutableMapOf<String, String>()

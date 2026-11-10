@@ -25,6 +25,19 @@ class WaitServiceTest {
         assertEquals(listOf("primary"), product.actions.mapNotNull { it.style }.take(1))
     }
 
+    @Test fun theAssigneeIsNamedByIdOrByUsername() = runBlocking {
+        val store = WaitFixtures.FakeStore(); val service = WaitService(store)
+        val byName = service.create(principal(ada), review.copy(assigneeId = "lyes"), null).wait
+        assertEquals(WaitFixtures.lyes.id, byName.assigneeId, "the username resolves to the member's id")
+        assertEquals("lyes", byName.assigneeName)
+        val byId = service.create(principal(ada), review.copy(assigneeId = WaitFixtures.lyes.id), null).wait
+        assertEquals(WaitFixtures.lyes.id, byId.assigneeId)
+        assertEquals(WaitFixtures.lyes.id, service.create(principal(ada), review.copy(assigneeId = "  lyes "), null).wait.assigneeId, "surrounding spaces are ignored")
+        // An id wins over a username that spells it, and the disabled member behind that username is never reached.
+        assertEquals("po", service.create(principal(ada), review.copy(assigneeId = "po"), null).wait.assigneeId)
+        for (bad in listOf("nobody", "", "   ", "x".repeat(65), "gone")) assertEquals("invalid_assignee", code { service.create(principal(ada), review.copy(assigneeId = bad), null) }, bad)
+    }
+
     @Test fun onlyTheSessionsOwnerAsksAndTheAssigneeMustBeActive() {
         val service = WaitService(WaitFixtures.FakeStore())
         assertEquals("not_found", code { service.create(principal(bob), review, null) }, "bob does not see ada's session")

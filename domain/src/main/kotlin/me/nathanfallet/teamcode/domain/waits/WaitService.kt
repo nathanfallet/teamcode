@@ -92,8 +92,11 @@ class WaitService(private val store: WaitStore, private val sessions: WaitSessio
         // A wait for a time or an event asks nobody: the session's owner, whose session it wakes, is its assignee.
         if (valid.resolver != WaitResolver.HUMAN && valid.assigneeId != null && valid.assigneeId != session.ownerId)
             throw TeamFailure("invalid_assignee", 400, "A wait for a time or an event asks nobody: leave the assignee out.")
-        val assignee = valid.assigneeId?.let { id ->
-            store.member(actor.teamId, id)?.takeUnless { it.disabled } ?: throw TeamFailure("invalid_assignee", 400, "The assignee is not an active member.")
+        // The assignee is named by member id or by username ("lyes"), so an agent need not know anyone's uuid.
+        val assignee = valid.assigneeId?.let { reference ->
+            if (reference.isBlank() || reference.length > 64) throw TeamFailure("invalid_assignee", 400, "Name the assignee by member id or username (at most 64 characters).")
+            store.memberByReference(actor.teamId, reference.trim())?.takeUnless { it.disabled }
+                ?: throw TeamFailure("invalid_assignee", 400, "The assignee is not an active member: use a member id or a username.")
         } ?: store.member(actor.teamId, session.ownerId) ?: throw TeamFailure("invalid_assignee", 400, "The session's owner is not an active member.")
         val secret = if (valid.resolver == WaitResolver.EVENT) newSecret() else null
         val timer = WaitRules.dueAt(valid, now)?.let { due ->

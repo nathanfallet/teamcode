@@ -26,6 +26,13 @@ class WaitsCliTest {
         assertEquals(setOf("list", "show", "answer", "cancel", "ask"), group.registeredSubcommands().map { it.commandName }.toSet())
     }
 
+    @Test fun `an assignee is a member id or a username`() {
+        assertEquals("lyes", requireMemberReference("lyes"))
+        assertEquals("5b1f0c2e-77aa-4d0e-9d1a-3c1e8f2a9b10", requireMemberReference("5b1f0c2e-77aa-4d0e-9d1a-3c1e8f2a9b10"))
+        assertEquals("first.last_2", requireMemberReference("first.last_2"))
+        for (bad in listOf("", "two words", "a/b", "x".repeat(65), "line\nbreak")) assertFailsWith<UsageError>(bad) { requireMemberReference(bad) }
+    }
+
     @Test fun `values follow the declared type of each field`() {
         val values = answerValues(wait(), listOf("notes" to "fine", "count" to "3", "ok" to "yes", "when" to "2026-10-29", "size" to "l", "tags" to "a", "tags" to "b"), emptyList())
         assertEquals(JsonPrimitive("fine"), values["notes"]); assertEquals(JsonPrimitive(3L), values["count"]); assertEquals(JsonPrimitive(true), values["ok"])

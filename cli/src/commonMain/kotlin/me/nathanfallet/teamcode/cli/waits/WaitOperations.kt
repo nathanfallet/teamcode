@@ -23,6 +23,12 @@ internal fun requireWaitId(value: String, what: String = "wait id"): String {
     return value
 }
 
+/** A member named by id or by username, as `waits ask --assignee` takes it; the server checks that the member is active. */
+internal fun requireMemberReference(value: String): String {
+    if (!Regex("[a-zA-Z0-9._-]{1,64}").matches(value)) throw UsageError("\"$value\" is not a member id or a username.")
+    return value
+}
+
 /** Pages of waits, newest first, until [limit] rows; the second value is the cursor of the next page when more exist. */
 internal suspend fun listWaits(client: TeamCodeClient, assignee: String?, status: String, before: String?, limit: Int, resolver: String? = null): Pair<List<WaitView>, String?> {
     val waits = mutableListOf<WaitView>()

@@ -94,6 +94,13 @@ class WaitsMcpServerTest {
         assertTrue(server.requests.isEmpty())
     }
 
+    @Test fun askHumanTakesAUsernameAsWellAsAMemberId() = runBlocking {
+        val server = Server()
+        val (error, text) = server.tool("ask_human", args("""{"title":"Review the plan","assignee":"lyes"}"""))
+        assertFalse(error, text)
+        assertEquals("lyes", assertNotNull(server.created).assigneeId, "The server resolves the username")
+    }
+
     @Test fun askHumanSendsTheTypedRequestForThisSessionWithAFreshKeyPerCall() = runBlocking {
         val server = Server()
         val (error, text) = server.tool("ask_human", args("""{"title":"Review the plan","body":"See **plan.md**.","assignee":"m-product",
@@ -162,7 +169,7 @@ class WaitsMcpServerTest {
             """{"title":"t","refs":[{"kind":"url","url":"http://example.com"}]}""" to "https://",
             """{"title":"t","refs":[{"kind":"artifact"}]}""" to "give its id",
             """{"title":"t","refs":[{"kind":"file","id":"x"}]}""" to "refs[0].kind is artifact, session or url",
-            """{"title":"t","assignee":"alice@example.com"}""" to "assignee is a member id",
+            """{"title":"t","assignee":"alice@example.com"}""" to "assignee is a member id or a username",
             """{"title":"t","fields":[${(1..33).joinToString(",") { """{"id":"f$it","type":"info","label":"I"}""" }}]}""" to "fields has at most 32",
         )
         for ((arguments, expected) in cases) {
@@ -267,7 +274,7 @@ class WaitsMcpServerTest {
         val cases = mapOf(
             (HttpStatusCode.Conflict to "wait_limit") to "already has 20 open waits",
             (HttpStatusCode.BadRequest to "invalid_wait") to "Fix the arguments",
-            (HttpStatusCode.BadRequest to "invalid_assignee") to "id of an active member",
+            (HttpStatusCode.BadRequest to "invalid_assignee") to "id or username of an active member",
             (HttpStatusCode.UnprocessableEntity to "secret_unsupported_agent") to "only a Claude Code session",
             (HttpStatusCode.Conflict to "resolves_by_itself") to "cancel_wait",
             (HttpStatusCode.Forbidden to "wait_session_owner_only") to "Only the session's owner",
