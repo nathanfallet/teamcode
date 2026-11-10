@@ -1,0 +1,43 @@
+# The Cloud Run service of the TeamCode Push relay (push/README.md). Not applied by any pipeline: an operator deploys it
+# with `gcloud run services replace push/cloudrun.yaml --region <region>` after replacing the placeholders.
+#
+# One instance at most: the relay's quotas and replay guard live in its memory (docs/notifications.md, "Relay
+# protocol"), and one instance carries far more than the published apps need.
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: teamcode-push
+  annotations:
+    run.googleapis.com/ingress: all
+spec:
+  template:
+    metadata:
+      annotations:
+        autoscaling.knative.dev/minScale: "0"
+        autoscaling.knative.dev/maxScale: "1"
+        run.googleapis.com/execution-environment: gen2
+    spec:
+      # The service account of the Firebase project, with the "Firebase Cloud Messaging API Admin" role only.
+      serviceAccountName: teamcode-push@PROJECT_ID.iam.gserviceaccount.com
+      containerConcurrency: 200
+      timeoutSeconds: 30
+      containers:
+        - image: REGION-docker.pkg.dev/PROJECT_ID/teamcode/teamcode-push:VERSION
+          ports:
+            - containerPort: 8080
+          resources:
+            limits:
+              cpu: "1"
+              memory: 256Mi
+          env:
+            - name: TEAMCODE_PUSH_PROJECT_ID
+              value: PROJECT_ID
+            # Instance ids cut off by hand, comma separated.
+            - name: TEAMCODE_PUSH_BLOCKED_INSTANCES
+              value: ""
+          startupProbe:
+            httpGet:
+              path: /healthz
+          livenessProbe:
+            httpGet:
+              path: /healthz

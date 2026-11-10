@@ -10,6 +10,8 @@ allowed = {
     'app': {'api', 'domain', 'infrastructure', 'presentation'},
     # The MCP stdio host: no database, no domain, no infrastructure (docs/mcp.md).
     'mcp': {'api'},
+    # The TeamCode Push relay (docs/notifications.md): the wire models of the API, nothing of the server.
+    'push': {'api'},
     'companion': {'client'}, 'companion-android': {'companion'}, 'companion-desktop': {'companion', 'config', 'client'},
 }
 for module, dependencies in allowed.items():
