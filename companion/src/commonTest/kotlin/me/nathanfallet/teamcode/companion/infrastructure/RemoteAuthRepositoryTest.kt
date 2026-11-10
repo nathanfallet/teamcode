@@ -94,21 +94,22 @@ class RemoteAuthRepositoryTest {
 
     @Test fun loginSendsTheInstallationAndMapsTheMember() = runTest {
         answer = { HttpStatusCode.OK to """{"accessToken":"tc_token","expiresAt":42,"member":{"id":"m1","username":"ada","role":"ADMIN","disabled":false,"passwordChangeRequired":true}}""" }
-        val session = repository(backgroundScope).login("https://team.example", "ada", "pw", "TeamCode Test · Bench", "11111111-1111-4111-8111-111111111111")
+        val session = repository(backgroundScope).login("https://team.example", "ada", "pw", "TeamCode Test · Bench", "11111111-1111-4111-8111-111111111111", "ios")
         assertEquals("tc_token", session.accessToken); assertTrue(session.member.passwordChangeRequired); assertEquals("ADMIN", session.member.role)
         val body = (requests.single().body as TextContent).text
         assertTrue(""""installationId":"11111111-1111-4111-8111-111111111111"""" in body)
         assertTrue(""""device":"TeamCode Test · Bench"""" in body)
+        assertTrue(""""platform":"ios"""" in body, "the server learns the device is a phone")
         assertEquals("/api/v1/auth/login", requests.single().url.encodedPath)
     }
 
     @Test fun failuresAreTranslatedWithoutTheServerMessage() = runTest {
         val repository = repository(backgroundScope)
         answer = { HttpStatusCode.Unauthorized to """{"error":{"type":"invalid_credentials","message":"secret detail"}}""" }
-        val wrong = assertFailsWith<CompanionException.InvalidCredentials> { repository.login("https://team.example", "ada", "bad", "d", "i") }
+        val wrong = assertFailsWith<CompanionException.InvalidCredentials> { repository.login("https://team.example", "ada", "bad", "d", "i", null) }
         assertFalse(wrong.message.orEmpty().contains("secret detail"))
         answer = { HttpStatusCode.TooManyRequests to """{"error":{"type":"login_rate_limit","message":"x"}}""" }
-        assertFailsWith<CompanionException.RateLimited> { repository.login("https://team.example", "ada", "bad", "d", "i") }
+        assertFailsWith<CompanionException.RateLimited> { repository.login("https://team.example", "ada", "bad", "d", "i", null) }
         answer = { HttpStatusCode.BadRequest to """{"error":{"type":"invalid_password","message":"x"}}""" }
         assertFailsWith<CompanionException.PasswordRejected> { repository.changePassword("https://team.example", "temporary", "a", "b") }
         answer = { HttpStatusCode.Unauthorized to """{"error":{"type":"unauthorized","message":"x"}}""" }

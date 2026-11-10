@@ -53,8 +53,11 @@ fun interface PushSender {
 interface PushDeviceStore {
     /** The interactive session's device: null for a browser session, an older client or a service key. */
     suspend fun currentDevice(actor: Principal): PushDevice?
-    /** Sets or replaces the device's destination; the same token may be on other rows (several accounts on one phone). */
-    suspend fun register(deviceId: String, token: String, publicKey: String)
+    /**
+     * Sets or replaces the device's destination; the same token may be on other rows (several accounts on one phone).
+     * A non-null [platform] is recorded only while the device has none.
+     */
+    suspend fun register(deviceId: String, token: String, publicKey: String, platform: String? = null)
     /** Clears the device's destination; with [onlyToken], only while it is still that token (a rotation may have replaced it). */
     suspend fun clear(deviceId: String, onlyToken: String? = null)
     /** The destinations of [memberIds] on devices that have a signed-in session, in one read. */
@@ -65,13 +68,18 @@ data class PushDevice(val id: String, val memberId: String, val platform: String
 
 /** A member registers the push destination of the device they are signed in on. */
 class PushRegistrationService(private val store: PushDeviceStore) {
-    suspend fun register(actor: Principal, token: String, publicKey: String) {
+    /**
+     * [platform] is what the app says it runs on. It counts only for a device whose login reported no platform (the
+     * companion apps did not before 1.7.1): a platform the login reported is never replaced.
+     */
+    suspend fun register(actor: Principal, token: String, publicKey: String, platform: String? = null) {
         actor.requireInteractive()
         PushPayloads.validateToken(token)
         PushPayloads.validatePublicKey(publicKey)
         val device = store.currentDevice(actor) ?: throw noDevice()
-        if (device.platform !in PUSH_PLATFORMS) throw TeamFailure("push_unsupported", 400, "Push notifications reach iOS and Android installations only; desktop apps notify from the event feed.")
-        store.register(device.id, token, publicKey)
+        val reported = device.platform ?: platform
+        if (reported !in PUSH_PLATFORMS) throw TeamFailure("push_unsupported", 400, "Push notifications reach iOS and Android installations only; desktop apps notify from the event feed.")
+        store.register(device.id, token, publicKey, reported.takeIf { device.platform == null })
     }
 
     suspend fun clear(actor: Principal) {

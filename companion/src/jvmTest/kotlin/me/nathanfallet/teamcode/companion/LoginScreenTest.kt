@@ -28,7 +28,7 @@ class LoginScreenTest {
         auth.sessions += LoginSession("token", 2_000_000L, member())
         val accounts = InMemoryAccountRepository()
         val store = credentials()
-        val signIn = SignInUseCase(auth, accounts, store, FixedInstallation, SequenceIds())
+        val signIn = SignInUseCase(auth, accounts, store, FixedInstallation, SequenceIds(), FakePlatform)
         val viewModel = LoginViewModel(LoginRoute("https://team.example"), InspectServerUseCase(auth), signIn, ChangePasswordUseCase(auth, signIn), FakePlatform)
         var signedIn = false
         setContent { TeamCodeTheme { LoginScreen(LoginRoute("https://team.example"), onBack = {}, onSignedIn = { signedIn = true }, viewModel = viewModel) } }
@@ -60,7 +60,7 @@ class LoginScreenTest {
         val auth = object : me.nathanfallet.teamcode.companion.domain.repositories.AuthRepository by FakeAuthRepository() {
             override suspend fun discover(origin: String) = throw me.nathanfallet.teamcode.companion.domain.models.CompanionException.Unreachable()
         }
-        val signIn = SignInUseCase(auth, InMemoryAccountRepository(), credentials(), FixedInstallation, SequenceIds())
+        val signIn = SignInUseCase(auth, InMemoryAccountRepository(), credentials(), FixedInstallation, SequenceIds(), FakePlatform)
         val viewModel = LoginViewModel(LoginRoute("https://team.example"), InspectServerUseCase(auth), signIn, ChangePasswordUseCase(auth, signIn), FakePlatform)
         setContent { TeamCodeTheme { LoginScreen(LoginRoute("https://team.example"), onBack = {}, onSignedIn = {}, viewModel = viewModel) } }
         onNodeWithText("The server could not be reached.").assertExists()
@@ -71,7 +71,7 @@ class LoginScreenTest {
     @Test fun aSignInGivesTheCliItsAccountWhenItHasNone() = runComposeUiTest {
         val auth = FakeAuthRepository()
         val accounts = InMemoryAccountRepository()
-        val signIn = SignInUseCase(auth, accounts, credentials(), FixedInstallation, SequenceIds())
+        val signIn = SignInUseCase(auth, accounts, credentials(), FixedInstallation, SequenceIds(), FakePlatform)
         val linked = mutableListOf<String>()
         val link = object : me.nathanfallet.teamcode.companion.domain.services.CliAccountLink {
             override val configPath = "/home/ada/.config/teamcode/config.json"
@@ -93,7 +93,7 @@ class LoginScreenTest {
     @Test fun theCliOptionIsHiddenWhenTheCliHasAnAccountOrIsTurnedOff() = runComposeUiTest {
         val auth = FakeAuthRepository()
         val accounts = InMemoryAccountRepository()
-        val signIn = SignInUseCase(auth, accounts, credentials(), FixedInstallation, SequenceIds())
+        val signIn = SignInUseCase(auth, accounts, credentials(), FixedInstallation, SequenceIds(), FakePlatform)
         var offered = false
         val linked = mutableListOf<String>()
         val link = object : me.nathanfallet.teamcode.companion.domain.services.CliAccountLink {

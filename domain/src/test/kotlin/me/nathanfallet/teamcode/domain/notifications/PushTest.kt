@@ -46,9 +46,10 @@ class PushTest {
     private class Store(var targets: List<PushTarget>, var device: PushDevice? = PushDevice("d1", "alice", "ios")) : PushDeviceStore {
         val cleared = mutableListOf<Pair<String, String?>>()
         val registered = mutableListOf<Triple<String, String, String>>()
+        val platforms = mutableListOf<String?>()
         var reads = 0
         override suspend fun currentDevice(actor: Principal) = device
-        override suspend fun register(deviceId: String, token: String, publicKey: String) { registered += Triple(deviceId, token, publicKey) }
+        override suspend fun register(deviceId: String, token: String, publicKey: String, platform: String?) { registered += Triple(deviceId, token, publicKey); platforms += platform }
         override suspend fun clear(deviceId: String, onlyToken: String?) { cleared += deviceId to onlyToken }
         override suspend fun targets(teamId: String, memberIds: Set<String>): List<PushTarget> { reads++; return targets.filter { it.memberId in memberIds } }
     }
@@ -84,6 +85,20 @@ class PushTest {
     }
 
     @Test
+    fun aDeviceWhoseLoginReportedNoPlatformTakesTheOneTheAppSends() = runTest {
+        val store = Store(emptyList(), PushDevice("d1", "alice", null))
+        val service = PushRegistrationService(store)
+        val device = pair().publicBase64()
+        // An older app sends no platform: nothing says the device is a phone.
+        assertEquals("push_unsupported", assertFailsWith<TeamFailure> { service.register(alice, token, device) }.code)
+        assertEquals("push_unsupported", assertFailsWith<TeamFailure> { service.register(alice, token, device, "macos") }.code)
+        assertEquals("push_unsupported", assertFailsWith<TeamFailure> { service.register(alice, token, device, "symbian") }.code)
+        service.register(alice, token, device, "ios")
+        assertEquals(listOf(Triple("d1", token, device)), store.registered)
+        assertEquals(listOf<String?>("ios"), store.platforms)
+    }
+
+    @Test
     fun aMemberRegistersOnlyAPhoneWithAValidTokenAndKey() = runTest {
         val store = Store(emptyList())
         val service = PushRegistrationService(store)
@@ -100,9 +115,11 @@ class PushTest {
         assertFailsWith<TeamFailure> { service.register(key, token, device) }
         store.device = PushDevice("d2", "alice", "macos")
         assertEquals("push_unsupported", assertFailsWith<TeamFailure> { service.register(alice, token, device) }.code)
+        assertEquals("push_unsupported", assertFailsWith<TeamFailure> { service.register(alice, token, device, "ios") }.code, "a desktop stays a desktop")
         store.device = null
         assertEquals("device_required", assertFailsWith<TeamFailure> { service.register(alice, token, device) }.code)
         assertEquals("device_required", assertFailsWith<TeamFailure> { service.clear(alice) }.code)
+        assertEquals(listOf<String?>(null), store.platforms, "a platform the login reported is not written again")
         store.device = PushDevice("d1", "alice", "android")
         service.clear(alice)
         assertEquals(listOf<Pair<String, String?>>("d1" to null), store.cleared)

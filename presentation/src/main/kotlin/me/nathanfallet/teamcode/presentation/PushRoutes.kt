@@ -16,7 +16,7 @@ internal fun Route.pushRoutes(push: PushRegistrationService) {
     route("/api/v1/devices/current/push") {
         put {
             val input = call.jsonBody<DevicePushRequest>()
-            push.register(call.principal, input.token, input.publicKey)
+            push.register(call.principal, input.token, input.publicKey, input.platform)
             call.respond(HttpStatusCode.NoContent)
         }
         delete { push.clear(call.principal); call.respond(HttpStatusCode.NoContent) }

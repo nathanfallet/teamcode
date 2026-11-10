@@ -264,7 +264,7 @@ class DemoAuthRepository(private val demo: DemoMode) : AuthRepository {
     override suspend fun discover(origin: String): ServerInfo = throw CompanionException.NotTeamCode()
     override suspend fun capabilities(origin: String, token: String): ServerCapabilities = throw CompanionException.NotTeamCode()
     override suspend fun capabilities(accountId: String): ServerCapabilities = ServerCapabilities(DemoContent.SERVER_VERSION, 1, DemoContent.features).also { demo.store() }
-    override suspend fun login(origin: String, username: String, password: String, deviceName: String, installationId: String): LoginSession =
+    override suspend fun login(origin: String, username: String, password: String, deviceName: String, installationId: String, platform: String?): LoginSession =
         throw CompanionException.NotTeamCode()
     override suspend fun changePassword(origin: String, token: String, current: String, replacement: String) = throw CompanionException.NotTeamCode()
     override suspend fun me(accountId: String): Member {

@@ -6,9 +6,10 @@ import kotlinx.serialization.Serializable
  * `PUT /api/v1/devices/current/push`: the push destination of the caller's device (an iOS or Android installation).
  * [token] is the FCM registration token of the installation; [publicKey] the device's P-256 public key (SubjectPublicKeyInfo,
  * DER, base64) the server encrypts each notification for. Sent at every start of the app and when FCM rotates the token.
+ * [platform] (`ios` or `android`) is recorded on a device whose login did not report one; an older app omits it.
  */
 @Serializable
-data class DevicePushRequest(val token: String, val publicKey: String)
+data class DevicePushRequest(val token: String, val publicKey: String, val platform: String? = null)
 
 /**
  * What a push carries, encrypted for the device (docs/notifications.md, "Push payload"). The app decrypts it in its

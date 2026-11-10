@@ -19,6 +19,7 @@ interface IosPushKeys {
 }
 
 class IosPushPlatform(private val keys: IosPushKeys) : PushPlatform {
+    override val platform = "ios"
     private val current = MutableStateFlow<String?>(null)
     override val token: StateFlow<String?> = current.asStateFlow()
     private var asked = false

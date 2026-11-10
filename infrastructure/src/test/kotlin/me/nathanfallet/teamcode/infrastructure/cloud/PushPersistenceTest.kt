@@ -65,6 +65,15 @@ class PushPersistenceTest {
             registration.clear(again)
             assertEquals(emptyList(), devices.targets(w.teamId, setOf(member)))
 
+            // An app login that reported no platform (the companion apps before 1.7.1): the app's word makes it a phone,
+            // and a platform the login reported is never replaced.
+            val tablet = w.team.login("automation-owner", password, "Tablet", UUID.randomUUID().toString(), null, null).principal
+            assertEquals("push_unsupported", assertFailsWith<TeamFailure> { registration.register(tablet, token, phoneKey) }.code)
+            registration.register(tablet, token, phoneKey, "android")
+            assertEquals(listOf("android"), devices.targets(w.teamId, setOf(member)).map { it.platform })
+            registration.register(again, token, phoneKey, "android")
+            assertEquals(setOf("android", "ios"), devices.targets(w.teamId, setOf(member)).map { it.platform }.toSet(), "the phone stays ios")
+
             // Settings: off by default, versioned, the Firebase key sealed and removed when Firebase stops sending.
             val cipher = CredentialCipher(ByteArray(32) { 84 })
             val settings = SqlPushSettingsStore(w.a.database, cipher)

@@ -113,8 +113,8 @@ class DemoAwareAuthRepository(private val real: AuthRepository, private val demo
     override suspend fun discover(origin: String) = at(origin).discover(origin)
     override suspend fun capabilities(origin: String, token: String) = at(origin).capabilities(origin, token)
     override suspend fun capabilities(accountId: String) = of(accountId).capabilities(accountId)
-    override suspend fun login(origin: String, username: String, password: String, deviceName: String, installationId: String) =
-        at(origin).login(origin, username, password, deviceName, installationId)
+    override suspend fun login(origin: String, username: String, password: String, deviceName: String, installationId: String, platform: String?) =
+        at(origin).login(origin, username, password, deviceName, installationId, platform)
     override suspend fun changePassword(origin: String, token: String, current: String, replacement: String) = at(origin).changePassword(origin, token, current, replacement)
     override suspend fun me(accountId: String) = of(accountId).me(accountId)
     override suspend fun logout(accountId: String) = of(accountId).logout(accountId)

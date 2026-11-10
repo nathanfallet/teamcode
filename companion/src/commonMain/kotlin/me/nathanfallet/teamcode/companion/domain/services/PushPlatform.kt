@@ -10,6 +10,9 @@ import me.nathanfallet.teamcode.companion.domain.models.PushMessage
  * desktop, which notifies from the event feed instead.
  */
 interface PushPlatform {
+    /** `ios` or `android`: sent with the token, for a device whose login reported no platform. */
+    val platform: String
+
     /** The installation's current FCM token: null until the system gave one, or when this build has no Firebase project. */
     val token: StateFlow<String?>
 

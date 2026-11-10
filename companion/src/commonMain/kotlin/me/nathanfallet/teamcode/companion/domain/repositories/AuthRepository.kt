@@ -22,7 +22,7 @@ interface AuthRepository {
     /** `GET /api/v1/capabilities` with the token stored for the account. */
     suspend fun capabilities(accountId: String): ServerCapabilities
 
-    suspend fun login(origin: String, username: String, password: String, deviceName: String, installationId: String): LoginSession
+    suspend fun login(origin: String, username: String, password: String, deviceName: String, installationId: String, platform: String?): LoginSession
     suspend fun changePassword(origin: String, token: String, current: String, replacement: String)
     suspend fun me(accountId: String): Member
     /** Revokes the account's login session on the server. */

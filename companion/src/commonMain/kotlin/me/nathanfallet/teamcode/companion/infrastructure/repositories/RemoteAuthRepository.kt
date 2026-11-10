@@ -53,8 +53,8 @@ class RemoteAuthRepository(
 
     override suspend fun capabilities(accountId: String): ServerCapabilities = withAccount(accountId) { it.capabilities().domain() }
 
-    override suspend fun login(origin: String, username: String, password: String, deviceName: String, installationId: String): LoginSession =
-        detached(origin, credentialsFailure = true) { client -> client.login(username, password, deviceName, installationId).domain() }
+    override suspend fun login(origin: String, username: String, password: String, deviceName: String, installationId: String, platform: String?): LoginSession =
+        detached(origin, credentialsFailure = true) { client -> client.login(username, password, deviceName, installationId, platform).domain() }
 
     override suspend fun changePassword(origin: String, token: String, current: String, replacement: String) {
         detached(origin, token, credentialsFailure = true) { client -> client.changePassword(current, replacement) }

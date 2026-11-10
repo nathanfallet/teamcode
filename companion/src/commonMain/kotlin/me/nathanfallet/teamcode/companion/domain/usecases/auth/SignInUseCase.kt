@@ -13,9 +13,10 @@ import me.nathanfallet.teamcode.companion.domain.repositories.AuthRepository
 import me.nathanfallet.teamcode.companion.domain.services.CredentialStore
 import me.nathanfallet.teamcode.companion.domain.services.IdGenerator
 import me.nathanfallet.teamcode.companion.domain.services.InstallationIdentity
+import me.nathanfallet.teamcode.companion.domain.services.PlatformInfo
 
 /**
- * Password login, as `teamcode login`: the installation id registers the app as a device. The server's capabilities
+ * Password login, as `teamcode login`: the installation id registers the app as a device, with its platform. The server's capabilities
  * are read with the new session, and a server whose API this app does not speak is refused before anything is stored. The password is never
  * stored; the token goes to the [CredentialStore] and the account metadata to the [AccountRepository]. Signing in
  * again as the same member on the same server replaces that account instead of adding a second one, and revokes the
@@ -27,11 +28,12 @@ class SignInUseCase(
     private val credentials: CredentialStore,
     private val installation: InstallationIdentity,
     private val ids: IdGenerator,
+    private val platform: PlatformInfo,
 ) {
     suspend operator fun invoke(server: ServerInfo, username: String, password: String, deviceName: String): SignInResult {
         val name = username.trim()
         val device = validDeviceName(deviceName)
-        val session = auth.login(server.origin, name, password, device, installation.id())
+        val session = auth.login(server.origin, name, password, device, installation.id(), platform.reportedPlatform)
         if (session.member.passwordChangeRequired) return SignInResult.PasswordChangeRequired(server, name, device, session.accessToken)
         // Read with the new session: the server announces its version and capabilities to signed-in callers only.
         val capabilities = try {

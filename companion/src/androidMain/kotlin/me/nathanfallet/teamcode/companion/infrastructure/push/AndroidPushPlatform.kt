@@ -17,6 +17,7 @@ import me.nathanfallet.teamcode.companion.domain.services.PushPlatform
  * from backups with the tokens. The app's messaging service hands the token over through [updateToken].
  */
 class AndroidPushPlatform(private val credentials: CredentialStore) : PushPlatform {
+    override val platform = "android"
     private val current = MutableStateFlow<String?>(null)
     override val token: StateFlow<String?> = current.asStateFlow()
     private val lock = Mutex()

@@ -71,7 +71,7 @@ class GatewayDiscoveryTest {
             val found = InspectServerUseCase(auth)(origin)
             assertEquals(origin, found.origin)
 
-            val account = assertIs<SignInResult.SignedIn>(SignInUseCase(auth, accounts, store, FixedInstallation, SequenceIds())(found, "ada", "correct horse", "Bench")).account
+            val account = assertIs<SignInResult.SignedIn>(SignInUseCase(auth, accounts, store, FixedInstallation, SequenceIds(), FakePlatform)(found, "ada", "correct horse", "Bench")).account
             assertEquals("tc_session", store.read(account.id))
             assertEquals(BuildInfo.VERSION, account.serverVersion)
             // The features come with the stored token.

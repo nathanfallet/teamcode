@@ -2,6 +2,7 @@ package me.nathanfallet.teamcode.companion.domain
 
 import kotlinx.coroutines.test.runTest
 import me.nathanfallet.teamcode.companion.FakeAuthRepository
+import me.nathanfallet.teamcode.companion.FakePlatform
 import me.nathanfallet.teamcode.companion.FixedClock
 import me.nathanfallet.teamcode.companion.FixedInstallation
 import me.nathanfallet.teamcode.companion.InMemoryAccountRepository
@@ -22,13 +23,14 @@ import me.nathanfallet.teamcode.companion.domain.usecases.auth.RenameDeviceUseCa
 import me.nathanfallet.teamcode.companion.domain.usecases.auth.SignInUseCase
 import me.nathanfallet.teamcode.companion.domain.usecases.auth.SignOutUseCase
 import me.nathanfallet.teamcode.companion.domain.usecases.auth.normalizeOrigin
+import me.nathanfallet.teamcode.companion.domain.services.PlatformInfo
 import kotlin.test.*
 
 class AuthUseCasesTest {
     private val auth = FakeAuthRepository()
     private val accounts = InMemoryAccountRepository()
     private val store = credentials()
-    private val signIn = SignInUseCase(auth, accounts, store, FixedInstallation, SequenceIds())
+    private val signIn = SignInUseCase(auth, accounts, store, FixedInstallation, SequenceIds(), FakePlatform)
 
     @Test fun originsAreNormalizedAndOnlyHttpsOrLoopbackAccepted() {
         assertEquals("https://team.example", normalizeOrigin(" Team.Example/ "))
@@ -77,10 +79,18 @@ class AuthUseCasesTest {
         assertEquals(2, auth.abandoned.size)
     }
 
+    @Test fun signingInReportsThePlatformTheServerKnows() = runTest {
+        val phone = object : PlatformInfo { override val platform = "iOS"; override val deviceModel = "iPhone"; override val appVersion = "1" }
+        SignInUseCase(auth, accounts, store, FixedInstallation, SequenceIds(), phone)(server, "ada", "pw", "Phone")
+        assertTrue(auth.calls.first().endsWith(" ios"), "push needs the server to know the device is a phone")
+        assertEquals("macos", object : PlatformInfo { override val platform = "macOS"; override val deviceModel = "Mac"; override val appVersion = "1" }.reportedPlatform)
+        assertNull(FakePlatform.reportedPlatform)
+    }
+
     @Test fun signingInStoresTheTokenAndTheAccountButNeverThePassword() = runTest {
         val result = assertIs<SignInResult.SignedIn>(signIn(server, " ada ", "secret password", "TeamCode Test · Bench"))
         assertEquals(listOf(
-            "login https://team.example ada secret password TeamCode Test · Bench 11111111-1111-4111-8111-111111111111",
+            "login https://team.example ada secret password TeamCode Test · Bench 11111111-1111-4111-8111-111111111111 null",
             "capabilities https://team.example token-1",
         ), auth.calls)
         assertEquals("token-1", store.read(result.account.id))
