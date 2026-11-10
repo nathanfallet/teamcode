@@ -136,7 +136,7 @@ private class WaitsAsk : SuspendingCliktCommand(name = "ask") {
     private val session by option("--session", help = "The cloud session the wait belongs to (you own it).").required()
     private val title by option("--title", help = "1 to 200 characters.").required()
     private val body by option("--body")
-    private val assignee by option("--assignee", help = "A member id; the session's owner by default.")
+    private val assignee by option("--assignee", help = "A member id or a username; the session's owner by default.")
     private val after by option("--after", help = "Wait for a delay instead of a person: wake the session after this many seconds (30 to 2592000).").long()
     private val at by option("--at", help = "Wake the session at this instant: ISO-8601 in UTC, such as 2026-11-02T09:00:00Z (within 30 days).")
     private val webhook by option("--webhook", help = "Wait for an event instead of a person: prints an address a CI or a script calls once (the secret is shown only now).").flag()
@@ -150,7 +150,7 @@ private class WaitsAsk : SuspendingCliktCommand(name = "ask") {
     private val json by option("--json").flag()
     override suspend fun run() {
         requireWaitId(session, "session id")
-        assignee?.let { requireWaitId(it, "member id") }
+        assignee?.let { requireMemberReference(it) }
         val options = choices.groupBy({ it.first }, { it.second })
         val declared = fields.map { parseField(it, options) }
         (options.keys - declared.map { it.id }.toSet()).firstOrNull()?.let { throw UsageError("--option $it=… names a field that no --field declares.") }

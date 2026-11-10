@@ -66,9 +66,9 @@ Reads need an interactive login or a key with `cloud:read` (or a wider cloud sco
 
 | Operation | Who |
 | --- | --- |
-| Create | The session's owner (an agent acts with its owner's credential); the assignee must be an active member (`400 invalid_assignee`). An interactive login or a `cloud:write` key. At most 20 open waits per session (`409 wait_limit`). `Idempotency-Key` returns the first wait. |
+| Create | The session's owner (an agent acts with its owner's credential); the assignee, named by member id or by username (an id wins over a username that spells it), must be an active member (`400 invalid_assignee`). An interactive login or a `cloud:write` key. At most 20 open waits per session (`409 wait_limit`). `Idempotency-Key` returns the first wait. |
 | Read | The assignee, the one who asked, and an administrator (`team:read` for a key). Anyone else gets `404`. |
-| List | One's own waits; `assignee=<member>` or `all` for administrators. Open ones by default, newest first, keyset pagination. |
+| List | One's own waits; `assignee=<member id>` or `all` for administrators (the list filters take an id only). Open ones by default, newest first, keyset pagination. |
 | Answer | The assignee, or an interactive administrator. The first answer wins; the next gets `409 wait_closed`, except the same member sending the same action and values again, which gets the wait back (and the message below queued, once). An administrator answering for someone else is audited (`wait.answered`). |
 | Cancel | The one who asked, the assignee, or an interactive administrator (`wait.cancelled`). |
 
@@ -79,7 +79,7 @@ teamcode waits list [--all | --status open|resolved|cancelled|all] [--resolver h
 teamcode waits show ID [--json]
 teamcode waits answer ID [--action ACTION] [--set FIELD=VALUE]... [--set-json FIELD=JSON]... [--set-secret FIELD]... [--secret-stdin] [--json]
 teamcode waits cancel ID [--json]
-teamcode waits ask --session ID --title TEXT [--body TEXT] [--assignee MEMBER] [--ref artifact:ID|session:ID|url:https://…]... [--field ID:TYPE:LABEL[:required]]... [--option FIELD=VALUE]... [--action ID:LABEL]... [--json]
+teamcode waits ask --session ID --title TEXT [--body TEXT] [--assignee MEMBER_ID_OR_USERNAME] [--ref artifact:ID|session:ID|url:https://…]... [--field ID:TYPE:LABEL[:required]]... [--option FIELD=VALUE]... [--action ID:LABEL]... [--json]
 teamcode waits ask --session ID --title TEXT (--after SECONDS | --at ISO | --webhook [--timeout S] [--on-timeout wake|turn_failed]) [--resume-message TEXT] [--json]
 ```
 
@@ -180,7 +180,7 @@ A session's agent asks with the stdio MCP server `teamcode mcp waits --session <
 
 | Tool | What it does |
 | --- | --- |
-| `ask_human` | `title` (required), `body` (Markdown), `assignee` (a member **id**: the server takes no username or GitHub login; omitted, the session's owner), `fields[]` (`id`, `type`, `label`, `help`, `required`, `default`, `options[{value,label,description}]`, `multiple`, `allowOther`, `maxLength`; types `text`, `choice`, `confirm`, `number`, `date`, `file`, `info`, `secret`; a secret takes `oneTime` and no `default`, and Codex sessions are refused), `actions[]` (`id`, `label`, `requires[]`, `style`), `refs[]` (`artifact`/`session` by `id`, or an `https` `url`). Creates the wait for this session only, with a fresh `Idempotency-Key` per call. Returns the id and the status, and tells the agent to end its turn: the answer arrives as a message starting with `[TeamCode wait answered]` |
+| `ask_human` | `title` (required), `body` (Markdown), `assignee` (a member id or a username such as `lyes`, an id winning over a username that spells it; the server takes no GitHub login; omitted, the session's owner), `fields[]` (`id`, `type`, `label`, `help`, `required`, `default`, `options[{value,label,description}]`, `multiple`, `allowOther`, `maxLength`; types `text`, `choice`, `confirm`, `number`, `date`, `file`, `info`, `secret`; a secret takes `oneTime` and no `default`, and Codex sessions are refused), `actions[]` (`id`, `label`, `requires[]`, `style`), `refs[]` (`artifact`/`session` by `id`, or an `https` `url`). Creates the wait for this session only, with a fresh `Idempotency-Key` per call. Returns the id and the status, and tells the agent to end its turn: the answer arrives as a message starting with `[TeamCode wait answered]` |
 | `list_waits` | This session's waits asked of its owner (`status`, open by default), read from `GET /waits` (at most five pages of 100). A wait asked of another member is not listed there: the agent keeps its id |
 | `get_wait` | One of this session's waits, its fields, actions and answer |
 | `wait_for` | `title`, `after` (seconds) or `at` (ISO UTC) or `event: {source: "webhook"}` with `timeout`, `onTimeout`, `resumeMessage`. Returns at once with the id, `dueAt`/`timeoutAt` and, for a webhook, the `eventUrl` for the CI; tells the agent to end its turn. The agent is told to prefer it to CronCreate / ScheduleWakeup for anything long, since those die with a paused session |

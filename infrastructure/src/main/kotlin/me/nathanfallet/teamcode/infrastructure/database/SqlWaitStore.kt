@@ -25,6 +25,12 @@ class SqlWaitStore(private val database: Database, private val cipher: Credentia
         Members.selectAll().where { (Members.id eq memberId) and (Members.teamId eq teamId) }.singleOrNull()
             ?.let { Member(it[Members.id], it[Members.username], readMemberRole(it), it[Members.disabled], it[Members.mustChangePassword]) }
     }
+    override suspend fun memberByReference(teamId: String, reference: String): Member? = database.query {
+        // An id first, whatever the member's state, so a username equal to a disabled member's id never captures them; then a username.
+        (Members.selectAll().where { (Members.teamId eq teamId) and (Members.id eq reference) }.singleOrNull()
+            ?: Members.selectAll().where { (Members.teamId eq teamId) and (Members.username eq reference) }.singleOrNull())
+            ?.let { Member(it[Members.id], it[Members.username], readMemberRole(it), it[Members.disabled], it[Members.mustChangePassword]) }
+    }
     override suspend fun executionSession(tokenId: String): String? = database.query {
         CloudInferenceCredentials.select(CloudInferenceCredentials.sessionId).where { CloudInferenceCredentials.tokenId eq tokenId }.singleOrNull()?.get(CloudInferenceCredentials.sessionId)
     }
