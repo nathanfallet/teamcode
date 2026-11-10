@@ -200,6 +200,11 @@ class FakeSessionRepository : me.nathanfallet.teamcode.companion.domain.reposito
         calls += "setModel $sessionId $model"; modelFailure?.let { throw it }
         return (byId[sessionId] ?: cloudSession(sessionId)).copy(model = model).also { byId[sessionId] = it }
     }
+    var effortFailure: Exception? = null
+    override suspend fun setEffort(accountId: String, sessionId: String, effort: String): me.nathanfallet.teamcode.companion.domain.models.CloudSession {
+        calls += "setEffort $sessionId $effort"; effortFailure?.let { throw it }
+        return (byId[sessionId] ?: cloudSession(sessionId)).copy(effort = effort).also { byId[sessionId] = it }
+    }
     override suspend fun models(accountId: String, agent: String): List<me.nathanfallet.teamcode.companion.domain.models.ModelOption> { calls += "models $agent"; return modelOptions }
     override suspend fun resume(accountId: String, sessionId: String) = (byId[sessionId] ?: cloudSession(sessionId)).copy(state = me.nathanfallet.teamcode.companion.domain.models.SessionState.RESUMING).also { calls += "resume $sessionId" }
     override fun sessionChanges(accountId: String, kinds: Set<me.nathanfallet.teamcode.companion.domain.models.SessionKind>, waiting: Boolean, waits: Boolean, renames: Boolean, workflows: Boolean, todos: Boolean) =

@@ -356,6 +356,12 @@
     <string name="session_model_failed">La liste n'a pas pu être chargée. Saisis un identifiant de modèle.</string>
     <string name="session_model_apply">Changer</string>
     <string name="session_model_change">Changer de modèle</string>
+    <string name="session_effort_title">Changer l'effort</string>
+    <string name="session_effort_hint">Le prochain tour l'utilise. Un tour en cours se termine avec l'effort actuel.</string>
+    <string name="session_effort_custom">Effort</string>
+    <string name="session_effort_default">Effort par défaut</string>
+    <string name="session_effort_change">Changer l'effort</string>
+    <string name="input_session_effort">Utilise une valeur valide : lettres, chiffres et . _ : / - (%1$d caractères au maximum).</string>
     <string name="input_session_model">Utilise un identifiant valide : lettres, chiffres et . _ : / - (%1$d caractères au maximum).</string>
     <string name="session_end_title">Terminer cette session ?</string>
     <string name="session_end_body">L'agent s'arrête et le workspace de la session est supprimé. Cette action est irréversible.</string>

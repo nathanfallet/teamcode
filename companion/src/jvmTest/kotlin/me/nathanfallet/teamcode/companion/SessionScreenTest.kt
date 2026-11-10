@@ -149,6 +149,32 @@ class SessionScreenTest {
         onNodeWithTag("end-confirm").assertDoesNotExist()
     }
 
+    @Test fun theEffortChipOpensThePickerAndSwitchesTheEffortOfTheSession() = runComposeUiTest {
+        val sessions = FakeSessionRepository().apply { byId["s1"] = cloudSession("s1", SessionState.ACTIVE).copy(effort = "high") }
+        val model = viewModel(sessions, features = FakeFeatures(setOf("cloud.sessions.v1", "cloud.messages.v1", "cloud.events.v1", "cloud.sessions.effort.v1")))
+        setContent { TeamCodeTheme { SessionScreen(model, memberId = "m1", onBack = {}) } }
+        waitUntil { model.uiState.value.session != null && model.uiState.value.canControl && model.uiState.value.effortChanges }
+        onNodeWithTag("effort-chip", useUnmergedTree = true).assertExists()
+        onNodeWithTag("effort-chip", useUnmergedTree = true).performClick()
+        onNodeWithTag("effort-dialog").assertExists()
+        // The current effort is chosen already, so nothing is switched to itself.
+        onNodeWithTag("effort-apply").assertIsNotEnabled()
+        onNodeWithTag("effort-option-max").performClick()
+        onNodeWithTag("effort-apply").assertIsEnabled().performClick()
+        waitUntil { sessions.calls.contains("setEffort s1 max") }
+        waitUntil { model.uiState.value.session?.effort == "max" }
+        onNodeWithTag("effort-dialog").assertDoesNotExist()
+    }
+
+    @Test fun withoutTheEffortFeatureTheChipOpensNothing() = runComposeUiTest {
+        val sessions = FakeSessionRepository().apply { byId["s1"] = cloudSession("s1", SessionState.ACTIVE).copy(effort = "high") }
+        val model = viewModel(sessions, features = FakeFeatures(setOf("cloud.sessions.v1", "cloud.messages.v1", "cloud.events.v1")))
+        setContent { TeamCodeTheme { SessionScreen(model, memberId = "m1", onBack = {}) } }
+        waitUntil { model.uiState.value.session != null && model.uiState.value.canControl }
+        onNodeWithTag("effort-chip", useUnmergedTree = true).performClick()
+        onNodeWithTag("effort-dialog").assertDoesNotExist()
+    }
+
     @Test fun theModelChipOpensThePickerAndSwitchesTheModelOfTheSession() = runComposeUiTest {
         val sessions = FakeSessionRepository().apply { byId["s1"] = cloudSession("s1", SessionState.ACTIVE).copy(model = "claude-opus-5-5") }
         val model = viewModel(sessions, features = FakeFeatures(setOf("cloud.sessions.v1", "cloud.messages.v1", "cloud.events.v1", "cloud.sessions.model.v1")))

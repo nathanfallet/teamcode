@@ -50,6 +50,8 @@ interface SessionRepository {
     suspend fun setPermissionBypass(accountId: String, sessionId: String, enabled: Boolean): CloudSession
     /** Changes the model of the session's agent (`cloud.sessions.model.v1`); the server checks it against the team's model policy. */
     suspend fun setModel(accountId: String, sessionId: String, model: String): CloudSession
+    /** Changes the effort of the session's agent (`cloud.sessions.effort.v1`); the team has no effort policy, so the server only checks the value's shape. */
+    suspend fun setEffort(accountId: String, sessionId: String, effort: String): CloudSession
     /** The models of [agent] (`claude` or `codex`) the team's policy lets the member pick (`cloud.sessions.model.v1`), best first. */
     suspend fun models(accountId: String, agent: String): List<ModelOption>
     /** Ends the session and deletes its workspace (`DELETE /cloud/sessions/{id}`); idempotent. */

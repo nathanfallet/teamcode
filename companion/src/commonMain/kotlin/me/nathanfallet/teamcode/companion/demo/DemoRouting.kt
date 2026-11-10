@@ -145,6 +145,7 @@ class DemoAwareSessionRepository(private val real: SessionRepository, private va
     override suspend fun rename(accountId: String, sessionId: String, name: String) = of(accountId).rename(accountId, sessionId, name)
     override suspend fun setPermissionBypass(accountId: String, sessionId: String, enabled: Boolean) = of(accountId).setPermissionBypass(accountId, sessionId, enabled)
     override suspend fun setModel(accountId: String, sessionId: String, model: String) = of(accountId).setModel(accountId, sessionId, model)
+    override suspend fun setEffort(accountId: String, sessionId: String, effort: String) = of(accountId).setEffort(accountId, sessionId, effort)
     override suspend fun models(accountId: String, agent: String) = of(accountId).models(accountId, agent)
     override suspend fun end(accountId: String, sessionId: String) = of(accountId).end(accountId, sessionId)
     override fun sessionChanges(accountId: String, kinds: Set<SessionKind>, waiting: Boolean, waits: Boolean, renames: Boolean, workflows: Boolean, todos: Boolean) = of(accountId).sessionChanges(accountId, kinds, waiting, waits, renames, workflows, todos)

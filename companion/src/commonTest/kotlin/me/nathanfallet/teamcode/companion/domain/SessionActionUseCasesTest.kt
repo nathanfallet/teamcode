@@ -110,6 +110,20 @@ class SessionActionUseCasesTest {
         assertFalse(ControlSessionUseCase.canEnd(ended)); assertTrue(ControlSessionUseCase.canEnd(failed)); assertTrue(ControlSessionUseCase.canEnd(paused))
     }
 
+    @Test fun theEffortChangesOnlyWhereTheServerTakesItWithTheServersRules() = runTest {
+        val control = ControlSessionUseCase(sessions, guard, SequenceIds(), features)
+        assertFalse(control.supportsEffortChange("a1"))
+        assertFailsWith<CompanionException.Unsupported> { control.setEffort("a1", "s1", "max") }
+        features.features += "cloud.sessions.effort.v1"
+        assertTrue(control.supportsEffortChange("a1"))
+        assertEquals("max", control.setEffort("a1", "s1", "  max  ").effort)
+        assertTrue(sessions.calls.contains("setEffort s1 max"))
+        for (bad in listOf("", "   ", "two words", "x".repeat(121), "semi;colon", "line\nbreak")) assertFailsWith<InvalidInput>(bad) { control.setEffort("a1", "s1", bad) }
+        assertEquals(1, sessions.calls.count { it.startsWith("setEffort") })
+        assertEquals(listOf("low", "medium", "high", "xhigh", "max"), ControlSessionUseCase.effortLevels("claude"))
+        assertEquals(listOf("low", "medium", "high", "xhigh"), ControlSessionUseCase.effortLevels("codex"))
+    }
+
     @Test fun theModelChangesOnlyWhereTheServerTakesItWithTheServersIdRules() = runTest {
         val control = ControlSessionUseCase(sessions, guard, SequenceIds(), features)
         assertFalse(control.supportsModelChange("a1"))

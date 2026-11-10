@@ -154,6 +154,13 @@ internal class DemoStore(private val clock: Clock, account: Account) {
         return changed
     }
 
+    /** Switches [id]'s agent to [effort] at once; the demo's agent never answers differently. */
+    fun setEffort(id: String, effort: String): CloudSession {
+        val changed = session(id).copy(effort = effort, updatedAt = now())
+        _sessions.update { it + (id to changed) }
+        return changed
+    }
+
     /**
      * Records the member's [text] (when there is one) and the agent's scripted reply after it, as one finished turn;
      * returns the input id of the message.

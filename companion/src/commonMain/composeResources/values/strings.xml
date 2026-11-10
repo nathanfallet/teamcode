@@ -356,6 +356,12 @@
     <string name="session_model_failed">The list could not be loaded. Type a model id.</string>
     <string name="session_model_apply">Switch</string>
     <string name="session_model_change">Change the model</string>
+    <string name="session_effort_title">Change effort</string>
+    <string name="session_effort_hint">The next turn uses it. A turn in progress finishes with the current effort.</string>
+    <string name="session_effort_custom">Effort</string>
+    <string name="session_effort_default">Default effort</string>
+    <string name="session_effort_change">Change the effort</string>
+    <string name="input_session_effort">Use a valid effort: letters, digits and . _ : / - (up to %1$d characters).</string>
     <string name="input_session_model">Use a valid model id: letters, digits and . _ : / - (up to %1$d characters).</string>
     <string name="session_end_title">End this session?</string>
     <string name="session_end_body">The agent stops and the session's workspace is deleted. This cannot be undone.</string>

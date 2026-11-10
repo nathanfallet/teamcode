@@ -86,6 +86,9 @@ class RemoteSessionRepository(private val calls: AccountCalls, private val polic
     override suspend fun setModel(accountId: String, sessionId: String, model: String): CloudSession =
         calls.withAccount(accountId, resource = true) { it.setCloudSessionModel(sessionId, model).domain() }
 
+    override suspend fun setEffort(accountId: String, sessionId: String, effort: String): CloudSession =
+        calls.withAccount(accountId, resource = true) { it.setCloudSessionEffort(sessionId, effort).domain() }
+
     override suspend fun models(accountId: String, agent: String): List<ModelOption> =
         calls.withAccount(accountId) { client -> client.cloudModels(agent).models.map { ModelOption(it.id, it.label) } }
 
