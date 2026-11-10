@@ -33,6 +33,8 @@ python3 scripts/smoke-push-relay.py teamcode-push:dev  # the real binary: protoc
 Not run by any pipeline: [`cloudrun.yaml`](cloudrun.yaml) is the service, and an operator deploys it. To set it up:
 
 1. In the Firebase project of the published apps, create a service account `teamcode-push` with the **Firebase Cloud Messaging API Admin** role only, and upload the APNs authentication key in the Firebase console (Cloud Messaging → Apple app configuration).
-2. Push the image to Artifact Registry, `REGION-docker.pkg.dev/PROJECT_ID/teamcode/teamcode-push:VERSION`.
+2. Pick the image: CI publishes `docker.io/nathanfallet/teamcode-push` with the server and MCP images (`latest` and `sha-<commit>` from `main`, the version from tags; amd64 only). Cloud Run deploys it from Docker Hub directly. Prefer a `sha-` or version tag to `latest`, so a redeploy is a deliberate change.
 3. Replace the placeholders in `cloudrun.yaml`, then run `gcloud run services replace push/cloudrun.yaml --region REGION` and allow unauthenticated invocations (the relay checks its own signatures).
 4. Map the domain: `gcloud beta run domain-mappings create --service teamcode-push --domain push.teamcode.nathanfallet.me`, then add the CNAME it gives to `ghs.googlehosted.com` in Cloudflare, DNS only (not proxied).
+
+Domain mappings exist only in some Cloud Run regions; the published relay runs in `europe-west1` (project `teamcode-companion`). The gen2 environment needs at least 512 MiB of memory. Cloud Run's front end keeps paths ending in `z` for itself: `/healthz` answers the startup and liveness probes inside the service, but returns Google's 404 from outside. To check a deployed relay from outside, use `POST /v1/instances`: a malformed key gets the relay's 400.

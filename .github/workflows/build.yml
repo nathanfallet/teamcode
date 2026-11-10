@@ -125,8 +125,10 @@ jobs:
       # The MCP stdio host (docs/mcp.md): a Dockerfile image, since it carries Node.js, uv, tini and prlimit next to its
       # JVM. It is built and checked before anything is pushed, so a failing host never leaves a server tag without its
       # host; it is pushed after the server image, with the same tags, where the server image is pushed.
-      - name: Build the MCP host jar
-        run: ./gradlew :mcp:buildFatJar
+      # The TeamCode Push relay (push/README.md): a native linuxX64 binary in a Debian image, amd64 only (Cloud Run),
+      # checked before anything is pushed and pushed with the same tags.
+      - name: Build the MCP host jar and the push relay binary
+        run: ./gradlew :mcp:buildFatJar :push:linkReleaseExecutableLinuxX64
       - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - name: Build the MCP host image for amd64 and check its contract
@@ -135,6 +137,10 @@ jobs:
           python3 scripts/smoke-mcp-image.py teamcode-mcp:contract
       - name: Build the MCP host image for arm64
         run: docker buildx build --platform linux/arm64 --file mcp/Dockerfile mcp
+      - name: Build the push relay image and check its contract
+        run: |
+          docker buildx build --platform linux/amd64 --file push/Dockerfile --tag teamcode-push:contract --load push
+          python3 scripts/smoke-push-relay.py teamcode-push:contract
       - name: Build the image without pushing
         if: ${{ !((github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref_type == 'tag')) || (github.event_name == 'workflow_dispatch' && inputs.publish_release && inputs.full_validation && github.ref == 'refs/heads/main')) }}
         run: ./gradlew :app:buildImage -PimagePlatforms=amd64 "-PimageTags=${IMAGE_TAGS}"
@@ -153,6 +159,12 @@ jobs:
           set --
           for tag in $(printf '%s' "$IMAGE_TAGS" | tr ',' ' '); do set -- "$@" --tag "nathanfallet/teamcode-mcp:${tag}"; done
           docker buildx build --platform linux/amd64,linux/arm64 --file mcp/Dockerfile "$@" --push mcp
+      - name: Push the push relay image
+        if: ${{ (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref_type == 'tag')) || (github.event_name == 'workflow_dispatch' && inputs.publish_release && inputs.full_validation && github.ref == 'refs/heads/main') }}
+        run: |
+          set --
+          for tag in $(printf '%s' "$IMAGE_TAGS" | tr ',' ' '); do set -- "$@" --tag "nathanfallet/teamcode-push:${tag}"; done
+          docker buildx build --platform linux/amd64 --file push/Dockerfile "$@" --push push
   native:
     # Keep paid native runners off ordinary pushes and pull requests.
     if: github.ref_type == 'tag' || (github.event_name == 'workflow_dispatch' && inputs.full_validation)
