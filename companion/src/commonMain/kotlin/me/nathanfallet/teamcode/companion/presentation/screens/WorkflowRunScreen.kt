@@ -92,7 +92,7 @@ fun WorkflowRunScreen(
             if (state.missing) Banner(stringResource(Res.string.workflow_run_missing), Tone.WARN, Modifier.testTag("workflow-run-missing"))
             BusyRow(state.loading && run == null)
             if (run != null) {
-                val today = utcEpochDay(now)
+                val today = localEpochDay(now)
                 TcCard(Modifier.testTag("workflow-run-overview")) {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                         Chip(workflowStatusWords(run.status, run.rawStatus), tone = workflowStatusTone(run.status), dot = run.status.active, modifier = Modifier.testTag("workflow-run-status"))

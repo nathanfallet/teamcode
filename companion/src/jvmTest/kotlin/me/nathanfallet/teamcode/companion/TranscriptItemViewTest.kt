@@ -15,13 +15,14 @@ import me.nathanfallet.teamcode.companion.presentation.transcript.TranscriptItem
 import me.nathanfallet.teamcode.companion.presentation.transcript.TranscriptItemView
 import androidx.compose.ui.test.assertTextContains
 import me.nathanfallet.teamcode.companion.domain.models.TurnPhase
-import me.nathanfallet.teamcode.companion.presentation.screens.utcEpochDay
+import me.nathanfallet.teamcode.companion.presentation.screens.localEpochDay
 import kotlin.test.Test
 import kotlin.test.assertTrue
 
 /** A transcript row's first measure is its final one: the list keeps a scroll position on measured heights only. */
 @OptIn(ExperimentalTestApi::class)
 class TranscriptItemViewTest {
+    init { me.nathanfallet.teamcode.companion.presentation.screens.utcOffsetMinutes = { 0 } } // times are asserted in UTC, whatever the machine's zone
     @Test fun anAgentMessageIsLaidOutAtItsFullHeightOnItsFirstFrame() = runComposeUiTest {
         // No frame runs on its own: what is checked is the first layout, before anything parsed off the main thread
         // could come back. A row scrolled back into view is composed again, and laid out in that same frame.
@@ -59,14 +60,14 @@ class TranscriptItemViewTest {
 
     @Test fun aTurnEndKeepsItsDurationAndShowsTheTimeOfDayOnTheSameDay() = runComposeUiTest {
         val turn = TranscriptItem.TurnEnd(TranscriptEvent.Turn(5, at, TurnPhase.COMPLETED, 61_000, 6))
-        setContent { TeamCodeTheme { Box(Modifier.width(400.dp)) { TranscriptItemView(turn, memberId = null, today = utcEpochDay(at)) } } }
-        onNodeWithText("Turn completed \u00b7 61 s \u00b7 6 steps \u00b7 21:00 UTC").assertExists()
+        setContent { TeamCodeTheme { Box(Modifier.width(400.dp)) { TranscriptItemView(turn, memberId = null, today = localEpochDay(at)) } } }
+        onNodeWithText("Turn completed \u00b7 61 s \u00b7 6 steps \u00b7 21:00").assertExists()
     }
 
     @Test fun aTurnEndOfAnotherDayShowsTheDateToo() = runComposeUiTest {
         val turn = TranscriptItem.TurnEnd(TranscriptEvent.Turn(5, at, TurnPhase.FAILED, 2_000, null))
-        setContent { TeamCodeTheme { Box(Modifier.width(400.dp)) { TranscriptItemView(turn, memberId = null, today = utcEpochDay(at) + 1) } } }
-        onNodeWithText("Turn failed \u00b7 2 s \u00b7 2026-10-28 21:00 UTC").assertExists()
+        setContent { TeamCodeTheme { Box(Modifier.width(400.dp)) { TranscriptItemView(turn, memberId = null, today = localEpochDay(at) + 1) } } }
+        onNodeWithText("Turn failed \u00b7 2 s \u00b7 2026-10-28 21:00").assertExists()
     }
 
     @Test fun everySystemLineShowsItsTime() = runComposeUiTest {
@@ -82,12 +83,12 @@ class TranscriptItemViewTest {
             TranscriptEvent.Transferred(9, at, "a", "b"),
             TranscriptEvent.Truncated(10, at, "tool.result", 70_000),
         )
-        setContent { TeamCodeTheme { androidx.compose.foundation.layout.Column(Modifier.width(400.dp)) { events.forEach { TranscriptItemView(TranscriptItem.System(it), memberId = null, today = utcEpochDay(at)) } } } }
-        events.forEach { onNodeWithTag("system-time-${it.seq}").assertTextContains("21:00 UTC") }
+        setContent { TeamCodeTheme { androidx.compose.foundation.layout.Column(Modifier.width(400.dp)) { events.forEach { TranscriptItemView(TranscriptItem.System(it), memberId = null, today = localEpochDay(at)) } } } }
+        events.forEach { onNodeWithTag("system-time-${it.seq}").assertTextContains("21:00") }
     }
 
     @Test fun withoutAKnownDayTheDateIsAlwaysShown() = runComposeUiTest {
         setContent { TeamCodeTheme { Box(Modifier.width(400.dp)) { TranscriptItemView(TranscriptItem.System(TranscriptEvent.PermissionExpired(1, at, "r")), memberId = null) } } }
-        onNodeWithTag("system-time-1").assertTextContains("2026-10-28 21:00 UTC")
+        onNodeWithTag("system-time-1").assertTextContains("2026-10-28 21:00")
     }
 }

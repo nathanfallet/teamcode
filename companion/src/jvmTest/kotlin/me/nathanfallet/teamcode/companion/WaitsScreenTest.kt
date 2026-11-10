@@ -52,6 +52,7 @@ import kotlin.test.*
 /** The waiting screen: every open wait of the member with its session, answered in place, the filters and pages, the states. */
 @OptIn(ExperimentalTestApi::class)
 class WaitsScreenTest {
+    init { me.nathanfallet.teamcode.companion.presentation.screens.utcOffsetMinutes = { 0 } } // times are asserted in UTC, whatever the machine's zone
     private class Waits : WaitRepository {
         val byStatus = mutableMapOf<WaitStatus, List<Wait>>()
         val answers = mutableListOf<String>()
@@ -232,14 +233,14 @@ class WaitsScreenTest {
         onNodeWithText("Sure?: Yes").assertExists()
         // The time of an event on the day shown is the time of day, in UTC (the shared rule).
         onNodeWithTag("wait-outcome-w2").assertExists()
-        onNodeWithText("Answered 00:16 UTC").assertExists()
+        onNodeWithText("Answered 00:16").assertExists()
         // The badge still counts the open waits.
         onNodeWithTag("waits-badge").assertContentDescriptionEquals("1 waiting for you")
 
         onNodeWithTag("waits-filter-cancelled").performClick()
         waitUntil { screen.model.uiState.value.historyLoaded && screen.model.uiState.value.history.firstOrNull()?.id == "w3" }
         hasTagged("wait-status-w3", "Cancelled")
-        onNodeWithText("Cancelled 00:11 UTC").assertExists()
+        onNodeWithText("Cancelled 00:11").assertExists()
 
         onNodeWithTag("waits-filter-open").performClick()
         onNodeWithTag("wait-w1").assertExists()

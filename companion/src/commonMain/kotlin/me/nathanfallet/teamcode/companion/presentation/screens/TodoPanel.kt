@@ -141,7 +141,7 @@ fun TodoView(
             SectionLabel(stringResource(Res.string.todo_hook_errors))
             for (event in errors.takeLast(3)) Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 Icon(PhosphorIcons.Regular.Warning, contentDescription = null, tint = colors.warn, modifier = Modifier.padding(top = 1.dp).size(14.dp))
-                Text("${formatEventTime(event.at, utcEpochDay(now))} · ${event.text}", fontSize = 11.5.sp, lineHeight = 16.sp, color = colors.muted)
+                Text("${formatEventTime(event.at, localEpochDay(now))} · ${event.text}", fontSize = 11.5.sp, lineHeight = 16.sp, color = colors.muted)
             }
         }
         if (onVerify != null && onAdd != null) Shortcuts(onVerify, onAdd)
@@ -193,7 +193,7 @@ private fun TodoRow(item: TodoItem, now: Long) {
             if (item.description.isNotBlank()) Text(item.description, color = colors.muted, fontSize = 12.sp, lineHeight = 16.sp, maxLines = 3, overflow = TextOverflow.Ellipsis)
             Text(stringResource(Res.string.todo_done_when, item.doneWhen), color = colors.muted, fontSize = 11.5.sp, lineHeight = 15.sp, maxLines = 3, overflow = TextOverflow.Ellipsis)
             item.proof?.let { proof ->
-                Text(stringResource(Res.string.todo_last_proof, formatEventTime(proof.at, utcEpochDay(now)), proof.text), color = colors.text, fontSize = 11.5.sp, lineHeight = 15.sp, maxLines = 3, overflow = TextOverflow.Ellipsis, modifier = Modifier.testTag("todo-proof-${item.id}"))
+                Text(stringResource(Res.string.todo_last_proof, formatEventTime(proof.at, localEpochDay(now)), proof.text), color = colors.text, fontSize = 11.5.sp, lineHeight = 15.sp, maxLines = 3, overflow = TextOverflow.Ellipsis, modifier = Modifier.testTag("todo-proof-${item.id}"))
             }
             if (item.addedLater || item.unverified || item.state == TodoItemState.DROP_REQUESTED) FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 if (item.addedLater) Chip(stringResource(Res.string.todo_added_along), tone = Tone.NEUTRAL, modifier = Modifier.testTag("todo-added-${item.id}"))

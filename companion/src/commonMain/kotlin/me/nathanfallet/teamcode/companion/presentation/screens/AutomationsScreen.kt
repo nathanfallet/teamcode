@@ -154,7 +154,7 @@ private fun AutomationCard(automation: AutomationSummary, now: Long, team: Boole
             }
         }
         automation.nextRunAt?.takeIf { automation.enabled }?.let { next ->
-            Text(stringResource(Res.string.automation_next_run, untilTime(next, now), formatUtc(next)), style = MetaStyle, color = colors.muted, modifier = Modifier.testTag("automation-next-${automation.id}"))
+            Text(stringResource(Res.string.automation_next_run, untilTime(next, now), formatLocal(next)), style = MetaStyle, color = colors.muted, modifier = Modifier.testTag("automation-next-${automation.id}"))
         }
         failuresLine(automation)?.let { Text(it, color = colors.danger, fontSize = 13.sp, modifier = Modifier.testTag("automation-failures-${automation.id}")) }
         if (team) Text(stringResource(Res.string.automation_owner, automation.ownerName), style = MetaStyle, color = colors.muted)

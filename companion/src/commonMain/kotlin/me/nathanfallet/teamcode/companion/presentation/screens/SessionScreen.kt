@@ -320,14 +320,14 @@ fun SessionScreen(
                 }
                 if (layout.threadReplacesMain && thread != null) {
                     ThreadBar(byId[thread], backToMain, onBack = viewModel::backToMain, besideMain = false)
-                    key(thread) { ConfirmingLinks { Transcript(state, thread, byId, memberId, viewModel, openThread, utcEpochDay(now), Modifier.weight(1f)) } }
-                } else key(null) { ConfirmingLinks { Transcript(state, null, byId, memberId, viewModel, openThread.takeIf { work.hasContent }, utcEpochDay(now), Modifier.weight(1f)) } }
+                    key(thread) { ConfirmingLinks { Transcript(state, thread, byId, memberId, viewModel, openThread, localEpochDay(now), Modifier.weight(1f)) } }
+                } else key(null) { ConfirmingLinks { Transcript(state, null, byId, memberId, viewModel, openThread.takeIf { work.hasContent }, localEpochDay(now), Modifier.weight(1f)) } }
             }
             if (layout.threadBeside && thread != null) {
                 Box(Modifier.width(1.dp).fillMaxHeight().background(colors.line))
                 Column(Modifier.weight(1f).fillMaxHeight().testTag("thread-column")) {
                     ThreadBar(byId[thread], backToMain, onBack = viewModel::backToMain, besideMain = true)
-                    key(thread) { ConfirmingLinks { Transcript(state, thread, byId, memberId, viewModel, openThread, utcEpochDay(now), Modifier.weight(1f)) } }
+                    key(thread) { ConfirmingLinks { Transcript(state, thread, byId, memberId, viewModel, openThread, localEpochDay(now), Modifier.weight(1f)) } }
                 }
             }
             if (layout.panel == PanelPlacement.SIDE) {

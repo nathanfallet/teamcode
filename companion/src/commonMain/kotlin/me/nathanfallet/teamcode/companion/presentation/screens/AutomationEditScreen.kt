@@ -335,7 +335,7 @@ internal fun PreviewView(preview: AutomationPreview) {
         }
         if (preview.nextRuns.isNotEmpty()) {
             Text(stringResource(Res.string.automation_upcoming), color = colors.muted, fontSize = 12.5.sp)
-            preview.nextRuns.forEach { Text(formatUtc(it), style = MetaStyle, color = colors.text) }
+            preview.nextRuns.forEach { Text(formatLocal(it), style = MetaStyle, color = colors.text) }
         }
     }
 }
