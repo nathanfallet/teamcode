@@ -93,7 +93,7 @@ class CloudServer(
         githubLinked = githubLinked)
     private val daemonStore = SqlDeviceDaemonStore(database, cipher)
     val sessions = CloudSessionService(store, access = access, initialMessages = conversationService, daemons = daemonStore,
-        modelPolicies = SqlModelPolicyStore(database), modelChanges = conversationService)
+        modelPolicies = SqlModelPolicyStore(database), modelChanges = conversationService, effortChanges = conversationService)
     /** Members' device daemons: presence, published folders and the queue of sessions to host. */
     val daemons = DeviceDaemonChannel(DeviceDaemonUseCase(daemonStore), sessions)
 

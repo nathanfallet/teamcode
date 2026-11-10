@@ -20,7 +20,11 @@ class CloudSessionService(
     private val modelPolicies: me.nathanfallet.teamcode.domain.policy.ModelPolicyStore? = null,
     /** Tells a running agent its model changed; null where the server has no conversations (the change then applies at the next start). */
     private val modelChanges: CloudModelChanges? = null,
+    /** Tells a running agent its effort changed; null where the server has no conversations (the change then applies at the next start). */
+    private val effortChanges: CloudEffortChanges? = null,
 ) {
+    /** Whether a session's effort can be changed (`cloud.sessions.effort.v1`), through the conversation like the model. */
+    val changesEfforts: Boolean get() = effortChanges != null
     /** Whether a session's model can be changed (`cloud.sessions.model.v1`): the change reaches a running agent through the conversation. */
     val changesModels: Boolean get() = modelChanges != null
     /** Whether a remote session can be started on one of the caller's devices by its daemon (`cloud.sessions.remote.daemon.v1`). */
@@ -376,6 +380,30 @@ class CloudSessionService(
         } ?: throw missing()
         // After the commit: the row is the truth, the input only tells a running agent. A repeat of the same choice queues nothing.
         modelChanges?.announce(principal, session, model)
+        return session
+    }
+
+    /**
+     * Changes the effort of a session's agent (`cloud.sessions.effort.v1`), as [setModel] does the model: the owner only,
+     * a valid effort value (the team has no effort policy), recorded at once and audited as `cloud.session.effort_changed`.
+     * A running agent takes it for its next turn through the conversation ([CloudEffortChanges]). Choosing the current effort changes nothing.
+     */
+    suspend fun setEffort(principal: Principal, onBehalfOf: String?, id: String, effort: String): CloudSession {
+        val actor = actor(principal, onBehalfOf)
+        visible(principal, store.find(principal.teamId, id))
+        CloudConversationRules.validateEffort(effort)
+        val session = transition(principal.teamId, id) { current ->
+            when {
+                current.state.terminal || current.desiredState == DesiredState.TERMINATED -> throw notRunning()
+                current.agentEffort == effort -> null
+                else -> CloudTransition(
+                    current.copy(agentEffort = effort, updatedAt = store.now()),
+                    CloudWrite(actor = actor, auditAction = "cloud.session.effort_changed", reconcileAt = null),
+                )
+            }
+        } ?: throw missing()
+        // After the commit: the row is the truth, the input only tells a running agent.
+        effortChanges?.announceEffort(principal, session, effort)
         return session
     }
 

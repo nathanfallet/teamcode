@@ -352,6 +352,11 @@ data class RunnerInputsRequest(
      * (`model_change_unsupported`) instead of being delivered, so an older runner never reads it as a message.
      */
     val acceptsModelChanges: Boolean = false,
+    /**
+     * The runner takes an effort change ([CloudEfforts.KIND] inputs); without it, such an input is rejected
+     * (`effort_change_unsupported`) instead of being delivered, so an older runner never reads it as a message.
+     */
+    val acceptsEffortChanges: Boolean = false,
 )
 /** [files]: what a message carries; download each from `GET /cloud/runner/files/{id}` and check its [RunnerFileView.sha256]. */
 @Serializable
