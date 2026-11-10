@@ -22,8 +22,10 @@ spec:
       containerConcurrency: 200
       timeoutSeconds: 30
       containers:
-        # Published by CI to Docker Hub with the server and MCP images: `latest` and `sha-<commit>` from main, the version from tags.
-        - image: docker.io/nathanfallet/teamcode-push:VERSION
+        # Published by CI to Docker Hub with the server and MCP images (`latest` and `sha-<commit>` from main, the version
+        # from tags), and pulled through the project's Artifact Registry remote repository `dockerhub`: Cloud Run's own
+        # anonymous pulls from docker.io fail ("Container import failed").
+        - image: REGION-docker.pkg.dev/PROJECT_ID/dockerhub/nathanfallet/teamcode-push:VERSION
           ports:
             - containerPort: 8080
           resources:
