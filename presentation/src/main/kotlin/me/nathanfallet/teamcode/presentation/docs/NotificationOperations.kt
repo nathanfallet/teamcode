@@ -1,5 +1,6 @@
 package me.nathanfallet.teamcode.presentation.docs
 
+import io.ktor.http.HttpStatusCode
 import me.nathanfallet.teamcode.api.models.*
 
 private const val NOTIFICATION_TEXT = "A member is notified when they are asked something (`waiting`), when the agent of their session finishes its turn " +
@@ -76,10 +77,12 @@ internal fun ApiCatalog.pushAdminOperations() {
         operationId = "testPush"; tag(ApiTags.NOTIFICATIONS)
         summary = "Send a test push"
         description = "Sends a test notification to the caller's own phones through the provider in force, at once. Each installation reports `sent`, " +
-            "`unregistered` (the token is then forgotten), `retry` or `rejected`, with a short code, never a provider body. $PUSH_ADMIN_TEXT"
+            "`unregistered` (the token is then forgotten), `retry` or `rejected`, with a short code, never a provider body. Any member signed in " +
+            "interactively (not a service key) may send it, once every ten seconds (`notifications.push.test.v1`)."
         responses {
             ok<PushTestView>("One result per installation.")
             conflict("Push is off (`push_off`), or the caller has no phone registered (`push_no_device`).")
+            error(HttpStatusCode.TooManyRequests, "A test was sent less than ten seconds ago (`push_test_rate_limited`).")
         }
     }
 }

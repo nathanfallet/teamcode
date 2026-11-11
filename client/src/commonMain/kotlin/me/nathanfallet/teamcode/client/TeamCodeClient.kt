@@ -238,6 +238,13 @@ class TeamCodeClient(
     suspend fun clearPush() {
         checkResponse(http.delete("$origin/api/v1/devices/current/push") { authenticate(); timeout { requestTimeoutMillis = 10_000 } })
     }
+    /** The caller's notification switches, for every channel the server offers (`notifications.v1`); a missing switch is on. */
+    suspend fun notificationSettings(): NotificationSettingsView = request("/api/v1/notifications/settings", HttpMethod.Get)
+    /** Turns one kind on or off on one channel, for the caller only and on all their devices. */
+    suspend fun setNotificationSetting(channel: String, kind: String, enabled: Boolean): NotificationSettingsView =
+        request("/api/v1/notifications/settings", HttpMethod.Put, NotificationSettingRequest(channel, kind, enabled))
+    /** A test notification to the caller's own phones, sent at once (`notifications.push.test.v1` for a member who is not an administrator). */
+    suspend fun testPush(): PushTestView = request("/api/v1/notifications/push/test", HttpMethod.Post)
     suspend fun revokeAuthSession(id: String) = revoke("auth/sessions", id)
     /** The folders one of the caller's own devices offers, and whether its daemon is online (`cloud.sessions.remote.daemon.v1`). */
     suspend fun deviceFolders(id: String): DeviceFoldersView { identifier(id); return request("/api/v1/devices/$id/folders", HttpMethod.Get) }

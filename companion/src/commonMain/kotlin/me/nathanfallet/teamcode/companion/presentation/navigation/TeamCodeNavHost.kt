@@ -67,6 +67,8 @@ import me.nathanfallet.teamcode.companion.presentation.screens.PhoneOfficeScreen
 import me.nathanfallet.teamcode.companion.presentation.screens.MainTabSaver
 import me.nathanfallet.teamcode.companion.presentation.screens.SessionScreen
 import me.nathanfallet.teamcode.companion.presentation.screens.GitHubLinkScreen
+import me.nathanfallet.teamcode.companion.presentation.screens.NotificationPreferencesScreen
+import me.nathanfallet.teamcode.companion.presentation.viewmodels.NotificationPreferencesViewModel
 import me.nathanfallet.teamcode.companion.presentation.screens.McpServersScreen
 import me.nathanfallet.teamcode.companion.presentation.screens.SubscriptionAccountsScreen
 import me.nathanfallet.teamcode.companion.presentation.screens.TransferSheet
@@ -214,6 +216,7 @@ fun TeamCodeNavHost(rootViewModel: RootViewModel = koinViewModel()) {
                 onOpenTransfers = { accountId -> navController.navigate(TransfersRoute(accountId)) },
                 onOpenSubscriptions = { accountId -> navController.navigate(SubscriptionAccountsRoute(accountId)) },
                 onOpenGitHub = { accountId -> navController.navigate(GitHubLinkRoute(accountId)) },
+                onOpenNotifications = { accountId -> navController.navigate(NotificationPreferencesRoute(accountId)) },
                 onOpenMcp = { accountId -> navController.navigate(McpServersRoute(accountId)) },
                 onOpenAutomations = { accountId -> navController.navigate(AutomationsRoute(accountId)) },
                 onOpenWorkflowRun = { accountId, runId -> navController.navigate(WorkflowRunRoute(accountId, runId)) },
@@ -259,6 +262,11 @@ fun TeamCodeNavHost(rootViewModel: RootViewModel = koinViewModel()) {
             val route = entry.toRoute<GitHubLinkRoute>()
             val viewModel: GitHubLinkViewModel = koinViewModel { parametersOf(route) }
             GitHubLinkScreen(viewModel, onBack = { navController.popBackStack() })
+        }
+        composable<NotificationPreferencesRoute> { entry ->
+            val route = entry.toRoute<NotificationPreferencesRoute>()
+            val viewModel: NotificationPreferencesViewModel = koinViewModel { parametersOf(route) }
+            NotificationPreferencesScreen(viewModel, onBack = { navController.popBackStack() })
         }
         composable<McpServersRoute> { entry ->
             val route = entry.toRoute<McpServersRoute>()
@@ -430,6 +438,7 @@ internal fun NavBackStackEntry.detailRoute(): Any? = when {
     destination.hasRoute<TransfersRoute>() -> toRoute<TransfersRoute>()
     destination.hasRoute<SubscriptionAccountsRoute>() -> toRoute<SubscriptionAccountsRoute>()
     destination.hasRoute<GitHubLinkRoute>() -> toRoute<GitHubLinkRoute>()
+    destination.hasRoute<NotificationPreferencesRoute>() -> toRoute<NotificationPreferencesRoute>()
     destination.hasRoute<McpServersRoute>() -> toRoute<McpServersRoute>()
     destination.hasRoute<AutomationsRoute>() -> toRoute<AutomationsRoute>()
     destination.hasRoute<AutomationRoute>() -> toRoute<AutomationRoute>()

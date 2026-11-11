@@ -293,6 +293,7 @@ fun Application.configureGateway(gateway: GatewayService, accessToken: String = 
                     (if (team != null && webhooks != null) listOf("team.webhooks.v1") else emptyList()) +
                     (if (team != null && notifications != null) listOf(me.nathanfallet.teamcode.api.models.Notifications.CAPABILITY) else emptyList()) +
                     (if (team != null && push != null) listOf(me.nathanfallet.teamcode.api.models.Notifications.PUSH_CAPABILITY) else emptyList()) +
+                    (if (team != null && pushAdmin != null) listOf(me.nathanfallet.teamcode.api.models.Notifications.PUSH_TEST_CAPABILITY) else emptyList()) +
                     (if (team != null && automations != null && cloudOn()) listOf(me.nathanfallet.teamcode.api.models.Automations.CAPABILITY) else emptyList()) +
                     (if (team != null && waits != null && cloudOn()) listOf(me.nathanfallet.teamcode.api.models.Waits.CAPABILITY) else emptyList()) +
                     (if (team != null && todos != null && cloudOn()) listOf(me.nathanfallet.teamcode.api.models.Todos.CAPABILITY, me.nathanfallet.teamcode.api.models.Todos.LIVE_CAPABILITY) else emptyList()) +

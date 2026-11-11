@@ -84,6 +84,8 @@ import me.nathanfallet.teamcode.companion.presentation.navigation.detailRoute
 import me.nathanfallet.teamcode.companion.presentation.navigation.SessionRoute
 import me.nathanfallet.teamcode.companion.presentation.navigation.SessionsListRoute
 import me.nathanfallet.teamcode.companion.presentation.navigation.GitHubLinkRoute
+import me.nathanfallet.teamcode.companion.presentation.navigation.NotificationPreferencesRoute
+import me.nathanfallet.teamcode.companion.presentation.viewmodels.NotificationPreferencesViewModel
 import me.nathanfallet.teamcode.companion.presentation.navigation.McpServersRoute
 import me.nathanfallet.teamcode.companion.presentation.navigation.SubscriptionAccountsRoute
 import me.nathanfallet.teamcode.companion.presentation.navigation.TransfersRoute
@@ -379,6 +381,10 @@ fun WideMainScreen(
                         val viewModel: SubscriptionAccountsViewModel = koinViewModel { parametersOf(entry.toRoute<SubscriptionAccountsRoute>()) }
                         SubscriptionAccountsScreen(viewModel, onBack = detail.backFrom(entry), backLabel = detail.backLabel(entry))
                     }
+                    composable<NotificationPreferencesRoute> { entry ->
+                        val viewModel: NotificationPreferencesViewModel = koinViewModel { parametersOf(entry.toRoute<NotificationPreferencesRoute>()) }
+                        NotificationPreferencesScreen(viewModel, onBack = detail.backFrom(entry), backLabel = detail.backLabel(entry))
+                    }
                     composable<GitHubLinkRoute> { entry ->
                         val viewModel: GitHubLinkViewModel = koinViewModel { parametersOf(entry.toRoute<GitHubLinkRoute>()) }
                         GitHubLinkScreen(viewModel, onBack = detail.backFrom(entry), backLabel = detail.backLabel(entry))
@@ -463,6 +469,7 @@ fun WideMainScreen(
                         AccountScreen(onAddAccount = onAddAccount, onSignInAgain = onSignInAgain, onSwitchAccount = { sheets.switcher = true },
                             onOpenSubscriptions = { detail.navigate(SubscriptionAccountsRoute(it.id)) },
                             onOpenGitHub = { detail.navigate(GitHubLinkRoute(it.id)) },
+                            onOpenNotifications = { detail.navigate(NotificationPreferencesRoute(it.id)) },
                             onOpenMcp = { detail.navigate(McpServersRoute(it.id)) }, viewModel = settings)
                     }
                 }
@@ -569,7 +576,7 @@ private fun NavBackStackEntry?.selection(): SidebarSelection {
         destination.hasRoute<AutomationRoute>() -> SidebarSelection.Automation(toRoute<AutomationRoute>().automationId)
         destination.hasRoute<AutomationEditRoute>() -> toRoute<AutomationEditRoute>().automationId?.let { SidebarSelection.Automation(it) } ?: SidebarSelection.AllAutomations
         destination.hasRoute<AutomationTestRoute>() -> SidebarSelection.Automation(toRoute<AutomationTestRoute>().automationId)
-        destination.hasRoute<AccountRoute>() || destination.hasRoute<SubscriptionAccountsRoute>() || destination.hasRoute<GitHubLinkRoute>() || destination.hasRoute<McpServersRoute>() -> SidebarSelection.Settings
+        destination.hasRoute<AccountRoute>() || destination.hasRoute<SubscriptionAccountsRoute>() || destination.hasRoute<GitHubLinkRoute>() || destination.hasRoute<NotificationPreferencesRoute>() || destination.hasRoute<McpServersRoute>() -> SidebarSelection.Settings
         else -> SidebarSelection.None
     }
 }

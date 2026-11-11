@@ -221,6 +221,7 @@ fun MainScreen(
     onOpenSubscriptions: (accountId: String) -> Unit = {},
     onOpenGitHub: (accountId: String) -> Unit = {},
     onOpenMcp: (accountId: String) -> Unit = {},
+    onOpenNotifications: (accountId: String) -> Unit = {},
     onOpenAutomations: (accountId: String) -> Unit = {},
     onOpenWorkflowRun: (accountId: String, runId: String) -> Unit = { _, _ -> },
     onOpenWorkflow: (accountId: String, workflowId: String) -> Unit = { _, _ -> },
@@ -308,7 +309,7 @@ fun MainScreen(
                         onCreateWorkflow = { onCreateWorkflow(account.id) }, onDuplicateWorkflow = { onDuplicateWorkflow(account.id, it.id, copySuffix) }, editors = editors)
                 } else SignedOutTab(stringResource(Res.string.workflows_title), account, onSignInAgain)
                 MainTab.ACCOUNT -> AccountScreen(onAddAccount = onAddAccount, onSignInAgain = onSignInAgain, onSwitchAccount = { sheets.switcher = true },
-                    onOpenSubscriptions = { onOpenSubscriptions(it.id) }, onOpenGitHub = { onOpenGitHub(it.id) }, onOpenMcp = { onOpenMcp(it.id) }, onOpenAutomations = { onOpenAutomations(it.id) }, viewModel = settings)
+                    onOpenSubscriptions = { onOpenSubscriptions(it.id) }, onOpenGitHub = { onOpenGitHub(it.id) }, onOpenMcp = { onOpenMcp(it.id) }, onOpenNotifications = { onOpenNotifications(it.id) }, onOpenAutomations = { onOpenAutomations(it.id) }, viewModel = settings)
             }
         }
         TabBar(shownTab, workflowsOffered, waitsState.takeIf { it.available }) { tab = it }

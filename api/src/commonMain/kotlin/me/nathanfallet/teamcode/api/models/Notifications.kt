@@ -7,6 +7,8 @@ object Notifications {
     const val CAPABILITY = "notifications.v1"
     /** The server has the push channel: the apps register their device with `PUT /api/v1/devices/current/push`. */
     const val PUSH_CAPABILITY = "notifications.push.v1"
+    /** Any member may send `POST /api/v1/notifications/push/test` to their own phones (before it, administrators only). */
+    const val PUSH_TEST_CAPABILITY = "notifications.push.test.v1"
     /** What a member is told about, one switch per channel. */
     val kinds = listOf("waiting", "turn_completed", "turn_failed", "session_failed")
 }
