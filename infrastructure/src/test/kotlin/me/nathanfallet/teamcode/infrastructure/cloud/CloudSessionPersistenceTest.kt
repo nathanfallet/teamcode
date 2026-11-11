@@ -152,6 +152,8 @@ class CloudSessionPersistenceTest {
         val created = ra.sessions.get(colleague, ids.single())
         failure("not_found") { ra.sessions.get(admin, created.id) }
         assertEquals(colleague.member.id, created.ownerId)
+        assertEquals(colleague.member.username, created.ownerUsername, "A read carries the owner's username, from the joined members row")
+        assertEquals(colleague.member.username, ra.sessions.list(colleague, CloudSessionQuery()).sessions.first { it.id == created.id }.ownerUsername, "So does a listed session")
         assertEquals(Attribution(admin.member.id, admin.tokenId, colleague.member.id), created.createdBy)
         assertEquals(45, created.idleTimeoutMinutes)
         assertEquals(2, created.profileVersion)

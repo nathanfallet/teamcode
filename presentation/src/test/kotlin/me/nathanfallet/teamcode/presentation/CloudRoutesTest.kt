@@ -130,7 +130,8 @@ class CloudRoutesTest {
         for ((key, who) in listOf("by-id" to "colleague-id", "by-name" to "colleague")) {
             val response = create("admin-cloud", key, who)
             assertEquals(HttpStatusCode.Accepted, response.status, who)
-            assertEquals("colleague-id", Serialization.json.decodeFromString<CloudSessionView>(response.bodyAsText()).ownerId, who)
+            val view = Serialization.json.decodeFromString<CloudSessionView>(response.bodyAsText())
+            assertEquals("colleague-id" to "colleague", view.ownerId to view.ownerUsername, who)
         }
         // An unknown username is refused like an unknown id; a value that is neither an id nor a username shape is a bad request.
         for (unknown in listOf("zzzz", "unknown-id", "z.z_z")) {

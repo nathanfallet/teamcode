@@ -82,7 +82,7 @@ class CloudSessionService(
         val id = UUID.randomUUID().toString()
         val idle = (draft.idleTimeoutMinutes ?: spec.idleTimeoutMinutes).coerceIn(spec.minIdleTimeoutMinutes, spec.maxIdleTimeoutMinutes)
         val session = CloudSession(
-            id = id, teamId = principal.teamId, ownerId = owner.id, name = draft.name, createdBy = actor.attribution,
+            id = id, teamId = principal.teamId, ownerId = owner.id, ownerUsername = owner.username, name = draft.name, createdBy = actor.attribution,
             profileId = profile.id, profileVersion = profile.version, clusterId = cluster.id, namespace = spec.namespace,
             imageReference = image, imageDigest = null, agentKind = spec.agentKind, agentVersion = spec.agentVersion,
             agentModel = draft.agentModel, agentEffort = draft.agentEffort, labels = draft.labels,
@@ -135,7 +135,7 @@ class CloudSessionService(
         val now = store.now()
         val id = UUID.randomUUID().toString()
         val session = CloudSession(
-            id = id, teamId = principal.teamId, ownerId = owner.id, name = draft.name, createdBy = actor.attribution,
+            id = id, teamId = principal.teamId, ownerId = owner.id, ownerUsername = owner.username, name = draft.name, createdBy = actor.attribution,
             profileId = "", profileVersion = 0, clusterId = "", namespace = "", imageReference = "", imageDigest = null,
             agentKind = draft.agentKind, agentVersion = null, agentModel = draft.agentModel, agentEffort = draft.agentEffort, labels = draft.labels,
             state = CloudSessionState.CREATING, phase = WAITING_HOST, desiredState = DesiredState.RUNNING, generation = 0, currentEpoch = 0,
@@ -176,7 +176,7 @@ class CloudSessionService(
         access?.require(principal.teamId, owner, owner.id, CloudPermission.CREATE)
         val now = store.now()
         val session = CloudSession(
-            id = UUID.randomUUID().toString(), teamId = principal.teamId, ownerId = owner.id, name = draft.name, createdBy = actor.attribution,
+            id = UUID.randomUUID().toString(), teamId = principal.teamId, ownerId = owner.id, ownerUsername = owner.username, name = draft.name, createdBy = actor.attribution,
             profileId = "", profileVersion = 0, clusterId = "", namespace = "", imageReference = "", imageDigest = null,
             agentKind = draft.agentKind, agentVersion = null, agentModel = null, agentEffort = null, labels = draft.labels,
             state = CloudSessionState.CREATING, phase = WAITING_HOST, desiredState = DesiredState.RUNNING, generation = 0, currentEpoch = 0,

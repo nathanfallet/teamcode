@@ -62,6 +62,8 @@ data class CloudSessionView(
     val id: String,
     val name: String,
     val ownerId: String,
+    /** The owner's username, next to [ownerId] (like `assigneeName` of a wait); null when it was not resolved. */
+    val ownerUsername: String? = null,
     val createdBy: CloudAttributionView,
     val state: String,
     val phase: String? = null,

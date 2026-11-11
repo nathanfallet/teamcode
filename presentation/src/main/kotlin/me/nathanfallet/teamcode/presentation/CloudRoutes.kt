@@ -18,7 +18,7 @@ internal fun CloudProblem.view() = CloudProblemView(code, message, retryable)
  * the member's directory).
  */
 internal fun CloudSession.view() = CloudSessionView(
-    id = id, name = name, ownerId = ownerId, createdBy = CloudAttributionView(createdBy.initiatorId, createdBy.credentialId, createdBy.effectiveMemberId),
+    id = id, name = name, ownerId = ownerId, ownerUsername = ownerUsername, createdBy = CloudAttributionView(createdBy.initiatorId, createdBy.credentialId, createdBy.effectiveMemberId),
     state = state.wire, phase = phase, desiredState = desiredState.wire, generation = generation, currentEpoch = currentEpoch,
     profile = if (kind != CloudSessionKind.CLOUD) CloudProfileRef(REMOTE_PLACEHOLDER, 0) else CloudProfileRef(profileId, profileVersion),
     image = if (kind != CloudSessionKind.CLOUD) CloudImageView(REMOTE_PLACEHOLDER) else CloudImageView(imageReference, imageDigest),
