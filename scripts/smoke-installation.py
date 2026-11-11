@@ -22,6 +22,16 @@ import urllib.error
 import urllib.request
 
 
+def read_service_log(path):
+    """The service replaces service.log atomically on every message. On Windows a read that lands in the replacement is refused
+    (PermissionError), so a poll of the log retries for a moment instead of failing the whole installation smoke."""
+    for attempt in range(50):
+        try: return path.read_text(encoding='utf-8')
+        except PermissionError:
+            if attempt == 49: raise
+            time.sleep(.02)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--binary', type=Path, required=True)
@@ -251,7 +261,7 @@ def main():
                     # A new startup log proves restart even for two manifests of one build.
                     for _ in range(50):
                         try:
-                            lines = settings_path.with_name('service.log').read_text(encoding='utf-8').splitlines()
+                            lines = read_service_log(settings_path.with_name('service.log')).splitlines()
                             marker = next((line for line in lines if 'Local proxy is listening.' in line), None)
                             if marker is not None and marker != previous: return marker
                         except OSError: pass
@@ -261,7 +271,7 @@ def main():
                 first_start = start_marker()
                 if notification_cache is not None:
                     for _ in range(80):
-                        logs = settings_path.with_name('service.log').read_text(encoding='utf-8')
+                        logs = read_service_log(settings_path.with_name('service.log'))
                         if f'TeamCode {notice_version} is available.' in logs: break
                         time.sleep(.1)
                     else: raise AssertionError('The actual managed service did not report its authenticated cached release')
@@ -293,7 +303,7 @@ def main():
                         else: raise AssertionError('Updater did not persist its recovery journal')
                         # Wait for actual cooperative stop/drain, leaving its request unfinished.
                         for _ in range(600):
-                            if 'Stopping: draining existing requests' in settings_path.with_name('service.log').read_text(encoding='utf-8'): break
+                            if 'Stopping: draining existing requests' in read_service_log(settings_path.with_name('service.log')): break
                             assert updater.poll() is None, 'Updater exited before service drainage'
                             time.sleep(.1)
                         else: raise AssertionError('Owned service did not enter its drain phase')
