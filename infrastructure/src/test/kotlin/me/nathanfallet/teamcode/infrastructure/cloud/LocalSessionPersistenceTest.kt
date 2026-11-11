@@ -130,10 +130,19 @@ class LocalSessionPersistenceTest {
             assertEquals(WaitStatus.RESOLVED, waits.get(owner, closed.id).status)
             assertEquals(1, todos.wake(owner, session, 0).messages.size, "The next look (a resumed run) reads it")
 
-            // --- A launch that is killed leaves the session to the server, which ends it after 90 s without a heartbeat.
+            // --- A computer that slept or lost its network keeps its session: after hours of silence the heartbeat resumes and the credential still works.
             w.pass(); w.pass()
             assertEquals(CloudSessionState.READY, w.a.sessionStore.find(w.teamId, session)!!.state, "A beating launch keeps its session")
-            w.a.database.query { CloudExecutions.update({ CloudExecutions.sessionId eq session }) { it[lastHeartbeatAt] = (nowMillis() - 120_000) } }
+            w.a.database.query { CloudExecutions.update({ CloudExecutions.sessionId eq session }) { it[lastHeartbeatAt] = (nowMillis() - 6 * 3_600_000L) } }
+            w.pass(); w.pass()
+            assertEquals(CloudSessionState.READY, w.a.sessionStore.find(w.teamId, session)!!.state, "Hours of silence do not end a local session")
+            assertNotNull(w.team.authenticate(credential.token), "Its credential is still honoured")
+            w.a.runner.heartbeat(w.teamId, session, 1, ready = true)
+            w.pass(); w.pass()
+            assertEquals(CloudSessionState.READY, w.a.sessionStore.find(w.teamId, session)!!.state, "The heartbeat that resumes keeps it going")
+
+            // --- A launch that is killed leaves the session to the server, which ends it after 12 hours without a heartbeat.
+            w.a.database.query { CloudExecutions.update({ CloudExecutions.sessionId eq session }) { it[lastHeartbeatAt] = (nowMillis() - 13 * 3_600_000L) } }
             w.pass(); w.pass()
             val lost = w.a.sessionStore.find(w.teamId, session)!!
             assertEquals(CloudSessionState.TERMINATED to "run_lost", lost.state to lost.terminatedReason)

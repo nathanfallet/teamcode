@@ -158,7 +158,7 @@ class CloudSessionService(
      * its waits and its artifacts are the session's, visible to the team and answerable from the apps. The caller is the member who
      * started the launch (`team.runs.v1`), never anyone else, and a second call for the same launch returns the first session. It has
      * no profile, cluster, workspace or capacity, and no pod: the launch starts its one execution ([host]) and keeps it alive with
-     * its heartbeat; the session ends with the launch (deleted at exit, or lost after 90 s without a heartbeat).
+     * its heartbeat; the session ends with the launch (deleted at exit, or lost after [ReconcileCloudSessionsUseCase.LOCAL_LOSS_MILLIS] without a heartbeat).
      */
     suspend fun createLocal(principal: Principal, draft: LocalSessionDraft): CloudCreateOutcome {
         val actor = actor(principal, null)

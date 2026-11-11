@@ -22,8 +22,8 @@ import okio.Path.Companion.toPath
  * The server-side session of one `teamcode run` ([CloudSessionKinds.LOCAL]): what gives the launch its todo, its waits and its
  * artifacts (docs/cloud-sessions.md, "Local sessions"). [client] acts with the credential confined to this session, never with the
  * member's login: it is what the proxy's artifact, wait and todo relays use, so the agent cannot answer its own question. The
- * session lives as long as the launch: [close] deletes it, and a launch that is killed leaves it to the server, which ends it after 90 s
- * without a heartbeat.
+ * session lives as long as the launch: [close] deletes it, and a launch that is killed leaves it to the server, which ends it after 12 hours
+ * without a heartbeat (a computer that sleeps or goes offline for less beats again and keeps its session).
  */
 internal class LocalSession private constructor(
     val sessionId: String,
@@ -38,10 +38,10 @@ internal class LocalSession private constructor(
             heartbeats.cancelAndJoin()
             credential.clear()
             client.close()
-            // A session whose delete is lost is ended by the server when its heartbeat stops.
+            // A session whose delete is lost is ended by the server when its heartbeat has stopped for good.
             try { withTimeoutOrNull(3_000) { member.deleteCloudSession(sessionId) } }
             catch (error: CancellationException) { throw error }
-            catch (_: Exception) { report("The local session could not be closed; the server ends it within 90 seconds.") }
+            catch (_: Exception) { report("The local session could not be closed; the server ends it once its heartbeat has been silent long enough.") }
         }
     }
 
@@ -73,7 +73,11 @@ internal class LocalSession private constructor(
                 val confined = member.withCredential { credential.token() }
                 val loop = RunnerLoop(calls, log = {}, agent = null)
                 val heartbeats = scope.launch {
-                    try { loop.run() }
+                    try {
+                        loop.run()
+                        // The loop only returns when the server ended or fenced this session: say so, or the tools just start failing.
+                        report("The server ended this session; ask_human and the todo are unavailable until the agent is restarted with teamcode run.")
+                    }
                     catch (error: RunnerLoop.RunnerRefused) { report("The server refused the local session (HTTP ${error.status}); the agent goes on without it.") }
                 }
                 return LocalSession(session.id, confined, member, credential, heartbeats, report)
