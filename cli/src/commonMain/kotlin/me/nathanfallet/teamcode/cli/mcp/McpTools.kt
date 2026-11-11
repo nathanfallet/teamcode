@@ -23,7 +23,7 @@ internal object McpTools {
     fun describe(error: Exception, hint: (TeamCodeException) -> String? = { null }): String = when (error) {
         is CliUserException -> error.message
         is TeamCodeException -> if (error.code == RELAY_SIGN_IN_REFUSED)
-            "TeamCode refused the sign-in ($RELAY_SIGN_IN_REFUSED): either the login on this computer is gone (run `teamcode login`), or this session ended on the server (a run that was offline for too long, or a cloud execution that ended); then restart the agent with `teamcode run`. Retrying does not help."
+            "TeamCode refused the sign-in ($RELAY_SIGN_IN_REFUSED): either the login on this computer is gone (run `teamcode login`), or this session ended on the server (a deleted session, or a cloud execution that ended); then restart the agent with `teamcode run`. Retrying does not help."
         else "TeamCode refused the call (${error.code ?: "http_${error.statusCode}"}): ${error.message}" +
             (hint(error)?.let { " $it" } ?: "") +
             (if (error.statusCode == 502 || error.statusCode == 503 || error.statusCode == 429) " Retry in a moment." else "")

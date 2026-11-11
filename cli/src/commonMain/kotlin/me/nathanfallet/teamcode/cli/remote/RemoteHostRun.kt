@@ -93,9 +93,13 @@ internal suspend fun hostRemoteSession(client: TeamCodeClient, record: RemoteSes
  * member's login and the agent can reach the answer route through it (docs/cloud-sessions.md).
  */
 internal fun remoteSessionCredential(client: TeamCodeClient, features: List<String>, team: String, session: String, epoch: Int, report: (String) -> Unit,
+    now: () -> Long = { Clock.System.now().toEpochMilliseconds() }): RunnerInference? = remoteSessionCredential(client, features, team, session, { epoch }, report, now)
+
+/** Same, for a host whose epoch changes while it runs (a local session resumed after its computer was offline): the epoch is read at each renewal. */
+internal fun remoteSessionCredential(client: TeamCodeClient, features: List<String>, team: String, session: String, epoch: () -> Int, report: (String) -> Unit,
     now: () -> Long = { Clock.System.now().toEpochMilliseconds() }): RunnerInference? =
     if (SESSION_CREDENTIAL_CAPABILITY !in features) null
-    else RunnerInference({ client.runnerSessionCredential(RunnerInferenceRequest(team, session, epoch)) }, log = report, what = "session credential", now = now)
+    else RunnerInference({ client.runnerSessionCredential(RunnerInferenceRequest(team, session, epoch())) }, log = report, what = "session credential", now = now)
 
 /** An epoch the device's daemon already opened (`POST /cloud/sessions/{id}/host`) for this host to run. */
 internal data class AcceptedHost(val teamId: String, val epoch: Int)

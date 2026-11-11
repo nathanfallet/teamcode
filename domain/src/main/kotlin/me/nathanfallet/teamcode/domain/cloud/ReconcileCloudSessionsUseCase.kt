@@ -149,18 +149,17 @@ class ReconcileCloudSessionsUseCase(
 
     /**
      * A local session ([CloudSessionKind.LOCAL]): the `teamcode run` it is attached to is its host, with no pod, workspace or
-     * capacity, and it never pauses (the launch is the session: nothing is left to resume). It ends when the launch deletes it, when
-     * the launch never started its execution within [HOST_START_MILLIS], and when its execution has been silent for
-     * [LOCAL_LOSS_MILLIS] (the launch was killed). A computer that sleeps or loses its network for minutes or hours is not a lost
-     * launch: its heartbeats resume, its `tcex_` credential is renewed on the next relayed call, and the session goes on as before,
-     * the way a run that went stale beats again.
+     * capacity. It ends when the launch deletes it and when the launch never started its execution within [HOST_START_MILLIS]. An
+     * execution silent for [HEARTBEAT_LOSS_MILLIS] (the computer slept or lost its network, or the launch was killed) pauses the session
+     * as "host offline", like a remote one: its credential dies, and the launch, if it is alive, resumes it by itself when its heartbeat
+     * is back, however late. A launch that never comes back leaves it to the team's paused retention.
      */
     private suspend fun local(s: CloudSession, owner: String, now: Long): Long? {
         val execution = if (s.currentEpoch > 0) store.execution(s.id, s.currentEpoch)?.takeIf { it.state != ExecutionState.ENDED } else null
         fun ended(reason: String) = execution?.copy(state = ExecutionState.ENDED, endedAt = now, exitReason = reason)
         val seen = execution?.let { it.lastHeartbeatAt ?: it.registeredAt ?: it.createdAt }
         val silent = if (execution == null) now - s.createdAt > HOST_START_MILLIS
-            else seen != null && now - seen > (if (execution.state == ExecutionState.PENDING) HOST_START_MILLIS else LOCAL_LOSS_MILLIS)
+            else seen != null && now - seen > (if (execution.state == ExecutionState.PENDING) HOST_START_MILLIS else HEARTBEAT_LOSS_MILLIS)
         return when {
             s.state == TERMINATED || s.state == FAILED -> null
             s.desiredState == DesiredState.TERMINATED -> {
@@ -168,9 +167,16 @@ class ReconcileCloudSessionsUseCase(
                     updateExecution = ended(s.terminatedReason ?: "deleted"))
                 null
             }
-            silent -> {
+            // Offline, and waiting for its launch: the launch resumes it itself ([CloudSessionService.host]) when its heartbeat is back, however
+            // late. Only the team's paused retention ends it, for a launch that never comes back (it was killed).
+            s.state == PAUSED -> if (s.expiresAt != null && s.expiresAt <= now) {
+                commit(s, owner, s.copy(desiredState = DesiredState.TERMINATED, terminatedReason = "expired", updatedAt = now), "cloud.session.expired"); now
+            } else s.expiresAt
+            // The launch never took an execution: nothing to wait for.
+            silent && execution == null -> {
                 commit(s, owner, s.copy(desiredState = DesiredState.TERMINATED, terminatedReason = "run_lost", updatedAt = now), "cloud.session.run_lost"); now
             }
+            silent -> hostOffline(s, owner, now, ended("host_offline"))
             else -> now + MONITOR_MILLIS
         }
     }
@@ -480,8 +486,6 @@ class ReconcileCloudSessionsUseCase(
         const val CAPACITY_MILLIS = 5_000L
         const val MONITOR_MILLIS = 15_000L
         const val HEARTBEAT_LOSS_MILLIS = 90_000L
-        /** How long a local session's launch may stay silent (asleep, offline) before the session is considered lost; a killed launch leaves nothing else to end it. */
-        const val LOCAL_LOSS_MILLIS = 12 * 60 * 60_000L
         /** How long a remote host may hold a new epoch without registering. */
         const val HOST_START_MILLIS = 120_000L
         /** The failure code of a remote session paused because its host went silent ("host offline"). */
