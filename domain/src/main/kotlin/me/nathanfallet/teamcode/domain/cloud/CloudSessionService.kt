@@ -35,16 +35,19 @@ class CloudSessionService(
 
     /**
      * Resolves `TeamCode-On-Behalf-Of` for a write. Only an interactive administrator or an administrator's
-     * `admin:cloud` key may name another member.
+     * `admin:cloud` key may name another member, by id or by username.
      */
+    private fun Principal.isMember(reference: String) = reference == member.id || reference == member.username
     suspend fun actor(principal: Principal, onBehalfOf: String?): CloudActor {
         principal.requireCloudWrite()
         if (onBehalfOf == null || onBehalfOf == principal.member.id) return CloudActor(principal, principal.member.id)
-        if (!principal.isCloudAdministrator)
+        if (!principal.isCloudAdministrator) {
+            if (onBehalfOf == principal.member.username) return CloudActor(principal, principal.member.id)
             throw TeamFailure("on_behalf_forbidden", 403, "Only an administrator can act on behalf of another member.")
-        val target = store.member(principal.teamId, onBehalfOf)
+        }
+        val target = store.memberByReference(principal.teamId, onBehalfOf)
         if (target == null || target.disabled || target.passwordChangeRequired)
-            throw TeamFailure("invalid_effective_member", 422, "The effective member must be an enabled team member who completed password setup.")
+            throw TeamFailure("invalid_effective_member", 422, "The effective member must be an enabled team member (named by id or username) who completed password setup.")
         return CloudActor(principal, target.id)
     }
 
@@ -79,7 +82,7 @@ class CloudSessionService(
         val id = UUID.randomUUID().toString()
         val idle = (draft.idleTimeoutMinutes ?: spec.idleTimeoutMinutes).coerceIn(spec.minIdleTimeoutMinutes, spec.maxIdleTimeoutMinutes)
         val session = CloudSession(
-            id = id, teamId = principal.teamId, ownerId = owner.id, name = draft.name, createdBy = actor.attribution,
+            id = id, teamId = principal.teamId, ownerId = owner.id, ownerUsername = owner.username, name = draft.name, createdBy = actor.attribution,
             profileId = profile.id, profileVersion = profile.version, clusterId = cluster.id, namespace = spec.namespace,
             imageReference = image, imageDigest = null, agentKind = spec.agentKind, agentVersion = spec.agentVersion,
             agentModel = draft.agentModel, agentEffort = draft.agentEffort, labels = draft.labels,
@@ -132,7 +135,7 @@ class CloudSessionService(
         val now = store.now()
         val id = UUID.randomUUID().toString()
         val session = CloudSession(
-            id = id, teamId = principal.teamId, ownerId = owner.id, name = draft.name, createdBy = actor.attribution,
+            id = id, teamId = principal.teamId, ownerId = owner.id, ownerUsername = owner.username, name = draft.name, createdBy = actor.attribution,
             profileId = "", profileVersion = 0, clusterId = "", namespace = "", imageReference = "", imageDigest = null,
             agentKind = draft.agentKind, agentVersion = null, agentModel = draft.agentModel, agentEffort = draft.agentEffort, labels = draft.labels,
             state = CloudSessionState.CREATING, phase = WAITING_HOST, desiredState = DesiredState.RUNNING, generation = 0, currentEpoch = 0,
@@ -173,7 +176,7 @@ class CloudSessionService(
         access?.require(principal.teamId, owner, owner.id, CloudPermission.CREATE)
         val now = store.now()
         val session = CloudSession(
-            id = UUID.randomUUID().toString(), teamId = principal.teamId, ownerId = owner.id, name = draft.name, createdBy = actor.attribution,
+            id = UUID.randomUUID().toString(), teamId = principal.teamId, ownerId = owner.id, ownerUsername = owner.username, name = draft.name, createdBy = actor.attribution,
             profileId = "", profileVersion = 0, clusterId = "", namespace = "", imageReference = "", imageDigest = null,
             agentKind = draft.agentKind, agentVersion = null, agentModel = null, agentEffort = null, labels = draft.labels,
             state = CloudSessionState.CREATING, phase = WAITING_HOST, desiredState = DesiredState.RUNNING, generation = 0, currentEpoch = 0,
@@ -414,7 +417,7 @@ class CloudSessionService(
      * expires; turning it on or sharing applies to the next renewal and the next message.
      */
     suspend fun setGitHubAccess(principal: Principal, onBehalfOf: String?, id: String, access: CloudGitHubAccess): CloudSession {
-        if (onBehalfOf != null && onBehalfOf != principal.member.id) throw TeamFailure("github_owner_only", 403, "Only the session owner chooses who uses their GitHub access.")
+        if (onBehalfOf != null && !principal.isMember(onBehalfOf)) throw TeamFailure("github_owner_only", 403, "Only the session owner chooses who uses their GitHub access.")
         val actor = actor(principal, null)
         val found = store.find(principal.teamId, id)
         if (found == null || found.ownerId != principal.member.id) throw missing()
@@ -442,7 +445,7 @@ class CloudSessionService(
      * requests the runner posts next; a request already open stays for the owner to answer.
      */
     suspend fun setPermissionBypass(principal: Principal, onBehalfOf: String?, id: String, enabled: Boolean): CloudSession {
-        if (onBehalfOf != null && onBehalfOf != principal.member.id) throw TeamFailure("bypass_owner_only", 403, "Only the session owner approves tool uses in advance.")
+        if (onBehalfOf != null && !principal.isMember(onBehalfOf)) throw TeamFailure("bypass_owner_only", 403, "Only the session owner approves tool uses in advance.")
         val actor = actor(principal, null)
         val found = store.find(principal.teamId, id)
         if (found == null || found.ownerId != principal.member.id) throw missing()

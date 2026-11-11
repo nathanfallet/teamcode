@@ -33,6 +33,7 @@ class CloudProfileAccessTest {
     private val sessions = CloudSessionService(Proxy.newProxyInstance(javaClass.classLoader, arrayOf(CloudSessionStore::class.java)) { _, method, args ->
         when (method.name) {
             "member" -> members.find { it.id == args[1] }
+            "memberByReference" -> members.find { it.id == args[1] } ?: members.find { it.username == args[1] }
             "profile" -> listOf(assigned, reserved).find { it.id == args[1] }
             else -> error("unexpected ${method.name}")
         }

@@ -68,7 +68,7 @@ enum class ServiceScope(val wire: String) {
      */
     TODO_SESSION("todo:session"),
 }
-enum class CredentialAction { DISCOVERY, IDENTITY, LOGOUT, INFERENCE, USAGE_READ, GUIDANCE, SKILLS_READ, SKILLS_PUBLISH, HOOKS_READ, HOOKS_PUBLISH, MCP, CLOUD_READ, CLOUD_WRITE, WAITS_READ, WAITS_WRITE, WORKFLOW_DELIVER, TODO_READ, TODO_WRITE, TEAM_READ, ARTIFACTS_READ, ARTIFACTS_WRITE, INTERACTIVE }
+enum class CredentialAction { DISCOVERY, IDENTITY, LOGOUT, INFERENCE, USAGE_READ, GUIDANCE, SKILLS_READ, SKILLS_PUBLISH, HOOKS_READ, HOOKS_PUBLISH, MCP, CLOUD_READ, CLOUD_WRITE, WAITS_READ, WAITS_WRITE, WORKFLOW_DELIVER, TODO_READ, TODO_WRITE, TEAM_READ, TEAM_DIRECTORY, ARTIFACTS_READ, ARTIFACTS_WRITE, INTERACTIVE }
 
 fun Principal.requireInteractive() {
     if (serviceScopes != null) throw TeamFailure("credential_scope", 403, "Sign in with an interactive account for this operation.")
@@ -95,6 +95,15 @@ fun Principal.requireTeamRead() {
     // A key without the scope is a scope problem whoever owns it, as it was under requireAdmin.
     if (serviceScopes != null && ServiceScope.TEAM_READ !in serviceScopes) throw TeamFailure("credential_scope", 403, "This service key does not grant team:read access.")
     if (!canReadTeam) throw TeamFailure("forbidden", 403, "Administrator access is required.")
+}
+/**
+ * The team's member directory (`GET /cloud/transfer-recipients`) for an unattended client: a key with `team:read` or
+ * `admin:cloud`, both of which only an administrator's key can hold. Read-only; the service rechecks the owner's role.
+ */
+fun Principal.requireTeamDirectory() {
+    requireReady()
+    if (serviceScopes != null && serviceScopes.none { it == ServiceScope.TEAM_READ || it == ServiceScope.ADMIN_CLOUD })
+        throw TeamFailure("credential_scope", 403, "This service key does not grant team:read or admin:cloud access.")
 }
 /** Cloud reads: an interactive login, or a key with `cloud:read`, `cloud:write`, `admin:cloud` or `team:read`. */
 fun Principal.requireCloudRead() {
@@ -177,6 +186,7 @@ class AuthorizeCredentialUseCase {
             CredentialAction.INFERENCE -> actor.requireScope(ServiceScope.INFERENCE)
             CredentialAction.USAGE_READ -> actor.requireUsageRead()
             CredentialAction.TEAM_READ -> actor.requireTeamRead()
+            CredentialAction.TEAM_DIRECTORY -> actor.requireTeamDirectory()
             CredentialAction.GUIDANCE -> actor.requireScope(ServiceScope.GUIDANCE)
             CredentialAction.SKILLS_READ -> actor.requireScope(ServiceScope.SKILLS_READ)
             CredentialAction.SKILLS_PUBLISH -> actor.requireScope(ServiceScope.SKILLS_PUBLISH)

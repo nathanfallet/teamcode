@@ -682,7 +682,7 @@ private fun ApiCatalog.cloudTransfers() {
             headerText("Idempotency-Key", IDEMPOTENCY_TEXT, required = true)
             onBehalfOf()
         }
-        body<CreateCloudTransferRequest>("The recipient and options.")
+        body<CreateCloudTransferRequest>("The recipient (`toMemberId`: a member id or a username) and options.")
         responses {
             ok<CloudTransferView>("Accepted: the transfer is open.", HttpStatusCode.Accepted)
             badRequest("A missing or invalid `Idempotency-Key`, or an invalid recipient (`idempotency_key_required`, `invalid_transfer`).")
@@ -696,7 +696,8 @@ private fun ApiCatalog.cloudTransfers() {
         summary = "Members a session can be given to"
         description = "For a recipient picker: the team's enabled members who completed password setup, by username, " +
             "at most 500, the caller included. Only their identifier, username and whether they are an administrator. Open " +
-            "to administrators, and to members while the team lets them offer sessions. A listed member can still be " +
+            "to administrators, and to members while the team lets them offer sessions. A key with `team:read` or `admin:cloud` " +
+            "reads it whatever that setting says, to map usernames to member ids. A listed member can still be " +
             "refused for a given session (`422 recipient_ineligible` on the transfer)."
         responses {
             ok<CloudTransferRecipientsView>("The members, by username.")

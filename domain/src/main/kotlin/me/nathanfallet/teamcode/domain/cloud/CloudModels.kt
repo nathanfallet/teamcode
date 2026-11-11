@@ -185,6 +185,8 @@ data class CloudSession(
     val runId: String? = null,
     /** Set when the owner chose to approve every later tool use of this session without asking; see [PermissionBypass]. */
     val permissionBypass: PermissionBypass? = null,
+    /** The owner's username, set when the session is read through the store's joined reads or just created; null otherwise. */
+    val ownerUsername: String? = null,
 ) {
     /** Whether a permission answer can reach the agent now: `ready` or `active`, desired running. */
     val takesAnswers: Boolean get() = desiredState == DesiredState.RUNNING && (state == CloudSessionState.READY || state == CloudSessionState.ACTIVE)

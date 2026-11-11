@@ -10,6 +10,7 @@ object CloudTransferStates {
 /** `POST /api/v1/cloud/sessions/{id}/transfer`, with an `Idempotency-Key`. */
 @Serializable
 data class CreateCloudTransferRequest(
+    /** The recipient's member id or username. */
     val toMemberId: String,
     /** Resume the session for the recipient once the owner changed. */
     val resume: Boolean = false,

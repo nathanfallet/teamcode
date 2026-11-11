@@ -33,7 +33,7 @@ internal class CloudTransfer : SuspendingCliktCommand(name = "transfer") {
     override fun help(context: Context) = "Transfer a session to another member. Administrators transfer any session at once; an owner offers their own session and the recipient accepts it. " +
         "The session pauses first (the running turn drains, unless --force) and changes owner once its pod is gone. Without SESSION or --to, pick them from a list."
     private val id by argument(help = "The session; omit it to pick one of your transferable sessions.").optional()
-    private val to by option("--to", help = "Recipient member ID; omit it to pick a member from a list.")
+    private val to by option("--to", help = "Recipient member ID or username; omit it to pick a member from a list.")
     private val resume by option("--resume", help = "Resume the session for the recipient once the owner changed (administrator transfers).").flag()
     private val force by option("--force", help = "Pause without letting the running turn finish; the workspace becomes crash-consistent.").flag()
     private val onBehalfOf by option("--member", help = "Act for this member (TeamCode-On-Behalf-Of); administrators only.")

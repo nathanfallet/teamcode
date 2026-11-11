@@ -159,6 +159,7 @@ internal class ApiAccess(val public: Boolean, val keyScopes: List<String>?) {
                 CredentialAction.INFERENCE -> listOf("inference")
                 CredentialAction.USAGE_READ -> listOf("usage:read", "team:read")
                 CredentialAction.TEAM_READ -> listOf("team:read")
+                CredentialAction.TEAM_DIRECTORY -> listOf("team:read", "admin:cloud")
                 CredentialAction.GUIDANCE -> listOf("guidance")
                 CredentialAction.SKILLS_READ -> listOf("skills:read")
                 CredentialAction.SKILLS_PUBLISH -> listOf("skills:publish")

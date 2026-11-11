@@ -31,6 +31,7 @@ class CloudRoutesTest {
         override suspend fun now() = clock++
         override suspend fun revalidate(actor: Principal) = Unit
         override suspend fun member(teamId: String, memberId: String) = listOf(admin, colleague).find { it.id == memberId }
+        override suspend fun memberByReference(teamId: String, reference: String) = member(teamId, reference) ?: listOf(admin, colleague).find { it.username == reference }
         override suspend fun profile(teamId: String, profileId: String) = listOf(profile, reserved).find { it.id == profileId }
         override suspend fun profileVersion(teamId: String, profileId: String, version: Int) = profile.spec
         override suspend fun cluster(teamId: String, clusterId: String) = CloudCluster("cluster-id", "default", "lab", "https://k8s.example.test", listOf("teamcode"), 10, "standard", 1, 0, null, 1, 1)
@@ -86,6 +87,7 @@ class CloudRoutesTest {
         /** As the SQL store: every profile for an administrator, the assigned ones for a member. */
         override suspend fun profiles(actor: Principal) = profiles.filter { actor.member.role.isAdministrator || actor.member.id in it.assignedMemberIds }
         override suspend fun member(actor: Principal, memberId: String) = listOf(admin, colleague).find { it.id == memberId }
+        override suspend fun memberByReference(actor: Principal, reference: String) = member(actor, reference) ?: listOf(admin, colleague).find { it.username == reference }
         override suspend fun saveProfile(actor: Principal, id: String?, expectedVersion: Int, name: String, spec: CloudProfileSpec, assignedMemberIds: Set<String>) = error("unused")
         override suspend fun settings(actor: Principal) = settings
         override suspend fun saveSettings(actor: Principal, settings: CloudSettings) = settings.also { this.settings = it }
@@ -116,6 +118,33 @@ class CloudRoutesTest {
         override suspend fun status() = GatewaySnapshot("test", 0, 0)
         override suspend fun forward(request: GenerationRequest, receive: suspend (GenerationHead, kotlinx.coroutines.flow.Flow<ByteArray>) -> Unit) =
             receive(GenerationHead(200, "text/event-stream"), emptyFlow())
+    }
+
+    @Test fun onBehalfOfNamesAMemberByIdOrByUsername() = testApplication {
+        val store = Store()
+        application { configureGateway(gateway, team = team(), cloudSessions = CloudSessionService(store), cloudAdmin = CloudAdministrationService(Admin(listOf(store.profile)), FakeCluster), publicOrigin = "http://localhost") }
+        suspend fun create(token: String, key: String, onBehalf: String) = client.post("/api/v1/cloud/sessions") {
+            bearerAuth(token); contentType(ContentType.Application.Json); setBody("""{"name":"Task","profileId":"profile-id"}""")
+            header(CloudHeaders.IDEMPOTENCY_KEY, key); header(CloudHeaders.ON_BEHALF_OF, onBehalf)
+        }
+        for ((key, who) in listOf("by-id" to "colleague-id", "by-name" to "colleague")) {
+            val response = create("admin-cloud", key, who)
+            assertEquals(HttpStatusCode.Accepted, response.status, who)
+            val view = Serialization.json.decodeFromString<CloudSessionView>(response.bodyAsText())
+            assertEquals("colleague-id" to "colleague", view.ownerId to view.ownerUsername, who)
+        }
+        // An unknown username is refused like an unknown id; a value that is neither an id nor a username shape is a bad request.
+        for (unknown in listOf("zzzz", "unknown-id", "z.z_z")) {
+            val refused = create("admin-cloud", "unknown-$unknown", unknown)
+            assertEquals(HttpStatusCode.UnprocessableEntity, refused.status, unknown); assertTrue("invalid_effective_member" in refused.bodyAsText(), unknown)
+        }
+        assertEquals(HttpStatusCode.BadRequest, create("admin-cloud", "bad-shape", "a b").status)
+        // Only an administrator names another member, whatever the spelling; a member's own username is themselves.
+        assertEquals(HttpStatusCode.Forbidden, create("colleague", "forbidden-name", "admin").status)
+        assertEquals("colleague-id", Serialization.json.decodeFromString<CloudSessionView>(create("colleague", "self-name", "colleague").bodyAsText()).ownerId)
+        suspend fun profiles(query: String) = client.get("/api/v1/cloud/profiles$query") { bearerAuth("admin-cloud") }
+        assertEquals(listOf("profile-id"), Serialization.json.decodeFromString<List<CloudProfileView>>(profiles("?member=colleague").bodyAsText()).map { it.id })
+        assertTrue("invalid_effective_member" in profiles("?member=zzzz").bodyAsText())
     }
 
     @Test fun sessionsRequireInteractiveCallersIdempotencyAndAdministratorDelegation() = testApplication {
@@ -386,11 +415,48 @@ class CloudRoutesTest {
             assertEquals("""{"recipients":[{"id":"admin-id","username":"admin","administrator":true},{"id":"colleague-id","username":"colleague","administrator":false}]}""", body)
             assertEquals(listOf(CloudTransferService.MAX_RECIPIENTS), transferStore.recipientLimits.distinct())
             assertEquals(HttpStatusCode.Forbidden, client.get("/api/v1/cloud/transfer-recipients") { bearerAuth("service-admin") }.status, "A key without a cloud write scope lists nobody")
+            // The team directory for an unattended monitor: an administrator's key with team:read or admin:cloud, same payload, nothing else.
+            assertEquals(CredentialAction.TEAM_DIRECTORY, credentialAction("GET", "/api/v1/cloud/transfer-recipients", emptySet()))
+            assertEquals(CredentialAction.INTERACTIVE, credentialAction("POST", "/api/v1/cloud/transfer-recipients", emptySet()))
+            for (key in listOf("admin-read", "admin-cloud", "admin-read-write")) {
+                assertEquals(body, client.get("/api/v1/cloud/transfer-recipients") { bearerAuth(key) }.bodyAsText(), key)
+            }
+            assertEquals(listOf(CloudTransferRecipientView("admin-id", "admin", true), CloudTransferRecipientView("colleague-id", "colleague", false)),
+                TeamCodeClient("http://localhost", { "admin-read" }) { config -> createClient { config(this) } }.use { it.cloudTransferRecipients() })
+            for (key in listOf("admin-write", "admin-usage", "colleague-write", "colleague-read")) {
+                val refused = client.get("/api/v1/cloud/transfer-recipients") { bearerAuth(key) }
+                assertEquals(HttpStatusCode.Forbidden, refused.status, key); assertTrue("credential_scope" in refused.bodyAsText(), key)
+            }
             // A team that keeps transfers to administrators does not show members its directory.
             store.cloudSettings = CloudSettings(memberTransfers = MemberTransfers.DISABLED)
             assertEquals("transfer_disabled", assertFailsWith<me.nathanfallet.teamcode.client.TeamCodeException> { member.cloudTransferRecipients() }.code)
             assertEquals(2, Serialization.json.decodeFromString<CloudTransferRecipientsView>(client.get("/api/v1/cloud/transfer-recipients") { bearerAuth("admin") }.bodyAsText()).recipients.size)
+            // The setting is about members offering their sessions: a team reader's directory does not depend on it.
+            for (key in listOf("admin-read", "admin-cloud")) assertEquals(2, Serialization.json.decodeFromString<CloudTransferRecipientsView>(client.get("/api/v1/cloud/transfer-recipients") { bearerAuth(key) }.bodyAsText()).recipients.size, key)
         } finally { member.close() }
+    }
+
+    @Test fun aTransferRecipientIsNamedByIdOrByUsername() = testApplication {
+        val store = Store()
+        val sessions = CloudSessionService(store)
+        application {
+            configureGateway(gateway, team = team(), cloudSessions = sessions, cloudAdmin = CloudAdministrationService(Admin(), FakeCluster),
+                cloudTransfers = CloudTransferService(store, Transfers(store), sessions, CloudRecipientPolicy(store)), publicOrigin = "http://localhost")
+        }
+        val created = (sessions.create(Principal(colleague, "colleague-session", "default"), null, CloudSessionDraft("Run", "profile-id", null, null, null, emptyMap(), null), null) as CloudCreateOutcome.Created).session
+        store.sessions[created.id] = created.copy(state = CloudSessionState.READY)
+        suspend fun transfer(key: String, to: String) = client.post("/api/v1/cloud/sessions/${created.id}/transfer") {
+            bearerAuth("colleague"); contentType(ContentType.Application.Json); setBody("""{"toMemberId":"$to"}"""); header(CloudHeaders.IDEMPOTENCY_KEY, key)
+        }
+        // An unknown username is refused like an unknown id, and a malformed one before any lookup.
+        for (unknown in listOf("zzzz", "unknown-id", "z.z_z")) {
+            val refused = transfer("unknown-$unknown", unknown)
+            assertEquals(HttpStatusCode.UnprocessableEntity, refused.status, unknown); assertTrue("recipient_not_found" in refused.bodyAsText(), unknown)
+        }
+        assertEquals(HttpStatusCode.BadRequest, transfer("bad-shape", "a b").status)
+        val byName = transfer("by-name", "admin")
+        assertEquals(HttpStatusCode.Accepted, byName.status, byName.bodyAsText())
+        assertEquals("admin-id", Serialization.json.decodeFromString<CloudTransferView>(byName.bodyAsText()).toMemberId, "The offer records the member's id")
     }
 
     @Test fun transfersAreOffersForMembersAndImmediateForAdministrators() = testApplication {

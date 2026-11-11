@@ -18,7 +18,7 @@ internal fun CloudProblem.view() = CloudProblemView(code, message, retryable)
  * the member's directory).
  */
 internal fun CloudSession.view() = CloudSessionView(
-    id = id, name = name, ownerId = ownerId, createdBy = CloudAttributionView(createdBy.initiatorId, createdBy.credentialId, createdBy.effectiveMemberId),
+    id = id, name = name, ownerId = ownerId, ownerUsername = ownerUsername, createdBy = CloudAttributionView(createdBy.initiatorId, createdBy.credentialId, createdBy.effectiveMemberId),
     state = state.wire, phase = phase, desiredState = desiredState.wire, generation = generation, currentEpoch = currentEpoch,
     profile = if (kind != CloudSessionKind.CLOUD) CloudProfileRef(REMOTE_PLACEHOLDER, 0) else CloudProfileRef(profileId, profileVersion),
     image = if (kind != CloudSessionKind.CLOUD) CloudImageView(REMOTE_PLACEHOLDER) else CloudImageView(imageReference, imageDigest),
@@ -62,11 +62,11 @@ private fun CloudSettingsView.domain(current: CloudSettings) = CloudSettings(pau
     backgroundWorkMaxMinutes ?: current.backgroundWorkMaxMinutes,
     maxAutomationsPerMember ?: current.maxAutomationsPerMember, maxRunningAutomationsPerMember ?: current.maxRunningAutomationsPerMember)
 
-/** `TeamCode-On-Behalf-Of`: at most one value; the domain decides whether the caller may use it. */
+/** `TeamCode-On-Behalf-Of`: at most one value, a member id or a username; the domain decides whether the caller may use it. */
 internal fun ApplicationCall.onBehalfOf(): String? {
     val values = request.headers.getAll(CloudHeaders.ON_BEHALF_OF) ?: return null
-    return values.singleOrNull()?.takeIf(CloudIdentifier::valid)
-        ?: throw TeamFailure("invalid_on_behalf", 400, "Send one member identifier in ${CloudHeaders.ON_BEHALF_OF}.")
+    return values.singleOrNull()?.takeIf(CloudIdentifier::validMemberReference)
+        ?: throw TeamFailure("invalid_on_behalf", 400, "Send one member id or username in ${CloudHeaders.ON_BEHALF_OF}.")
 }
 internal fun ApplicationCall.idempotencyKey(required: Boolean): String? {
     val values = request.headers.getAll(CloudHeaders.IDEMPOTENCY_KEY)

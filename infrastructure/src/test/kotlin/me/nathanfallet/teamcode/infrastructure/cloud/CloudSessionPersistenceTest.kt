@@ -152,9 +152,15 @@ class CloudSessionPersistenceTest {
         val created = ra.sessions.get(colleague, ids.single())
         failure("not_found") { ra.sessions.get(admin, created.id) }
         assertEquals(colleague.member.id, created.ownerId)
+        assertEquals(colleague.member.username, created.ownerUsername, "A read carries the owner's username, from the joined members row")
+        assertEquals(colleague.member.username, ra.sessions.list(colleague, CloudSessionQuery()).sessions.first { it.id == created.id }.ownerUsername, "So does a listed session")
         assertEquals(Attribution(admin.member.id, admin.tokenId, colleague.member.id), created.createdBy)
         assertEquals(45, created.idleTimeoutMinutes)
         assertEquals(2, created.profileVersion)
+        // The effective member can be named by username: the same request by name replays the session made by id, and an unknown name is refused like an unknown id.
+        assertEquals(created.id, (ra.sessions.create(admin, colleague.member.username, draft, key) as CloudCreateOutcome.Replayed).session.id)
+        failure("invalid_effective_member") { ra.sessions.create(admin, "nobody-by-that-name", draft, key.copy(key = "task-1234-unknown")) }
+        failure("invalid_effective_member") { ra.sessions.create(admin, "00000000-0000-4000-8000-000000000000", draft, key.copy(key = "task-1234-unknown-id")) }
         failure("idempotency_conflict") { rb.sessions.create(admin, colleague.member.id, draft.copy(name = "Other"), key.copy(requestDigest = "b".repeat(64))) }
         val audit = ra.database.query { AuditEvents.selectAll().where { (AuditEvents.action eq "cloud.session.created") and (AuditEvents.subjectId eq created.id) }.single() }
         assertEquals(admin.member.id, audit[AuditEvents.actorId]); assertEquals(colleague.member.id, audit[AuditEvents.effectiveMemberId]); assertEquals(admin.tokenId, audit[AuditEvents.credentialId])

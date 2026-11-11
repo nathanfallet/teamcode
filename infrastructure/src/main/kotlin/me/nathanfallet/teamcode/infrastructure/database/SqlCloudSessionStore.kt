@@ -22,6 +22,7 @@ class SqlCloudSessionStore(private val database: Database) : CloudSessionStore {
     override suspend fun member(teamId: String, memberId: String): Member? = database.query {
         Members.selectAll().where { (Members.id eq memberId) and (Members.teamId eq teamId) }.singleOrNull()?.let(::readMember)
     }
+    override suspend fun memberByReference(teamId: String, reference: String): Member? = database.query { memberRowByReference(teamId, reference)?.let(::readMember) }
     override suspend fun profile(teamId: String, profileId: String): CloudProfile? = database.query { readProfile(teamId, profileId) }
     override suspend fun profileVersion(teamId: String, profileId: String, version: Int): CloudProfileSpec? = database.query {
         (CloudProfileVersions innerJoin CloudProfiles).select(CloudProfileVersions.spec).where {
@@ -334,17 +335,18 @@ private fun labelsFor(ids: List<String>): Map<String, Map<String, String>> = if 
     CloudSessionLabels.selectAll().where { CloudSessionLabels.sessionId inList ids }.groupBy({ it[CloudSessionLabels.sessionId] }) { it[CloudSessionLabels.key] to it[CloudSessionLabels.value] }
         .mapValues { (_, pairs) -> pairs.toMap() }
 /**
- * Sessions with their host device's name and system and their current execution (for a remote host's liveness), two
+ * Sessions with their host device's name and system, their owner's username and their current execution (for a remote host's liveness), three
  * primary-key lookups per row; cloud sessions have no host.
  */
 internal val sessionsWithHost get() = CloudSessions.join(Devices, JoinType.LEFT, CloudSessions.hostDeviceId, Devices.id)
+    .join(Members, JoinType.LEFT, CloudSessions.ownerId, Members.id)
     .join(CloudExecutions, JoinType.LEFT, additionalConstraint = { (CloudExecutions.sessionId eq CloudSessions.id) and (CloudExecutions.epoch eq CloudSessions.currentEpoch) })
 internal fun readSession(teamId: String, id: String): CloudSession? =
     sessionsWithHost.selectAll().where { (CloudSessions.id eq id) and (CloudSessions.teamId eq teamId) }.singleOrNull()?.let { readSessionRow(it, labelsFor(listOf(id))[id].orEmpty()) }
 
 private fun problem(code: String?, message: String?, retryable: Boolean) = code?.let { CloudProblem(it, message.orEmpty(), retryable) }
 internal fun readSessionRow(row: ResultRow, labels: Map<String, String>) = CloudSession(
-    id = row[CloudSessions.id], teamId = row[CloudSessions.teamId], ownerId = row[CloudSessions.ownerId], name = row[CloudSessions.name],
+    id = row[CloudSessions.id], teamId = row[CloudSessions.teamId], ownerId = row[CloudSessions.ownerId], ownerUsername = row.getOrNull(Members.username), name = row[CloudSessions.name],
     createdBy = Attribution(row[CloudSessions.initiatorId], row[CloudSessions.credentialId], row[CloudSessions.effectiveMemberId]),
     profileId = row[CloudSessions.profileId].orEmpty(), profileVersion = row[CloudSessions.profileVersion], clusterId = row[CloudSessions.clusterId].orEmpty(),
     namespace = row[CloudSessions.namespace].orEmpty(), imageReference = row[CloudSessions.imageReference].orEmpty(), imageDigest = row[CloudSessions.imageDigest],
