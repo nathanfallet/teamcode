@@ -682,7 +682,7 @@ private fun ApiCatalog.cloudTransfers() {
             headerText("Idempotency-Key", IDEMPOTENCY_TEXT, required = true)
             onBehalfOf()
         }
-        body<CreateCloudTransferRequest>("The recipient and options.")
+        body<CreateCloudTransferRequest>("The recipient (`toMemberId`: a member id or a username) and options.")
         responses {
             ok<CloudTransferView>("Accepted: the transfer is open.", HttpStatusCode.Accepted)
             badRequest("A missing or invalid `Idempotency-Key`, or an invalid recipient (`idempotency_key_required`, `invalid_transfer`).")

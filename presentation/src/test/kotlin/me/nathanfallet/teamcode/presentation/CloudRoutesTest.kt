@@ -435,6 +435,29 @@ class CloudRoutesTest {
         } finally { member.close() }
     }
 
+    @Test fun aTransferRecipientIsNamedByIdOrByUsername() = testApplication {
+        val store = Store()
+        val sessions = CloudSessionService(store)
+        application {
+            configureGateway(gateway, team = team(), cloudSessions = sessions, cloudAdmin = CloudAdministrationService(Admin(), FakeCluster),
+                cloudTransfers = CloudTransferService(store, Transfers(store), sessions, CloudRecipientPolicy(store)), publicOrigin = "http://localhost")
+        }
+        val created = (sessions.create(Principal(colleague, "colleague-session", "default"), null, CloudSessionDraft("Run", "profile-id", null, null, null, emptyMap(), null), null) as CloudCreateOutcome.Created).session
+        store.sessions[created.id] = created.copy(state = CloudSessionState.READY)
+        suspend fun transfer(key: String, to: String) = client.post("/api/v1/cloud/sessions/${created.id}/transfer") {
+            bearerAuth("colleague"); contentType(ContentType.Application.Json); setBody("""{"toMemberId":"$to"}"""); header(CloudHeaders.IDEMPOTENCY_KEY, key)
+        }
+        // An unknown username is refused like an unknown id, and a malformed one before any lookup.
+        for (unknown in listOf("zzzz", "unknown-id", "z.z_z")) {
+            val refused = transfer("unknown-$unknown", unknown)
+            assertEquals(HttpStatusCode.UnprocessableEntity, refused.status, unknown); assertTrue("recipient_not_found" in refused.bodyAsText(), unknown)
+        }
+        assertEquals(HttpStatusCode.BadRequest, transfer("bad-shape", "a b").status)
+        val byName = transfer("by-name", "admin")
+        assertEquals(HttpStatusCode.Accepted, byName.status, byName.bodyAsText())
+        assertEquals("admin-id", Serialization.json.decodeFromString<CloudTransferView>(byName.bodyAsText()).toMemberId, "The offer records the member's id")
+    }
+
     @Test fun transfersAreOffersForMembersAndImmediateForAdministrators() = testApplication {
         val store = Store()
         val settings = Admin()

@@ -25,25 +25,27 @@ class CloudTransferService(
     suspend fun request(principal: Principal, onBehalfOf: String?, sessionId: String, request: CloudTransferRequest, idempotency: IdempotencyRequest): CloudTransferOutcome {
         val actor = sessions.actor(principal, onBehalfOf)
         store.revalidate(principal)
-        if (!CloudIdentifier.valid(request.toMemberId)) throw TeamFailure("invalid_transfer", 400, "Name the recipient by member identifier.")
+        if (!CloudIdentifier.validMemberReference(request.toMemberId)) throw TeamFailure("invalid_transfer", 400, "Name the recipient by member id or username.")
         // A retry of a request that already succeeded replays it, whatever the session became since.
         transfers.byKey(principal.teamId, principal.member.id, idempotency.key)?.let { existing ->
             if (existing.requestDigest != idempotency.requestDigest)
                 throw TeamFailure("idempotency_conflict", 422, "This Idempotency-Key was already used with a different request.")
             return CloudTransferOutcome.Replayed(existing)
         }
+        // The recipient is named by id or username; one nobody has stays as written and fails the recipient checks like an unknown id.
+        val toMemberId = store.memberByReference(principal.teamId, request.toMemberId)?.id ?: request.toMemberId
         val session = store.find(principal.teamId, sessionId)
         val admin = principal.isCloudAdministrator
         if (session == null || session.ownerId != principal.member.id) throw missingSession()
         transferable(session)
-        if (request.toMemberId == session.ownerId) throw TeamFailure("invalid_transfer", 400, "The recipient already owns this session.")
+        if (toMemberId == session.ownerId) throw TeamFailure("invalid_transfer", 400, "The recipient already owns this session.")
         val settings = store.settings(principal.teamId)
         if (!admin && settings.memberTransfers == MemberTransfers.DISABLED)
             throw TeamFailure("transfer_disabled", 403, "Your team does not allow members to transfer their sessions. Ask an administrator.")
-        recipients.require(session, request.toMemberId)
+        recipients.require(session, toMemberId)
         val now = store.now()
         val transfer = CloudTransfer(
-            id = UUID.randomUUID().toString(), teamId = principal.teamId, sessionId = session.id, fromMemberId = session.ownerId, toMemberId = request.toMemberId,
+            id = UUID.randomUUID().toString(), teamId = principal.teamId, sessionId = session.id, fromMemberId = session.ownerId, toMemberId = toMemberId,
             initiatedBy = actor.attribution, state = if (admin) CloudTransferState.ACCEPTED else CloudTransferState.OFFERED,
             resume = request.resume, force = request.force, pendingInputs = settings.transferPendingInputs, version = 1, createdAt = now, updatedAt = now,
             expiresAt = if (admin) null else now + settings.transferOfferDays * DAY_MILLIS,
