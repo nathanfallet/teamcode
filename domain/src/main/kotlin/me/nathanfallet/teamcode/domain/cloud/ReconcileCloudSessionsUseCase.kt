@@ -149,9 +149,10 @@ class ReconcileCloudSessionsUseCase(
 
     /**
      * A local session ([CloudSessionKind.LOCAL]): the `teamcode run` it is attached to is its host, with no pod, workspace or
-     * capacity, and it never pauses (the launch is the session: nothing is left to resume). It ends when the launch deletes it, when
-     * the launch never started its execution within [HOST_START_MILLIS], and when its execution has been silent for
-     * [HEARTBEAT_LOSS_MILLIS] (the launch was killed, or its computer went to sleep).
+     * capacity. It ends when the launch deletes it and when the launch never started its execution within [HOST_START_MILLIS]. An
+     * execution silent for [HEARTBEAT_LOSS_MILLIS] (the computer slept or lost its network, or the launch was killed) pauses the session
+     * as "host offline", like a remote one: its credential dies, and the launch, if it is alive, resumes it by itself when its heartbeat
+     * is back, however late. A launch that never comes back leaves it to the team's paused retention.
      */
     private suspend fun local(s: CloudSession, owner: String, now: Long): Long? {
         val execution = if (s.currentEpoch > 0) store.execution(s.id, s.currentEpoch)?.takeIf { it.state != ExecutionState.ENDED } else null
@@ -166,9 +167,16 @@ class ReconcileCloudSessionsUseCase(
                     updateExecution = ended(s.terminatedReason ?: "deleted"))
                 null
             }
-            silent -> {
+            // Offline, and waiting for its launch: the launch resumes it itself ([CloudSessionService.host]) when its heartbeat is back, however
+            // late. Only the team's paused retention ends it, for a launch that never comes back (it was killed).
+            s.state == PAUSED -> if (s.expiresAt != null && s.expiresAt <= now) {
+                commit(s, owner, s.copy(desiredState = DesiredState.TERMINATED, terminatedReason = "expired", updatedAt = now), "cloud.session.expired"); now
+            } else s.expiresAt
+            // The launch never took an execution: nothing to wait for.
+            silent && execution == null -> {
                 commit(s, owner, s.copy(desiredState = DesiredState.TERMINATED, terminatedReason = "run_lost", updatedAt = now), "cloud.session.run_lost"); now
             }
+            silent -> hostOffline(s, owner, now, ended("host_offline"))
             else -> now + MONITOR_MILLIS
         }
     }

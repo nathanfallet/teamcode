@@ -130,17 +130,43 @@ class LocalSessionPersistenceTest {
             assertEquals(WaitStatus.RESOLVED, waits.get(owner, closed.id).status)
             assertEquals(1, todos.wake(owner, session, 0).messages.size, "The next look (a resumed run) reads it")
 
-            // --- A launch that is killed leaves the session to the server, which ends it after 90 s without a heartbeat.
+            // --- The computer sleeps or loses its network: after 90 s the session pauses as "host offline", its credential dies.
             w.pass(); w.pass()
             assertEquals(CloudSessionState.READY, w.a.sessionStore.find(w.teamId, session)!!.state, "A beating launch keeps its session")
             w.a.database.query { CloudExecutions.update({ CloudExecutions.sessionId eq session }) { it[lastHeartbeatAt] = (nowMillis() - 120_000) } }
             w.pass(); w.pass()
-            val lost = w.a.sessionStore.find(w.teamId, session)!!
-            assertEquals(CloudSessionState.TERMINATED to "run_lost", lost.state to lost.terminatedReason)
+            val offline = w.a.sessionStore.find(w.teamId, session)!!
+            assertEquals(CloudSessionState.PAUSED to ReconcileCloudSessionsUseCase.HOST_OFFLINE, offline.state to offline.failure?.code)
+            assertNull(offline.terminatedReason, "It is not ended")
             assertEquals(ExecutionState.ENDED, w.a.sessionStore.execution(session, 1)!!.state)
-            assertEquals(0L, w.a.database.query { CloudInferenceCredentials.selectAll().where { CloudInferenceCredentials.sessionId eq session }.count() }, "Its credential died with it")
+            assertEquals(0L, w.a.database.query { CloudInferenceCredentials.selectAll().where { CloudInferenceCredentials.sessionId eq session }.count() }, "Its credential died with the execution")
             assertNull(SqlTeamService(w.b.database).authenticate(credential.token))
+
+            // --- The launch comes back, however late: it resumes the session by itself, with a new epoch and a new credential.
+            val resumed = w.b.sessions.host(other.principal, session)
+            assertEquals(2, resumed.currentEpoch)
+            assertEquals(CloudSessionState.RESUMING, w.a.sessionStore.find(w.teamId, session)!!.state)
+            val back = authenticate(laptop.token, w.teamId, session, 2)
+            w.a.runner.register(back.teamId, back.sessionId, back.epoch, back.podName); w.b.runner.heartbeat(w.teamId, session, 2, ready = true)
+            val active = w.a.sessionStore.find(w.teamId, session)!!
+            assertEquals(CloudSessionState.READY to null, active.state to active.failure, "Back to normal")
+            val renewed = inference.issueRemote(w.teamId, session, 2)
+            assertNotNull(w.team.authenticate(renewed.token), "The renewed credential works")
+            assertNull(SqlTeamService(w.b.database).authenticate(credential.token), "The first one stays dead")
+            w.pass(); w.pass()
+            assertEquals(CloudSessionState.READY, w.a.sessionStore.find(w.teamId, session)!!.state, "It goes on beating")
+
+            // --- A launch that is killed never comes back: the team's paused retention ends the session.
+            w.a.database.query { CloudExecutions.update({ (CloudExecutions.sessionId eq session) and (CloudExecutions.epoch eq 2) }) { it[lastHeartbeatAt] = (nowMillis() - 120_000) } }
+            w.pass(); w.pass()
+            assertEquals(CloudSessionState.PAUSED, w.a.sessionStore.find(w.teamId, session)!!.state)
+            w.a.database.query { CloudSessions.update({ CloudSessions.id eq session }) { it[expiresAt] = nowMillis() - 1 } }
+            w.pass(); w.pass()
+            val lost = w.a.sessionStore.find(w.teamId, session)!!
+            assertEquals(CloudSessionState.TERMINATED to "expired", lost.state to lost.terminatedReason)
+            assertEquals(0L, w.a.database.query { CloudInferenceCredentials.selectAll().where { CloudInferenceCredentials.sessionId eq session }.count() })
             assertEquals(emptyList(), waits.list(owner, null, "open", null, 50, session = session).waits, "Its waits ended with it")
+            refusedWith("session_not_running") { w.b.sessions.host(other.principal, session) }
 
             // --- A clean end: the launch deletes its session, the server ends it and the execution.
             val run2 = newRun(owner, runsB)

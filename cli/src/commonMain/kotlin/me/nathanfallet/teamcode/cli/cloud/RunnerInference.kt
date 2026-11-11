@@ -71,6 +71,9 @@ internal class RunnerInference(
     /** Forgets the credential, for example once the runner stops. */
     fun clear() { held = null }
 
+    /** Forgets the credential and any pause after a refusal: the next call asks the server at once (a host that moved to a new epoch). */
+    fun reset() { held = null; retryAt = 0L }
+
     companion object {
         /** Used when the server does not say (it always does from this release). */
         const val DEFAULT_LIFETIME_MILLIS = 60 * 60_000L
