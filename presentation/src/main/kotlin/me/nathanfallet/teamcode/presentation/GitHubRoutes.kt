@@ -70,15 +70,20 @@ internal fun Route.githubRoutes(github: GitHubLinkService, team: TeamService, pu
         val administration = if (administrator) {
             val app = github.app(actor)
             val statuses = github.links(actor).associateBy { it.memberId }
+            // Linking for a member (a service account nobody signs in to) uses the administrator's browser: offered for a
+            // member without a usable link, while a link can start and the member could store it.
+            val canLink = call.cloudEnabled() && app != null
             val rows = team.members(actor).joinToString("") { member ->
                 val status = statuses[member.id]
+                val link = if (canLink && !member.disabled && !member.passwordChangeRequired && status?.state != GitHubLinkState.LINKED)
+                    """<form action="/dashboard/github/links/${escape(member.id)}/link" method="post">${csrf(actor)}<button>${if (status == null) "Link" else "Relink"}</button></form>""" else ""
                 val unlink = if (status != null) """<form action="/dashboard/github/links/${escape(member.id)}/unlink" method="post">${csrf(actor)}<button>Unlink</button></form>""" else ""
-                """<tr><td>${escape(member.username)}</td><td>${escape(status?.link?.identity?.login ?: "-")}</td><td>${escape(status?.state?.wire ?: GitHubLinkStates.NOT_LINKED)}</td><td>$unlink</td></tr>"""
+                """<tr><td>${escape(member.username)}</td><td>${escape(status?.link?.identity?.login ?: "-")}</td><td>${escape(status?.state?.wire ?: GitHubLinkStates.NOT_LINKED)}</td><td>$link$unlink</td></tr>"""
             }
             """<h2>Team GitHub App</h2><p>Create a GitHub App owned by your organization with user-token expiration enabled, the repository permissions your sessions need (for example Contents and Pull requests: read and write) and <code>${escape(callback)}</code> as a callback URL. Enable Device Flow for <code>teamcode github link</code>. Install it on the repositories sessions may reach. Members' tokens can never exceed both the installation and the member's own access.</p>""" +
                 (app?.let { "<p>Configured: App ${it.appId} (${escape(it.slug ?: it.clientId)}), version ${it.version}.</p>" } ?: "<div class='empty'><strong>No App is configured.</strong></div>") +
                 """<form action="/dashboard/github/app" method="post">${csrf(actor)}<input type="hidden" name="version" value="${app?.version ?: ""}"><label>App ID <input name="appId" inputmode="numeric" required value="${app?.appId ?: ""}"></label><label>Client ID <input name="clientId" required maxlength="64" value="${escape(app?.clientId ?: "")}"></label><label>Client secret${if (app != null) " (defined; leave empty to keep it, or paste a replacement)" else ""} <input type="password" name="clientSecret" autocomplete="off" maxlength="256"${if (app == null) " required" else ""}></label><label>Private key (PEM)${if (app != null) " (defined; leave empty to keep it, or paste a replacement)" else ""}<br><textarea name="privateKey" rows="6" cols="70" autocomplete="off"${if (app == null) " required" else ""}></textarea></label><button>Save GitHub App</button></form>""" +
-                "<h2>Members' links</h2><table><thead><tr><th>Member</th><th>GitHub account</th><th>State</th><th></th></tr></thead><tbody>$rows</tbody></table>"
+                "<h2>Members' links</h2>" + (if (canLink) "<p class=\"muted\"><strong>Link</strong> or <strong>Relink</strong> connects a member's cloud sessions to the GitHub account signed in to github.com in <em>your</em> browser, for a member who cannot do it themselves (a service account nobody signs in to): sign in to GitHub as that account first.</p>" else "") + "<table><thead><tr><th>Member</th><th>GitHub account</th><th>State</th><th></th></tr></thead><tbody>$rows</tbody></table>"
         } else ""
         call.respondText(call.page("GitHub", member + administration), ContentType.Text.Html)
     }

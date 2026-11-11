@@ -176,6 +176,9 @@ class GitHubRoutesTest {
             return client.get("/dashboard/github/callback?state=${Url(authorize).parameters["state"]}&code=code-1") { header(HttpHeaders.Cookie, "teamcode_github_link=$nonce") }
         }
 
+        suspend fun adminPage() = client.get("/dashboard/github") { header(HttpHeaders.Cookie, "teamcode_session=admin") }.bodyAsText()
+        assertContains(adminPage(), """<form action="/dashboard/github/links/colleague-id/link" method="post"><input type='hidden' name='csrf' value='admin-session'><button>Link</button>""")
+        assertFalse("/dashboard/github/links/" in client.get("/dashboard/github") { header(HttpHeaders.Cookie, "teamcode_session=colleague") }.bodyAsText())
         assertEquals(HttpStatusCode.Forbidden, start("colleague", "colleague-session", "admin-id").status, "Members link only themselves")
         val key = start("service-admin", "admin-key", "colleague-id")
         assertEquals(HttpStatusCode.Forbidden, key.status, "Service keys never link, even an administrator's")
@@ -191,6 +194,9 @@ class GitHubRoutesTest {
         assertEquals(HttpStatusCode.OK, complete(started).status)
         assertEquals("ghu_synthetic_web", store.links.getValue("colleague-id").second)
         assertFalse("admin-id" in store.links)
+        assertFalse("/dashboard/github/links/colleague-id/link" in adminPage(), "A usable link offers Unlink only")
+        store.links["colleague-id"] = store.links.getValue("colleague-id").let { (link, token) -> link.copy(state = GitHubLinkState.RECONNECT_REQUIRED) to token }
+        assertContains(adminPage(), """<form action="/dashboard/github/links/colleague-id/link" method="post"><input type='hidden' name='csrf' value='admin-session'><button>Relink</button>""")
 
         // Linking an already linked member again replaces the link.
         store.clock += 1_000
