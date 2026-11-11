@@ -67,6 +67,8 @@ class SqlGitHubStore(private val database: Database, private val cipher: Credent
             it[browserHash] = attempt.browserHash; it[pollInterval] = attempt.pollIntervalSeconds; it[nextPollAt] = attempt.nextPollAt
             it[expiresAt] = attempt.expiresAt; it[createdAt] = now
         }
+        // The callback carries no session, so `github.link.created` names the member: journal who started it for them.
+        if (attempt.memberId != actor.member.id) audit(attempt.teamId, actor.member.id, "github.link.started", attempt.memberId, attempt.memberId, actor.tokenId)
         Unit
     }
 

@@ -68,6 +68,7 @@ class GitHubRoutesTest {
             "admin" -> Principal(admin, "admin-session", "default")
             "colleague" -> Principal(colleague, "colleague-session", "default")
             "service-colleague" -> Principal(colleague, "colleague-key", "default", ServiceScope.entries.toSet())
+            "service-admin" -> Principal(admin, "admin-key", "default", ServiceScope.entries.toSet())
             else -> null
         }
         override suspend fun members(principal: Principal): List<Member> { principal.requireAdmin(); return listOf(admin, colleague) }
@@ -159,5 +160,41 @@ class GitHubRoutesTest {
         }.status)
         assertTrue(store.links.isEmpty())
         assertEquals(listOf("ghu_synthetic_web"), github.revoked)
+    }
+
+    @Test fun administratorsLinkGitHubForAnotherMemberFromTheirOwnBrowser() = testApplication {
+        val store = Store(); val github = FakeGitHub(); val service = GitHubLinkService(store, store, github)
+        application { configureGateway(gateway, team = team(), github = service, publicOrigin = "http://localhost") }
+        kotlinx.coroutines.runBlocking { service.saveApp(Principal(admin, "admin-session", "default"), null, GitHubAppInput(123, "Iv23liSynthetic", secret, key)) }
+        suspend fun start(session: String, csrf: String, memberId: String) = client.post("/dashboard/github/links/$memberId/link") {
+            header(HttpHeaders.Cookie, "teamcode_session=$session"); header(HttpHeaders.Origin, "http://localhost")
+            contentType(ContentType.Application.FormUrlEncoded); setBody("csrf=$csrf")
+        }
+        suspend fun complete(response: HttpResponse): HttpResponse {
+            val nonce = response.headers.getAll(HttpHeaders.SetCookie)!!.single { it.startsWith("teamcode_github_link=") }.substringAfter("=").substringBefore(";")
+            val authorize = Regex("href=\"([^\"]+)\"").findAll(response.bodyAsText()).map { it.groupValues[1].replace("&amp;", "&") }.single { it.startsWith("https://github.com/") }
+            return client.get("/dashboard/github/callback?state=${Url(authorize).parameters["state"]}&code=code-1") { header(HttpHeaders.Cookie, "teamcode_github_link=$nonce") }
+        }
+
+        assertEquals(HttpStatusCode.Forbidden, start("colleague", "colleague-session", "admin-id").status, "Members link only themselves")
+        val key = start("service-admin", "admin-key", "colleague-id")
+        assertEquals(HttpStatusCode.Forbidden, key.status, "Service keys never link, even an administrator's")
+        assertContains(key.bodyAsText(), "interactive account")
+        assertEquals(HttpStatusCode.NotFound, start("admin", "admin-session", "ghost-id").status)
+        assertTrue(store.attempts.isEmpty())
+
+        // The administrator's browser authorizes on GitHub; the link is stored for the target member, not the administrator.
+        val started = start("admin", "admin-session", "colleague-id")
+        assertEquals(HttpStatusCode.OK, started.status)
+        assertContains(started.bodyAsText(), "linking a GitHub account to <strong>colleague</strong>")
+        assertEquals("colleague-id", store.attempts.values.single().memberId)
+        assertEquals(HttpStatusCode.OK, complete(started).status)
+        assertEquals("ghu_synthetic_web", store.links.getValue("colleague-id").second)
+        assertFalse("admin-id" in store.links)
+
+        // Linking an already linked member again replaces the link.
+        store.clock += 1_000
+        assertEquals(HttpStatusCode.OK, complete(start("admin", "admin-session", "colleague-id")).status)
+        assertEquals(1_001_000, store.links.getValue("colleague-id").first.linkedAt)
     }
 }
