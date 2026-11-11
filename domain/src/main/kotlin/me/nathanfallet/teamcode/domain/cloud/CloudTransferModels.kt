@@ -6,6 +6,9 @@ import me.nathanfallet.teamcode.domain.team.Member
 object CloudIdentifier {
     private val pattern = Regex("[a-zA-Z0-9-]{1,36}")
     fun valid(value: String): Boolean = pattern.matches(value)
+    private val memberPattern = Regex("[a-zA-Z0-9._-]{1,64}")
+    /** A member named by id or by username (up to 64 letters, digits, dots, underscores and hyphens). */
+    fun validMemberReference(value: String): Boolean = memberPattern.matches(value)
 }
 
 /**

@@ -69,6 +69,11 @@ class SqlCloudAdminStore(private val database: Database, private val cipher: Cre
         Members.selectAll().where { (Members.id eq memberId) and (Members.teamId eq actor.teamId) }.singleOrNull()?.let(::readMember)
     }
 
+    override suspend fun memberByReference(actor: Principal, reference: String): Member? = database.query {
+        requireCurrent(this, actor)
+        memberRowByReference(actor.teamId, reference)?.let(::readMember)
+    }
+
     override suspend fun saveProfile(actor: Principal, id: String?, expectedVersion: Int, name: String, spec: CloudProfileSpec, assignedMemberIds: Set<String>): CloudProfile = database.query {
         lockTeam(actor.teamId); requireCurrent(this, actor)
         val now = nowMillis()
@@ -181,4 +186,12 @@ internal fun readCloudSettings(teamId: String): CloudSettings = CloudSettingsTab
         it[CloudSettingsTable.fileMaxMebibytes], it[CloudSettingsTable.messageFileMebibytes], it[CloudSettingsTable.backgroundWorkMaxMinutes],
         maxAutomationsPerMember = it[CloudSettingsTable.maxAutomationsPerMember], maxRunningAutomationsPerMember = it[CloudSettingsTable.maxRunningAutomationsPerMember])
 } ?: CloudSettings()
+/**
+ * The row of the member [reference] names: an id first, whatever the member's state, so a username that spells another
+ * member's id never captures them; then a username. The one resolution every store that accepts "a member by id or
+ * username" shares. Call it inside a transaction.
+ */
+internal fun memberRowByReference(teamId: String, reference: String): ResultRow? =
+    Members.selectAll().where { (Members.teamId eq teamId) and (Members.id eq reference) }.singleOrNull()
+        ?: Members.selectAll().where { (Members.teamId eq teamId) and (Members.username eq reference) }.singleOrNull()
 internal fun readMember(row: ResultRow) = Member(row[Members.id], row[Members.username], Role.valueOf(row[Members.role]), row[Members.disabled], row[Members.mustChangePassword])

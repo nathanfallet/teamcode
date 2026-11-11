@@ -39,6 +39,12 @@ interface CloudSessionStore {
     /** Fails with 401 when the principal was revoked, expired, disabled or changed role. */
     suspend fun revalidate(actor: Principal)
     suspend fun member(teamId: String, memberId: String): Member?
+    /**
+     * A member named by [reference]: an id first, then a username, so a username that spells another member's id never
+     * captures them (the same rule as `WaitStore.memberByReference`). Any state is returned; the caller checks it.
+     * A store that knows ids only keeps this default.
+     */
+    suspend fun memberByReference(teamId: String, reference: String): Member? = member(teamId, reference)
     suspend fun profile(teamId: String, profileId: String): CloudProfile?
     suspend fun profileVersion(teamId: String, profileId: String, version: Int): CloudProfileSpec?
     suspend fun cluster(teamId: String, clusterId: String): CloudCluster?
@@ -181,6 +187,8 @@ interface CloudAdminStore {
     suspend fun profiles(actor: Principal): List<CloudProfile>
     /** A member of the actor's team, or null; read to list the profiles another member can use. */
     suspend fun member(actor: Principal, memberId: String): Member?
+    /** A member named by id or by username (id first); see [CloudSessionStore.memberByReference]. */
+    suspend fun memberByReference(actor: Principal, reference: String): Member? = member(actor, reference)
     /** Publishes a new immutable version; [expectedVersion] must equal the current one (0 for a new profile). */
     suspend fun saveProfile(actor: Principal, id: String?, expectedVersion: Int, name: String, spec: CloudProfileSpec, assignedMemberIds: Set<String>): CloudProfile
     suspend fun settings(actor: Principal): CloudSettings

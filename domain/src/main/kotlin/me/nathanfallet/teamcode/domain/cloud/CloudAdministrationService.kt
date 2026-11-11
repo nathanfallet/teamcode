@@ -29,11 +29,11 @@ class CloudAdministrationService(
      */
     suspend fun profiles(actor: Principal, memberId: String? = null): List<CloudProfile> {
         actor.requireCloudRead()
-        if (memberId == null || memberId == actor.member.id) return store.profiles(actor)
+        if (memberId == null || memberId == actor.member.id || memberId == actor.member.username) return store.profiles(actor)
         actor.requireCloudAdministrator()
-        val target = store.member(actor, memberId)
+        val target = store.memberByReference(actor, memberId)
         if (target == null || target.disabled || target.passwordChangeRequired)
-            throw TeamFailure("invalid_effective_member", 422, "The member must be an enabled team member who completed password setup.")
+            throw TeamFailure("invalid_effective_member", 422, "The member (named by id or username) must be an enabled team member who completed password setup.")
         return store.profiles(actor).filter { target.role.isAdministrator || target.id in it.assignedMemberIds }
     }
 

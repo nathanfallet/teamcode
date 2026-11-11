@@ -22,6 +22,7 @@ class SqlCloudSessionStore(private val database: Database) : CloudSessionStore {
     override suspend fun member(teamId: String, memberId: String): Member? = database.query {
         Members.selectAll().where { (Members.id eq memberId) and (Members.teamId eq teamId) }.singleOrNull()?.let(::readMember)
     }
+    override suspend fun memberByReference(teamId: String, reference: String): Member? = database.query { memberRowByReference(teamId, reference)?.let(::readMember) }
     override suspend fun profile(teamId: String, profileId: String): CloudProfile? = database.query { readProfile(teamId, profileId) }
     override suspend fun profileVersion(teamId: String, profileId: String, version: Int): CloudProfileSpec? = database.query {
         (CloudProfileVersions innerJoin CloudProfiles).select(CloudProfileVersions.spec).where {

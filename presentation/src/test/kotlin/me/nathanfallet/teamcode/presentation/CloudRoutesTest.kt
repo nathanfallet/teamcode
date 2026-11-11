@@ -31,6 +31,7 @@ class CloudRoutesTest {
         override suspend fun now() = clock++
         override suspend fun revalidate(actor: Principal) = Unit
         override suspend fun member(teamId: String, memberId: String) = listOf(admin, colleague).find { it.id == memberId }
+        override suspend fun memberByReference(teamId: String, reference: String) = member(teamId, reference) ?: listOf(admin, colleague).find { it.username == reference }
         override suspend fun profile(teamId: String, profileId: String) = listOf(profile, reserved).find { it.id == profileId }
         override suspend fun profileVersion(teamId: String, profileId: String, version: Int) = profile.spec
         override suspend fun cluster(teamId: String, clusterId: String) = CloudCluster("cluster-id", "default", "lab", "https://k8s.example.test", listOf("teamcode"), 10, "standard", 1, 0, null, 1, 1)
@@ -86,6 +87,7 @@ class CloudRoutesTest {
         /** As the SQL store: every profile for an administrator, the assigned ones for a member. */
         override suspend fun profiles(actor: Principal) = profiles.filter { actor.member.role.isAdministrator || actor.member.id in it.assignedMemberIds }
         override suspend fun member(actor: Principal, memberId: String) = listOf(admin, colleague).find { it.id == memberId }
+        override suspend fun memberByReference(actor: Principal, reference: String) = member(actor, reference) ?: listOf(admin, colleague).find { it.username == reference }
         override suspend fun saveProfile(actor: Principal, id: String?, expectedVersion: Int, name: String, spec: CloudProfileSpec, assignedMemberIds: Set<String>) = error("unused")
         override suspend fun settings(actor: Principal) = settings
         override suspend fun saveSettings(actor: Principal, settings: CloudSettings) = settings.also { this.settings = it }
@@ -116,6 +118,32 @@ class CloudRoutesTest {
         override suspend fun status() = GatewaySnapshot("test", 0, 0)
         override suspend fun forward(request: GenerationRequest, receive: suspend (GenerationHead, kotlinx.coroutines.flow.Flow<ByteArray>) -> Unit) =
             receive(GenerationHead(200, "text/event-stream"), emptyFlow())
+    }
+
+    @Test fun onBehalfOfNamesAMemberByIdOrByUsername() = testApplication {
+        val store = Store()
+        application { configureGateway(gateway, team = team(), cloudSessions = CloudSessionService(store), cloudAdmin = CloudAdministrationService(Admin(listOf(store.profile)), FakeCluster), publicOrigin = "http://localhost") }
+        suspend fun create(token: String, key: String, onBehalf: String) = client.post("/api/v1/cloud/sessions") {
+            bearerAuth(token); contentType(ContentType.Application.Json); setBody("""{"name":"Task","profileId":"profile-id"}""")
+            header(CloudHeaders.IDEMPOTENCY_KEY, key); header(CloudHeaders.ON_BEHALF_OF, onBehalf)
+        }
+        for ((key, who) in listOf("by-id" to "colleague-id", "by-name" to "colleague")) {
+            val response = create("admin-cloud", key, who)
+            assertEquals(HttpStatusCode.Accepted, response.status, who)
+            assertEquals("colleague-id", Serialization.json.decodeFromString<CloudSessionView>(response.bodyAsText()).ownerId, who)
+        }
+        // An unknown username is refused like an unknown id; a value that is neither an id nor a username shape is a bad request.
+        for (unknown in listOf("zzzz", "unknown-id", "z.z_z")) {
+            val refused = create("admin-cloud", "unknown-$unknown", unknown)
+            assertEquals(HttpStatusCode.UnprocessableEntity, refused.status, unknown); assertTrue("invalid_effective_member" in refused.bodyAsText(), unknown)
+        }
+        assertEquals(HttpStatusCode.BadRequest, create("admin-cloud", "bad-shape", "a b").status)
+        // Only an administrator names another member, whatever the spelling; a member's own username is themselves.
+        assertEquals(HttpStatusCode.Forbidden, create("colleague", "forbidden-name", "admin").status)
+        assertEquals("colleague-id", Serialization.json.decodeFromString<CloudSessionView>(create("colleague", "self-name", "colleague").bodyAsText()).ownerId)
+        suspend fun profiles(query: String) = client.get("/api/v1/cloud/profiles$query") { bearerAuth("admin-cloud") }
+        assertEquals(listOf("profile-id"), Serialization.json.decodeFromString<List<CloudProfileView>>(profiles("?member=colleague").bodyAsText()).map { it.id })
+        assertTrue("invalid_effective_member" in profiles("?member=zzzz").bodyAsText())
     }
 
     @Test fun sessionsRequireInteractiveCallersIdempotencyAndAdministratorDelegation() = testApplication {
