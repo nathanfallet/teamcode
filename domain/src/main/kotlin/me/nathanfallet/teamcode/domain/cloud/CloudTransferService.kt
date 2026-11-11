@@ -57,13 +57,16 @@ class CloudTransferService(
     /**
      * Who the caller can give a session to, for a picker: the team's enabled members who completed password setup
      * (the caller included: an administrator may take a session over), at most [MAX_RECIPIENTS]. Open to whoever may
-     * request a transfer: administrators, and members while `memberTransfers` is `offer`. A recipient listed here can
+     * request a transfer: administrators, and members while `memberTransfers` is `offer`; also an administrator's `team:read` or `admin:cloud` key, read-only. A recipient listed here can
      * still be refused for a given session (profile, access policy, models, quota), with `422 recipient_ineligible`.
      */
     suspend fun recipients(principal: Principal): List<CloudTransferRecipient> {
-        principal.requireCloudWrite()
+        // An unattended client reads the directory with an administrator's `team:read` or `admin:cloud` key; the setting below
+        // is about members offering sessions, so it does not apply to it. Everyone else needs the right to request a transfer.
+        val keyReader = principal.serviceScopes != null
+        if (keyReader) { principal.requireTeamDirectory(); principal.requireCloudTeamRead() } else principal.requireCloudWrite()
         store.revalidate(principal)
-        if (!principal.isCloudAdministrator && store.settings(principal.teamId).memberTransfers == MemberTransfers.DISABLED)
+        if (!keyReader && !principal.isCloudAdministrator && store.settings(principal.teamId).memberTransfers == MemberTransfers.DISABLED)
             throw TeamFailure("transfer_disabled", 403, "Your team does not allow members to transfer their sessions. Ask an administrator.")
         return transfers.recipients(principal.teamId, MAX_RECIPIENTS)
     }

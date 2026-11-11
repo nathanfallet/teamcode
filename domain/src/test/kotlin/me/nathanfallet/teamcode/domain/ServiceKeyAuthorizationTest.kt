@@ -23,6 +23,16 @@ class ServiceKeyAuthorizationTest {
         }
         for (action in CredentialAction.entries) authorize.check(admin, action)
     }
+    @Test fun theTeamDirectoryIsReadByTeamReadOrAdminCloudKeysOnly() {
+        val authorize = AuthorizeCredentialUseCase()
+        val admin = Principal(Member("admin", "admin", Role.ADMIN, false, false), "token", "team")
+        for (scope in ServiceScope.entries) {
+            val key = admin.copy(serviceScopes = setOf(scope))
+            if (scope == ServiceScope.TEAM_READ || scope == ServiceScope.ADMIN_CLOUD) authorize.check(key, CredentialAction.TEAM_DIRECTORY)
+            else assertEquals("credential_scope", assertFailsWith<TeamFailure> { authorize.check(key, CredentialAction.TEAM_DIRECTORY) }.code, scope.wire)
+        }
+        authorize.check(admin, CredentialAction.TEAM_DIRECTORY)
+    }
     @Test fun artifactScopesNestReadUnderWriteAndNeverReachAccessOrDeletion() {
         val authorize = AuthorizeCredentialUseCase()
         for (scope in ServiceScope.entries) {

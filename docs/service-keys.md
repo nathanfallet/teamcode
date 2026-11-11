@@ -40,6 +40,7 @@ Keys share the member's existing daily ledger, weight, assigned pool, concurrenc
 | Agent launches | `GET /api/v1/runs` with `?all=true` or `?member=`, and `GET /api/v1/runs/{id}` of any member ([agent sessions](agent-sessions.md)) |
 | Capacity and usage | `GET /api/v1/members/{id}/capacity`, `GET /api/v1/pools/budgets`, `GET /api/v1/mcp/usage` and `GET /api/v1/usage/tokens?all=true` (or `member=`) for every member |
 | Accounts and quotas | `GET /api/v1/accounts`, `GET /api/v1/quotas`, and every account by name and email at `GET /api/v1/pools/accounts` (the data behind `teamcode status` for an administrator). No provider credential is ever returned |
+| Member directory | `GET /api/v1/cloud/transfer-recipients`: each enabled member's `{id, username, administrator}`, at most 500 (`admin:cloud` keys read it too) |
 | Cloud sessions | Nothing of another member's: sessions, transcripts and transfers are the owner's, whatever the role or the key ([cloud sessions](cloud-sessions.md)) |
 
 Rules:

@@ -57,6 +57,8 @@ internal fun credentialAction(method: String, path: String, inferencePaths: Set<
     method == "GET" && path == "/api/v1/capacity" -> CredentialAction.USAGE_READ
     // Team-wide reads that an interactive administrator has: only a `team:read` key (an administrator's) passes the service layer.
     method == "GET" && teamReadPath.matches(path) -> CredentialAction.TEAM_READ
+    // The member directory a transfer picker uses: read by a `team:read` or `admin:cloud` key, no other key.
+    method == "GET" && path == "/api/v1/cloud/transfer-recipients" -> CredentialAction.TEAM_DIRECTORY
     method == "GET" && path == "/api/v1/pools/accounts" -> CredentialAction.USAGE_READ
     method == "GET" && path == "/api/v1/usage/tokens" -> CredentialAction.USAGE_READ
     method == "GET" && path == "/api/v1/policy/api-prices" -> CredentialAction.USAGE_READ

@@ -386,10 +386,24 @@ class CloudRoutesTest {
             assertEquals("""{"recipients":[{"id":"admin-id","username":"admin","administrator":true},{"id":"colleague-id","username":"colleague","administrator":false}]}""", body)
             assertEquals(listOf(CloudTransferService.MAX_RECIPIENTS), transferStore.recipientLimits.distinct())
             assertEquals(HttpStatusCode.Forbidden, client.get("/api/v1/cloud/transfer-recipients") { bearerAuth("service-admin") }.status, "A key without a cloud write scope lists nobody")
+            // The team directory for an unattended monitor: an administrator's key with team:read or admin:cloud, same payload, nothing else.
+            assertEquals(CredentialAction.TEAM_DIRECTORY, credentialAction("GET", "/api/v1/cloud/transfer-recipients", emptySet()))
+            assertEquals(CredentialAction.INTERACTIVE, credentialAction("POST", "/api/v1/cloud/transfer-recipients", emptySet()))
+            for (key in listOf("admin-read", "admin-cloud", "admin-read-write")) {
+                assertEquals(body, client.get("/api/v1/cloud/transfer-recipients") { bearerAuth(key) }.bodyAsText(), key)
+            }
+            assertEquals(listOf(CloudTransferRecipientView("admin-id", "admin", true), CloudTransferRecipientView("colleague-id", "colleague", false)),
+                TeamCodeClient("http://localhost", { "admin-read" }) { config -> createClient { config(this) } }.use { it.cloudTransferRecipients() })
+            for (key in listOf("admin-write", "admin-usage", "colleague-write", "colleague-read")) {
+                val refused = client.get("/api/v1/cloud/transfer-recipients") { bearerAuth(key) }
+                assertEquals(HttpStatusCode.Forbidden, refused.status, key); assertTrue("credential_scope" in refused.bodyAsText(), key)
+            }
             // A team that keeps transfers to administrators does not show members its directory.
             store.cloudSettings = CloudSettings(memberTransfers = MemberTransfers.DISABLED)
             assertEquals("transfer_disabled", assertFailsWith<me.nathanfallet.teamcode.client.TeamCodeException> { member.cloudTransferRecipients() }.code)
             assertEquals(2, Serialization.json.decodeFromString<CloudTransferRecipientsView>(client.get("/api/v1/cloud/transfer-recipients") { bearerAuth("admin") }.bodyAsText()).recipients.size)
+            // The setting is about members offering their sessions: a team reader's directory does not depend on it.
+            for (key in listOf("admin-read", "admin-cloud")) assertEquals(2, Serialization.json.decodeFromString<CloudTransferRecipientsView>(client.get("/api/v1/cloud/transfer-recipients") { bearerAuth(key) }.bodyAsText()).recipients.size, key)
         } finally { member.close() }
     }
 
