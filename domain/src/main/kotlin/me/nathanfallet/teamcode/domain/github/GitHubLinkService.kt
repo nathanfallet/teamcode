@@ -103,14 +103,17 @@ class GitHubLinkService(
      * Starts the web flow (state and PKCE). The returned nonce must be set as a cookie in the member's browser: the
      * callback is accepted only from that browser, so nobody can bind their own TeamCode member to someone else's
      * GitHub authorization by sending them a link.
+     *
+     * With [memberId], an administrator links the GitHub account signed in to GitHub in their own browser to that
+     * member (a service account nobody signs in to, for example): the attempt, and so the link, belong to the member.
      */
-    suspend fun startWeb(actor: Principal, redirectUri: String): GitHubWebLink {
-        member(actor)
+    suspend fun startWeb(actor: Principal, redirectUri: String, memberId: String? = null): GitHubWebLink {
+        val target = target(actor, memberId)
         val app = apps.credentials(actor.teamId) ?: notConfigured()
         val state = token(); val verifier = token(); val nonce = token()
         val now = apps.now()
         val expiresAt = now + WEB_ATTEMPT_MILLIS
-        links.startAttempt(actor, GitHubLinkAttempt(sha256(state), actor.teamId, actor.member.id, GitHubLinkKind.WEB, verifier, sha256(nonce), 0, now, expiresAt))
+        links.startAttempt(actor, GitHubLinkAttempt(sha256(state), actor.teamId, target, GitHubLinkKind.WEB, verifier, sha256(nonce), 0, now, expiresAt))
         return GitHubWebLink(github.authorizationUrl(app.clientId, redirectUri, state, challenge(verifier)), nonce, expiresAt)
     }
 

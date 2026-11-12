@@ -150,6 +150,19 @@ class GitHubLinkPersistenceTest {
                     AuditEvents.select(AuditEvents.details).where { AuditEvents.action eq "github.link.reconnect_required" }.orderBy(AuditEvents.id).map { it[AuditEvents.details] }
                 })
 
+                // An administrator links another member (a service account nobody signs in to) from their own browser:
+                // the attempt and the link belong to that member, and the journal records who started it.
+                assertEquals("forbidden", assertFailsWith<TeamFailure> { ra.service.startWeb(member, "https://teamcode.test/dashboard/github/callback", other.member.id) }.code)
+                github.identity = GitHubIdentity(77, "robot")
+                val forOther = ra.service.startWeb(admin, "https://teamcode.test/dashboard/github/callback", other.member.id)
+                assertEquals(other.member.id, a.query { GitHubLinkAttempts.selectAll().single()[GitHubLinkAttempts.memberId] })
+                val otherState = Regex("state=([^&]+)").find(forOther.authorizationUrl)!!.groupValues[1]
+                assertEquals("robot", rb.service.completeWeb(otherState, "code", null, forOther.browserNonce, "https://teamcode.test/dashboard/github/callback").link!!.identity.login)
+                assertNull(ra.store.link(admin.teamId, admin.member.id))
+                val started = a.query { AuditEvents.selectAll().where { AuditEvents.action eq "github.link.started" }.single() }
+                assertEquals(admin.member.id, started[AuditEvents.actorId]); assertEquals(other.member.id, started[AuditEvents.subjectId])
+                github.identity = GitHubIdentity(42, "octo")
+
                 // Unlink: the row and pending attempts are gone, the token is revoked, the journal records each step.
                 ra.service.startDevice(member)
                 rb.service.unlink(admin, member.member.id)
@@ -158,7 +171,7 @@ class GitHubLinkPersistenceTest {
                 assertTrue("ghu_spent" in github.revoked)
                 val actions = a.query { AuditEvents.select(AuditEvents.action).where { AuditEvents.action like "github.%" }.map { it[AuditEvents.action] } }
                 assertEquals(listOf("github.app.saved", "github.app.saved", "github.link.created", "github.link.created", "github.link.created",
-                    "github.link.reconnect_required", "github.link.created", "github.link.reconnect_required", "github.link.removed"), actions)
+                    "github.link.reconnect_required", "github.link.created", "github.link.reconnect_required", "github.link.started", "github.link.created", "github.link.removed"), actions)
             } }
         }
     }

@@ -97,7 +97,7 @@ internal fun cloudStartsWork(method: String, path: String): Boolean {
     fun matches(vararg pattern: String) = segments.size == pattern.size && pattern.indices.all { pattern[it] == "*" || segments[it] == null || segments[it] == pattern[it] }
     fun under(vararg prefix: String) = segments.size > prefix.size && prefix.indices.all { segments[it] == null || segments[it] == prefix[it] }
     return (method == "POST" && WORK_ROUTES.any { matches(*it) }) || (method == "POST" && matches("api", "v1", "github", "link", "device")) ||
-        matches(*GITHUB_LINK_PATH.split('/').filter { it.isNotEmpty() }.toTypedArray())
+        matches(*GITHUB_LINK_PATH.split('/').filter { it.isNotEmpty() }.toTypedArray()) || matches("dashboard", "github", "links", "*", "link")
 }
 
 /** Every `POST` that starts or keeps up new cloud work; reads, pauses, interrupts and deletions are not listed on purpose. */
