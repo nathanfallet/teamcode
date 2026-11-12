@@ -4,6 +4,7 @@ import kotlinx.coroutines.*
 import me.nathanfallet.teamcode.domain.cloud.*
 import me.nathanfallet.teamcode.domain.cloud.CloudSessionState.*
 import me.nathanfallet.teamcode.domain.team.*
+import me.nathanfallet.teamcode.domain.waits.*
 import me.nathanfallet.teamcode.infrastructure.database.*
 import me.nathanfallet.teamcode.infrastructure.database.Database
 import me.nathanfallet.teamcode.infrastructure.database.tables.*
@@ -143,6 +144,19 @@ class CloudTransferPersistenceTest {
         // Artifacts the session's agent published: created in it, updated in it, already shared with the recipient, deleted, the recipient's own, a draft never committed, or a third member's it edited.
         val shared = sessionArtifacts(ra, teamId, s.id, from, to, t.admin.member.id)
 
+        // Waits of the session: two open ones asked of the owner, one the owner answered already, one open the owner asked of a third member (the administrator).
+        val waits = WaitService(SqlWaitStore(ra.database), object : WaitSessions {
+            override suspend fun authorize(actor: Principal, sessionId: String) = ra.conversation.authorizeWaitAnswer(actor, sessionId)
+            override suspend fun deliver(actor: Principal, sessionId: String, text: String, clientKey: String) = ra.conversation.queueWaitAnswer(actor, sessionId, text, clientKey)
+        })
+        fun ask(title: String) = WaitDefinition(s.id, title, actions = listOf(WaitAction("yes", "Yes"), WaitAction("no", "No")))
+        val ownersFirst = waits.create(t.owner, ask("Which database?"), "tw-1").wait
+        val ownersSecond = waits.create(t.owner, ask("Which cache?"), "tw-2").wait
+        val ownersAnswered = waits.create(t.owner, ask("Already answered"), "tw-3").wait
+        waits.answer(t.owner, ownersAnswered.id, "yes", emptyMap())
+        val thirds = waits.create(t.owner, ask("For the administrator").copy(assigneeId = t.admin.member.id), "tw-4").wait
+        assertEquals(setOf(ownersFirst.id, ownersSecond.id), waits.list(t.owner, null, "open", null, 50, session = s.id).waits.filter { it.assigneeId == from }.map { it.id }.toSet())
+
         // Both replicas accept at once: one acceptance, the same transfer for both.
         val accepted = coroutineScope { listOf(ra, rb).map { r -> async(Dispatchers.IO) { r.transfers.accept(t.recipient, null, offer.id, null) } }.awaitAll() }
         assertTrue(accepted.all { it.id == offer.id && it.state == CloudTransferState.ACCEPTED && it.resume }, "Acceptance keeps the offer's resume")
@@ -173,6 +187,18 @@ class CloudTransferPersistenceTest {
         current = ra.store.find(teamId, s.id)!!
         assertEquals(to, current.ownerId)
         assertNull(ra.team.authenticate(former.token), "No credential of the former owner survives the boundary")
+        // The open waits asked of the former owner moved with the session; the answered one and the third member's stayed as they were.
+        val moved = waits.list(t.recipient, null, "open", null, 50, session = s.id).waits.associate { it.id to it.assigneeId }
+        assertEquals(mapOf(ownersFirst.id to to, ownersSecond.id to to, thirds.id to t.admin.member.id), moved)
+        assertEquals(WaitStatus.RESOLVED to from, waits.get(t.owner, ownersAnswered.id).let { it.status to it.assigneeId }, "A resolved wait is history")
+        assertEquals(emptyList(), waits.list(t.owner, null, "open", null, 50).waits.filter { it.sessionId == s.id }, "Nothing is left waiting for the former owner")
+        assertEquals(WaitStatus.OPEN, waits.get(t.recipient, ownersFirst.id).status, "Still open, answerable by the recipient")
+        ra.database.query {
+            fun count(action: String) = AuditEvents.selectAll().where { (AuditEvents.action eq action) and (AuditEvents.subjectId inList listOf(ownersFirst.id, ownersSecond.id, thirds.id, ownersAnswered.id)) }.count()
+            assertEquals(2L, count("wait.reassigned"), "One audit row per moved wait")
+            val feed = TeamEvents.selectAll().where { TeamEvents.subjectId inList listOf(ownersFirst.id, ownersSecond.id) }.map { Triple(it[TeamEvents.type], it[TeamEvents.subjectId], it[TeamEvents.ownerId]) }
+            assertTrue(Triple("cloud.wait.cancelled", ownersFirst.id, from) in feed && Triple("cloud.wait.created", ownersFirst.id, to) in feed, "The feed tells both members: $feed")
+        }
         assertEquals(RESUMING to DesiredState.RUNNING, current.state to current.desiredState, "The recipient asked to resume")
         assertNull(current.transferId)
         val completed = ra.transfers.get(t.recipient, offer.id)
@@ -229,6 +255,8 @@ class CloudTransferPersistenceTest {
         assertEquals(listOf(2 to to, 1 to from), ra.sessions.executions(t.recipient, s.id).map { it.epoch to it.ownerId })
         assertEquals(to, ra.team.authenticate(rb.inference.issue(teamId, s.id, 2).token)?.member?.id, "The recipient's execution is charged to the recipient")
         assertEquals(0, ra.agent.inputs(teamId, s.id, 2, 0).size, "The former owner's unconsumed message never reaches the recipient's agent")
+        // The recipient answers the wait that moved to them.
+        assertEquals(WaitStatus.RESOLVED, waits.answer(t.recipient, ownersFirst.id, "no", emptyMap()).status)
         failure("execution_fenced") { ra.runner.heartbeat(teamId, s.id, 1, ready = true) }
         assertEquals(profile.id, ra.store.find(teamId, s.id)!!.profileId)
     }

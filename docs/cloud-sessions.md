@@ -402,6 +402,7 @@ In the owner-change transaction:
 - `ownerId` becomes the recipient; the transfer becomes `completed` with `atEpoch` (the last epoch run for the former owner) and `eventSeq`.
 - Every attachment lease of the session is removed. The former owner's `attach` stops at its next renewal, and their transcript stream ends with `event: denied` at its next access check.
 - Messages not yet consumed follow the transfer's `pendingInputs`: `cancel` marks them `cancelled` with reason `transferred` (each with its `input` transcript event), `keep` queues them for the recipient's next execution. Wake requests are cleared either way: with `keep`, a former owner's message is delivered to the recipient's agent when the recipient resumes the session (or at once with `resume`), but it never resumes the session by itself.
+- The open waits asked of the former owner are asked of the recipient instead (`wait.reassigned`, [waits](waits.md#when-a-session-changes-owner)); a wait asked of a third member and the answered ones stay as they were.
 - A server-written `transfer` event `{transferId, fromMemberId, toMemberId, atEpoch}` is appended to the transcript.
 - `cloud.session.transferred` is journaled with the initiator, the recipient and the former owner.
 - Without `resume`, the session stays `paused` and its expiry restarts from the recipient's full paused retention. With `resume`, it moves to `resuming` and starts for the recipient.
