@@ -4,6 +4,8 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import me.nathanfallet.teamcode.domain.cloud.*
 import me.nathanfallet.teamcode.domain.team.*
+import me.nathanfallet.teamcode.domain.waits.WaitRules
+import me.nathanfallet.teamcode.domain.waits.WaitStatus
 import me.nathanfallet.teamcode.infrastructure.database.tables.*
 import org.jetbrains.exposed.v1.core.*
 import org.jetbrains.exposed.v1.core.statements.UpdateBuilder
@@ -133,6 +135,8 @@ class SqlCloudTransferStore(private val database: Database) : CloudTransferStore
         // The pause already revoked the former owner's inference credentials with their execution; nothing issued
         // for them may survive the change of owner.
         revokeInferenceCredentials(expected.id)
+        // The waits still open on the former owner move with the session: the recipient is the one asked now.
+        moveOpenWaits(expected, transfer.fromMemberId, transfer.toMemberId, now)
         // The former owner's artifacts from the session stay theirs; the recipient becomes an editor of each, to continue them.
         grantSessionArtifacts(expected.teamId, expected.id, transfer.fromMemberId, transfer.toMemberId, transfer.initiatedBy.initiatorId, now)
         val event = buildJsonObject {
@@ -156,6 +160,26 @@ class SqlCloudTransferStore(private val database: Database) : CloudTransferStore
         val initiator = transfer.initiatedBy
         audit(expected.teamId, initiator.initiatorId, "cloud.session.transferred", expected.id, transfer.toMemberId, initiator.credentialId, transfer.fromMemberId)
         TransferCompletion.Completed(done, next.copy(generation = expected.generation + 1))
+    }
+
+    /**
+     * Hands the session's open waits that were asked of [from] (the owner, by default: `ask_human`, a todo drop, a failed turn, the
+     * timers) to [to], who owns the session now. A wait asked of a third person stays with them. Each is audited as `wait.reassigned`
+     * and the feed tells the former assignee it is gone (`cloud.wait.cancelled`, so their "Waiting for you" empties) and the recipient
+     * it is theirs (`cloud.wait.created`, which also notifies them). One read, one update through the `wait_session` index, one audit
+     * row per wait (a session holds at most [WaitRules.MAX_OPEN_PER_SESSION] open waits) and one batch of feed events.
+     */
+    private fun JdbcTransaction.moveOpenWaits(session: CloudSession, from: String, to: String, at: Long) {
+        val moved = Waits.select(Waits.id, Waits.kind).where {
+            (Waits.sessionId eq session.id) and (Waits.status eq WaitStatus.OPEN.wire) and (Waits.assigneeId eq from)
+        }.limit(WaitRules.MAX_OPEN_PER_SESSION).toList()
+        if (moved.isEmpty()) return
+        Waits.update({ (Waits.id inList moved.map { it[Waits.id] }) and (Waits.status eq WaitStatus.OPEN.wire) and (Waits.assigneeId eq from) }) { it[assigneeId] = to }
+        moved.forEach { audit(session.teamId, "system", "wait.reassigned", it[Waits.id], to, null, from) }
+        fun event(type: TeamEventType, row: ResultRow, member: String) = PendingTeamEvent(type, row[Waits.id], member, buildJsonObject {
+            put("waitId", row[Waits.id]); put("sessionId", session.id); put("waitKind", row[Waits.kind]); put("assigneeId", member); put("kind", session.kind.wire)
+        }, at)
+        publishTeamEvents(session.teamId, moved.map { event(TeamEventType.WAIT_CANCELLED, it, from) } + moved.map { event(TeamEventType.WAIT_CREATED, it, to) })
     }
 
     override suspend fun expireOffers(limit: Int): Int = database.query {
