@@ -13,6 +13,18 @@ interface SkillStore {
     /** Administrator view of a skill's versions, newest first. */
     suspend fun versions(actor: Principal, name: String): Pair<Skill, List<SkillVersion>>
 
+    /** The caller's own personal skills, newest update first. Interactive members only. */
+    suspend fun mine(actor: Principal): List<Skill>
+
+    /** A personal skill's versions, for its owner. */
+    suspend fun personalVersions(actor: Principal, name: String): Pair<Skill, List<SkillVersion>>
+
+    /**
+     * Turns a personal skill into a team skill after an administrator reviewed it: the owner is cleared, the pinned
+     * version and the audience are reset, so nothing is delivered until the administrator pins a version.
+     */
+    suspend fun promote(actor: Principal, name: String): Skill
+
     /**
      * Creates the skill on its first publication and stores an immutable version. Republishing the same version with
      * the same digest is an idempotent success; a different digest is a conflict. Pins the version in the same
@@ -21,6 +33,18 @@ interface SkillStore {
      * caller has checked [requireSkillAudienceWriter]. Without it, the audience is left as it is.
      */
     suspend fun publish(actor: Principal, name: String, version: String, artifact: SkillArtifact, pin: Boolean = false, allMembers: Boolean = false): SkillPublication
+
+    /**
+     * Publishes a version of one of the caller's personal skills, creating it on the first publication. The name must
+     * be free in the whole team. With [pin] the owner approves the version for themself.
+     */
+    suspend fun publishPersonal(actor: Principal, name: String, version: String, artifact: SkillArtifact, pin: Boolean = false): SkillPublication
+
+    /** Pin, unpin, retire and restore for the owner of a personal skill. */
+    suspend fun pinPersonal(actor: Principal, name: String, version: String): Skill
+    suspend fun unpinPersonal(actor: Principal, name: String): Skill
+    suspend fun retirePersonal(actor: Principal, name: String): Skill
+    suspend fun restorePersonal(actor: Principal, name: String): Skill
 
     /**
      * Approves [version] as the delivered version. Pinning an older version is a rollback. Allowed to skill publishers
@@ -61,5 +85,7 @@ interface SkillStore {
     companion object {
         const val SKILL_LIMIT = 500L
         const val VERSION_LIMIT = 200L
+        /** Personal skills per member. */
+        const val PERSONAL_LIMIT = 50L
     }
 }

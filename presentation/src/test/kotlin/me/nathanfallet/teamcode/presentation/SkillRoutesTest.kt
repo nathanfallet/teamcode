@@ -22,6 +22,14 @@ class SkillRoutesTest {
         val reports = mutableListOf<SkillInstallationReport>()
         private fun skill(name: String) = skills[name] ?: throw TeamFailure("not_found", 404, "Skill not found.")
         private fun version(name: String, label: String) = versions[name]?.find { it.first.version == label }?.first ?: throw TeamFailure("not_found", 404, "Skill version not found.")
+        override suspend fun mine(actor: Principal) = error("unused")
+        override suspend fun personalVersions(actor: Principal, name: String) = error("unused")
+        override suspend fun promote(actor: Principal, name: String) = error("unused")
+        override suspend fun publishPersonal(actor: Principal, name: String, version: String, artifact: SkillArtifact, pin: Boolean) = error("unused")
+        override suspend fun pinPersonal(actor: Principal, name: String, version: String) = error("unused")
+        override suspend fun unpinPersonal(actor: Principal, name: String) = error("unused")
+        override suspend fun retirePersonal(actor: Principal, name: String) = error("unused")
+        override suspend fun restorePersonal(actor: Principal, name: String) = error("unused")
         override suspend fun catalog(actor: Principal): List<Skill> { actor.requireAdmin(); return skills.values.toList() }
         override suspend fun versions(actor: Principal, name: String): Pair<Skill, List<SkillVersion>> { actor.requireAdmin(); return skill(name) to versions[name].orEmpty().map { it.first } }
         override suspend fun publish(actor: Principal, name: String, version: String, artifact: SkillArtifact, pin: Boolean, allMembers: Boolean): SkillPublication {
@@ -114,6 +122,12 @@ class SkillRoutesTest {
         assertEquals(HttpStatusCode.OK, call(HttpMethod.Post, "/api/v1/skills/review/versions", "service-publish", publishBody("1", files)).status)
         assertEquals(HttpStatusCode.Conflict, call(HttpMethod.Post, "/api/v1/skills/review/versions", "service-publish", publishBody("1", files.take(1))).status)
         assertEquals(HttpStatusCode.Forbidden, call(HttpMethod.Get, "/api/v1/skills", "service-publish").status)
+        // A member's personal skills are interactive only: no service key, whatever its scopes, reaches them.
+        for (token in listOf("service-publish", "service-read", "service-inference")) {
+            assertEquals(HttpStatusCode.Forbidden, call(HttpMethod.Get, "/api/v1/me/skills", token).status)
+            assertEquals(HttpStatusCode.Forbidden, call(HttpMethod.Post, "/api/v1/me/skills/mine/versions", token, publishBody("1", files)).status)
+        }
+        assertEquals(HttpStatusCode.Forbidden, call(HttpMethod.Post, "/api/v1/skills/review/promote", "member").status)
         assertEquals(HttpStatusCode.Forbidden, call(HttpMethod.Put, "/api/v1/skills/review/pin", "service-read", """{"version":"1"}""").status)
         assertEquals(HttpStatusCode.Forbidden, call(HttpMethod.Delete, "/api/v1/skills/review/pin", "service-publish").status)
 
