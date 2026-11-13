@@ -181,13 +181,15 @@ private class TodoMcpCommand : SuspendingCliktCommand(name = "todo") {
 
 private class MemoryMcpCommand : SuspendingCliktCommand(name = "memory") {
     override val hiddenFromHelp = true
+    private val session by option("--session", help = "The session team entries are proposed from.")
     private val run by option("--run", help = "The agent run this server belongs to.")
     override fun help(context: Context) = "The stdio MCP server an agent reads and writes the team's and its owner's memory with (memory_index, memory_read, memory_write…). " +
         "teamcode run and the session runners add it to Claude Code and Codex; its instructions carry the memory index."
     override suspend fun run() {
+        session?.let { if (!Regex("[a-zA-Z0-9-]{1,36}").matches(it)) throw CliUserException("--session must be a session id.") }
         run?.let { if (!RunIdentifiers.isValid(it)) throw CliUserException("--run must be a run UUID.") }
         relayClient("TEAMCODE_MEMORY", run).use {
-            val server = MemoryMcpServer(it)
+            val server = MemoryMcpServer(it, session)
             while (true) {
                 val line = readlnOrNull() ?: break
                 if (line.isBlank()) continue

@@ -23,6 +23,8 @@ object Memories : Table("memories") {
     val authorId = varchar("author_id", 36)
     val sessionId = varchar("session_id", 36).nullable()
     val supersedesId = varchar("supersedes_id", 36).nullable()
+    /** The wait asking the session's owner about a proposal; null for any other entry. */
+    val proposalWaitId = varchar("proposal_wait_id", 36).nullable()
     val expiresAt = long("expires_at").nullable()
     val version = integer("version")
     val createdAt = long("created_at")
@@ -30,7 +32,11 @@ object Memories : Table("memories") {
     val lastReadAt = long("last_read_at").nullable()
     val readCount = integer("read_count").default(0)
     override val primaryKey = PrimaryKey(id)
-    init { index("memory_visible", false, teamId, scope, ownerId, status, updatedAt) }
+    init {
+        index("memory_visible", false, teamId, scope, ownerId, status, updatedAt)
+        // Settling proposals and purging rejected entries read by status across teams, oldest first.
+        index("memory_status", false, status, updatedAt)
+    }
 }
 
 /**

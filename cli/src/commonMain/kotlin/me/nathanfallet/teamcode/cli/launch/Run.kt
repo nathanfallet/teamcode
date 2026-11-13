@@ -251,7 +251,7 @@ private class LaunchAgent(private val agent: String) : SuspendingCliktCommand(na
         val waits = local?.let { WaitsMcp(command, it.sessionId) }
         val todo = local?.let { TodoMcp(command, it.sessionId) }
         // The memory tools need no session: the capability of the server is enough.
-        val memory = if (memoryServed(client)) MemoryMcp(command) else null
+        val memory = if (memoryServed(client)) MemoryMcp(command, local?.sessionId) else null
         val ownSettings = options.any { it == "--settings" || it.startsWith("--settings=") }
         if (local != null && agent == "claude" && ownSettings) echo("Your own --settings replace TeamCode's hooks: the todo does not block a stop and ask_human does not wake the agent in this run.", err = true)
         val hooks = if (local == null || agent != "claude" || ownSettings || runId == null) emptyList() else cloudHookSettings(emptyList(),
@@ -392,7 +392,9 @@ internal class TodoMcp(val command: String, val sessionId: String) {
  * `teamcode mcp memory`, started by the agent itself as a stdio server: [command] is this TeamCode executable. It needs no session, only
  * the relay and its token, so a local run, a cloud session and a remote host session all have it when the server serves the memory.
  */
-internal class MemoryMcp(val command: String)
+internal class MemoryMcp(val command: String, val sessionId: String? = null) {
+    init { require(sessionId == null || Regex("[a-zA-Z0-9-]{1,36}").matches(sessionId)) { "Invalid session." } }
+}
 
 /**
  * The caller's options without `--append-system-prompt`, and the text Claude Code would have used (the last one), so it
@@ -484,7 +486,7 @@ internal fun agentLaunch(agent: String, arguments: List<String>, port: Int, toke
     // The todo tools reach the same proxy's todo relay, which relays this session's list and nothing else.
     val todoArguments = todo?.let { listOf("mcp", "todo", "--session", it.sessionId) + (runId?.let { id -> listOf("--run", id) } ?: emptyList()) }
     // The memory tools reach the same proxy's memory relay, which relays the memory routes and nothing else.
-    val memoryArguments = memory?.let { listOf("mcp", "memory") + (runId?.let { id -> listOf("--run", id) } ?: emptyList()) }
+    val memoryArguments = memory?.let { listOf("mcp", "memory") + (it.sessionId?.let { id -> listOf("--session", id) } ?: emptyList()) + (runId?.let { id -> listOf("--run", id) } ?: emptyList()) }
     val relay = "http://127.0.0.1:$port"
     // What TeamCode adds to the agent's instructions: who runs the session ([OwnerIdentity]), then the artifact and wait tools.
     val instructions = listOfNotNull(identity, ARTIFACTS_INSTRUCTIONS.takeIf { artifacts != null }, WAITS_INSTRUCTIONS.takeIf { waits != null }, WORKFLOW_INSTRUCTIONS.takeIf { workflow != null }, me.nathanfallet.teamcode.cli.todo.TodoDocs.PROMPT.takeIf { todo != null }, me.nathanfallet.teamcode.cli.memory.MemoryDocs.PROMPT.takeIf { memory != null })

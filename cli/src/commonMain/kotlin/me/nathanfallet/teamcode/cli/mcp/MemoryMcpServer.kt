@@ -20,7 +20,7 @@ import me.nathanfallet.teamcode.client.TeamCodeClient
  * read on demand. What a caller may see or write is decided by TeamCode, not here: a personal entry is its owner's alone, and an agent writes
  * personal entries only.
  */
-internal class MemoryMcpServer(private val client: TeamCodeClient) {
+internal class MemoryMcpServer(private val client: TeamCodeClient, private val sessionId: String? = null) {
     /** Handles one JSON-RPC line; null for a notification, which gets no answer. */
     suspend fun handle(line: String): String? {
         val message = try { Json.parseToJsonElement(line) as? JsonObject } catch (_: Exception) { null }
@@ -77,7 +77,8 @@ internal class MemoryMcpServer(private val client: TeamCodeClient) {
         } catch (error: Exception) {
             McpTools.text(McpTools.describe(error) { refused ->
                 when (refused.code) {
-                    "memory_team_forbidden" -> "An agent cannot write the team's memory yet: write it as personal (scope personal) and tell the member."
+                    "memory_team_forbidden", "memory_proposal_session" -> "A team entry could not be proposed from here: write it as personal (scope personal) and tell the member."
+                    "memory_proposals_limit" -> "Too many of your proposals are waiting for an answer: wait for them to be answered before proposing more."
                     "memory_secret" -> "The text looks like a credential: remove it and write the fact without it."
                     "version_conflict", "memory_conflict" -> "The entry changed since you read it: read it again and retry with its new version."
                     else -> null
@@ -111,10 +112,13 @@ internal class MemoryMcpServer(private val client: TeamCodeClient) {
         if (scope !in SCOPES) throw CliUserException("scope is personal or team.")
         val request = CreateMemoryRequest(
             arguments.string("title") ?: throw CliUserException("title is required."), arguments.string("summary") ?: throw CliUserException("summary is required."),
-            arguments.string("content") ?: throw CliUserException("content is required."), scope, tags(arguments), strings(arguments, "refs"), arguments.long("expiresAt"),
+            arguments.string("content") ?: throw CliUserException("content is required."), scope, tags(arguments), strings(arguments, "refs"), arguments.long("expiresAt"), sessionId,
         )
         val entry = client.createMemory(request)
-        return buildJsonObject { put("id", entry.id); put("scope", entry.scope); put("version", entry.version); put("status", entry.status) }.toString()
+        return buildJsonObject {
+            put("id", entry.id); put("scope", entry.scope); put("version", entry.version); put("status", entry.status)
+            if (entry.status == "proposed") put("note", "This is a proposal: your owner was asked whether it joins the team's memory, and the answer reaches you as a message. Until then only the proposal exists; do not rely on it being read by others.")
+        }.toString()
     }
 
     private suspend fun update(arguments: JsonObject): String {
@@ -179,7 +183,7 @@ internal class MemoryMcpServer(private val client: TeamCodeClient) {
             addJsonObject {
                 put("name", "memory_write")
                 put("description", "Save a note for later sessions. Personal by default (this member only). Never include a secret: it is refused. " +
-                    "An agent cannot write a team entry yet.")
+                    "A team entry (scope team) is only a proposal: your owner is asked, may edit it, and it joins the team's memory once accepted.")
                 put("inputSchema", schema(listOf("title", "summary", "content")) {
                     text("title", "A short title, at most 160 characters.")
                     text("summary", "One or two sentences telling whether to read the content, at most 300 characters.")

@@ -19,10 +19,19 @@ class MemoryRoutesTest {
         }
         override suspend fun search(actor: Principal, terms: List<String>, tags: List<String>, limit: Int) = listOf(MemoryIndexEntry("e2", MemoryScope.PERSONAL, terms.joinToString(), "S", tags, 6))
         override suspend fun read(actor: Principal, id: String) = error("unused")
-        override suspend fun create(actor: Principal, entry: NewMemory, origin: MemoryOrigin, sessionId: String?): MemoryEntry {
-            created += actor to entry
-            return MemoryEntry("new", entry.scope, null, entry.title, entry.summary, entry.content, entry.tags, entry.refs, MemoryStatus.ACTIVE, origin, "a", sessionId, null, null, 1, 1, 1, null, 0)
+        val statuses = mutableListOf<MemoryStatus>()
+        val decisions = mutableListOf<Pair<String, Boolean>>()
+        override suspend fun create(actor: Principal, entry: NewMemory, origin: MemoryOrigin, sessionId: String?, status: MemoryStatus): MemoryEntry {
+            created += actor to entry; statuses += status
+            return MemoryEntry("new", entry.scope, null, entry.title, entry.summary, entry.content, entry.tags, entry.refs, status, origin, "a", sessionId, null, null, 1, 1, 1, null, 0)
         }
+        override suspend fun attachProposalWait(id: String, waitId: String) = Unit
+        override suspend fun proposals(actor: Principal, limit: Int) = emptyList<MemoryEntry>()
+        override suspend fun decide(actor: Principal, id: String, accept: Boolean): MemoryEntry {
+            decisions += id to accept
+            return MemoryEntry(id, MemoryScope.TEAM, null, "T", "S", "C", emptyList(), emptyList(), if (accept) MemoryStatus.ACTIVE else MemoryStatus.REJECTED, MemoryOrigin.AGENT, "a", null, null, null, 2, 1, 1, null, 0)
+        }
+        override suspend fun settle(limit: Int) = 0
         override suspend fun update(actor: Principal, id: String, update: MemoryUpdate) = error("unused")
         override suspend fun delete(actor: Principal, id: String) = Unit
     }
@@ -76,5 +85,28 @@ class MemoryRoutesTest {
         assertEquals(HttpStatusCode.BadRequest, client.post("/api/v1/memory") { bearerAuth("member"); contentType(json); setBody(create.replace("Exposed only", "")) }.status)
         assertTrue(store.created.isEmpty())
         assertTrue(client.get("/api/v1/capabilities") { bearerAuth("member") }.bodyAsText().contains("memory.v1"))
+    }
+
+    @Test fun aCallThroughAnAgentRelayProposesTheTeamEntryAndOnlyAMemberDecides() = testApplication {
+        val store = Store()
+        val waits = object : MemoryProposalWaits {
+            override suspend fun session(actor: Principal, requested: String?) = requested ?: throw TeamFailure("memory_proposal_session", 400, "no session")
+            override suspend fun open(actor: Principal, sessionId: String, entry: MemoryEntry) = "wait-1"
+        }
+        application { configureGateway(gateway, team = team(), memory = MemoryService(store, waits)) }
+        val team = create.replace("{", """{"scope":"team","sessionId":"s-1",""")
+        // The member's own login, through the agent relay's header, proposes; without the header it writes directly.
+        val proposed = client.post("/api/v1/memory") { bearerAuth("member"); header("x-teamcode-origin", "agent"); contentType(json); setBody(team) }
+        assertEquals(HttpStatusCode.Created, proposed.status); assertTrue(proposed.bodyAsText().contains(""""status":"proposed""""))
+        client.post("/api/v1/memory") { bearerAuth("member"); contentType(json); setBody(team) }
+        assertEquals(listOf(MemoryStatus.PROPOSED, MemoryStatus.ACTIVE), store.statuses)
+        // No session to ask about: refused before anything is stored.
+        assertEquals(HttpStatusCode.BadRequest, client.post("/api/v1/memory") { bearerAuth("member"); header("x-teamcode-origin", "agent"); contentType(json); setBody(create.replace("{", """{"scope":"team",""")) }.status)
+        // Deciding is for a signed-in member; keys, even with `memory`, are refused.
+        assertEquals(HttpStatusCode.Forbidden, client.post("/api/v1/memory/proposals/p1/accept") { bearerAuth("memory-key") }.status)
+        assertEquals(HttpStatusCode.Forbidden, client.get("/api/v1/memory/proposals") { bearerAuth("memory-key") }.status)
+        assertEquals(HttpStatusCode.OK, client.get("/api/v1/memory/proposals") { bearerAuth("member") }.status)
+        assertEquals(HttpStatusCode.OK, client.post("/api/v1/memory/proposals/p1/reject") { bearerAuth("member") }.status)
+        assertEquals(listOf("p1" to false), store.decisions)
     }
 }

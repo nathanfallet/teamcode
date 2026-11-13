@@ -38,9 +38,13 @@ internal fun Route.memoryRoutes(memory: MemoryService) {
         }
         post {
             val input = call.jsonBody<CreateMemoryRequest>(MEMORY_BODY_BYTES)
-            val created = memory.create(call.principal, NewMemory(MemoryScope.parse(input.scope), input.title, input.summary, input.content, input.tags, input.refs, input.expiresAt))
+            val viaAgent = call.request.headers[MemoryApi.ORIGIN_HEADER] == MemoryApi.AGENT_ORIGIN
+            val created = memory.create(call.principal, NewMemory(MemoryScope.parse(input.scope), input.title, input.summary, input.content, input.tags, input.refs, input.expiresAt), input.sessionId?.takeIf { memoryId.matches(it) }, viaAgent)
             call.respond(HttpStatusCode.Created, created.view())
         }
+        get("/proposals") { call.respond(MemoryProposalsView(memory.proposals(call.principal).map { it.view() })) }
+        post("/proposals/{id}/accept") { call.respond(memory.decide(call.principal, id(call.parameters["id"]), accept = true).view()) }
+        post("/proposals/{id}/reject") { call.respond(memory.decide(call.principal, id(call.parameters["id"]), accept = false).view()) }
         get("/{id}") { call.respond(memory.read(call.principal, id(call.parameters["id"])).view()) }
         patch("/{id}") {
             val input = call.jsonBody<UpdateMemoryRequest>(MEMORY_BODY_BYTES)

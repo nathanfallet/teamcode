@@ -26,8 +26,9 @@ internal object MemoryDocs {
         a decision and its reason, a convention, a pitfall, how something is run. One subject per entry; a short title,
         a summary of one or two sentences, the details in content. Never write a secret, a token or a password: it is refused.
         Fix a wrong entry with memory_update (the version you read) rather than adding a contradicting one; remove one
-        that is no longer true with memory_forget. A team entry cannot be written by an agent yet: write it as personal
-        and tell the member, who can share it.
+        that is no longer true with memory_forget. Write personal entries freely. A team entry (scope team) is a proposal: your
+        owner is asked, may edit it, and it joins the team's memory only once accepted, so propose only what the whole team
+        should know and that you have checked. Tag an entry `external` when it comes from a web page, a ticket or a third party.
     """.trimIndent()
 
     /**
