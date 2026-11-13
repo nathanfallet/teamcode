@@ -1195,6 +1195,24 @@ class TeamCodeClient(
         return request("/api/v1/hook-delivery/$name/$version", HttpMethod.Get)
     }
 
+    /** The signed-in member's own environment values and remote MCP servers, assigned to them alone. Interactive login only. */
+    suspend fun personalVariants(): List<VariantView> = request("/api/v1/me/variants", HttpMethod.Get)
+
+    /** Creates a personal variant (an `ENV` value or an HTTPS `MCP` server, `SHARED` binding) and assigns it to the caller. */
+    suspend fun createPersonalVariant(request: CreateVariantRequest): VariantView = request("/api/v1/me/variants", HttpMethod.Post, request)
+
+    suspend fun updatePersonalVariant(id: String, request: UpdateVariantRequest): VariantView {
+        identifier(id); return request("/api/v1/me/variants/$id", HttpMethod.Patch, request)
+    }
+
+    suspend fun deletePersonalVariant(id: String) { identifier(id); request<Unit>("/api/v1/me/variants/$id", HttpMethod.Delete) }
+
+    /** Administrator: members' personal variants, for review before a promotion. */
+    suspend fun memberPersonalVariants(): List<VariantView> = request("/api/v1/variants/personal", HttpMethod.Get)
+
+    /** Administrator: makes a reviewed personal variant a team variant. */
+    suspend fun promoteVariant(id: String): VariantView { identifier(id); return request("/api/v1/variants/$id/promote", HttpMethod.Post) }
+
     /** MCP servers currently assigned to the signed-in member; each has its own gateway endpoint. */
     suspend fun mcpServers(): List<McpServerView> = request("/api/v1/mcp/servers", HttpMethod.Get)
 

@@ -272,6 +272,66 @@ internal fun ApiCatalog.variantOperations() {
             notFound("No such variant (`not_found`).")
         }
     }
+    get("/api/v1/variants/personal") {
+        operationId = "listPersonalVariants"; tag(ApiTags.VARIANTS)
+        summary = "List members' personal variants"
+        description = "For review before a promotion: each variant's definition and owner (`ownerId`), never a secret. In owner order, at most 500. Interactive administrators only."
+        responses { ok<List<VariantView>>("The personal variants.") }
+    }
+    post("/api/v1/variants/{id}/promote") {
+        operationId = "promoteVariant"; tag(ApiTags.VARIANTS)
+        summary = "Promote a personal variant to the team"
+        description = "After reviewing a member's personal variant, makes it a team variant. Its owner keeps the selection; " +
+            "everyone else receives it only by an assignment. Interactive administrators only."
+        parameters { pathId("id", "The variant's identifier.") }
+        responses {
+            ok<VariantView>("The team variant.")
+            notFound("No such variant (`not_found`).")
+            conflict("Already a team variant (`variant_not_personal`), or a team variant of this name exists (`variant_exists`).")
+        }
+    }
+    get("/api/v1/me/variants") {
+        operationId = "listMyVariants"; tag(ApiTags.VARIANTS)
+        summary = "List my personal variants"
+        description = "The caller's own environment values and remote MCP servers, assigned to them alone. Interactive login only: service keys are refused."
+        responses { ok<List<VariantView>>("The caller's variants.") }
+    }
+    post("/api/v1/me/variants") {
+        operationId = "createMyVariant"; tag(ApiTags.VARIANTS)
+        summary = "Create a personal variant"
+        description = "An environment value or a remote HTTPS MCP server, `SHARED` binding (the value is the owner's), assigned " +
+            "to the caller in the same transaction. A hosted command is refused (`hosted_not_allowed`): only an administrator " +
+            "can declare one. Refused when the caller already has a selection for the target (`slot_taken`) or an exclusion " +
+            "(`variant_excluded`). Secrets are write-only, as for team variants, and no administrator can read them. At most 20."
+        body<CreateVariantRequest>("The variant.")
+        responses {
+            ok<VariantView>("Created.", HttpStatusCode.Created)
+            badRequest("An invalid kind, binding, target, endpoint or secret (`invalid_variant`).")
+            error(HttpStatusCode.Forbidden, "A hosted command (`hosted_not_allowed`).")
+            conflict("`slot_taken`, `variant_excluded`, `variant_exists` or `variant_limit`.")
+        }
+    }
+    patch("/api/v1/me/variants/{id}") {
+        operationId = "updateMyVariant"; tag(ApiTags.VARIANTS)
+        summary = "Change a personal variant"
+        parameters { pathId("id", "The variant's identifier.") }
+        body<UpdateVariantRequest>("The new name, configuration and optional secret.")
+        responses {
+            ok<VariantView>("The updated variant.")
+            badRequest("Invalid configuration or secret (`invalid_variant`).")
+            notFound("No such personal variant of the caller (`not_found`).")
+            conflict("The variant changed since it was read (`variant_conflict`).")
+        }
+    }
+    delete("/api/v1/me/variants/{id}") {
+        operationId = "deleteMyVariant"; tag(ApiTags.VARIANTS)
+        summary = "Delete a personal variant"
+        parameters { pathId("id", "The variant's identifier.") }
+        responses {
+            empty("Deleted with its assignment.")
+            notFound("No such personal variant of the caller (`not_found`).")
+        }
+    }
     post("/api/v1/variants/{id}/bulk-assign") {
         operationId = "bulkAssignVariant"; tag(ApiTags.VARIANTS)
         summary = "Assign a shared variant to everyone"
