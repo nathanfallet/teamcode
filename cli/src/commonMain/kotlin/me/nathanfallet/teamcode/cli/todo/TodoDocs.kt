@@ -44,6 +44,7 @@ internal object TodoDocs {
         - todo_add when you find work the plan needs; todo_note for progress;
           todo_link for a PR, release, artifact or wait that already exists.
         - You cannot delete or rewrite an item: todo_drop asks the session's owner.
+        - When the whole todo is closed and you are given other work, todo_reset clears it so you can todo_create a new one.
         Stopping: you cannot end a turn while items remain, unless a wait is open
         (ask_human, wait_for) or a background agent runs. When every item is done,
         stop. Call todo_help for the item schema and examples.
@@ -52,7 +53,7 @@ internal object TodoDocs {
     /** `todo_help`: the rules, the schema of an item and three examples (a PR, a release, a research that ends on an artifact). */
     val HELP = """
         THE RULES
-        One todo per session. You write it once (todo_create), then add items (todo_add); you cannot delete or rewrite one. An item is done only when
+        One todo per session. You write it once (todo_create), then add items (todo_add); you cannot delete or rewrite one. Once every item is done and the todo is closed, todo_reset clears it (as if the session never had one) and you create a new todo for the next task; it is refused while the todo is active. An item is done only when
         its checks pass: todo_complete runs them and refuses with what is missing. You cannot end a turn while items remain, unless a wait is open
         (ask_human, wait_for) or a background agent runs.
 

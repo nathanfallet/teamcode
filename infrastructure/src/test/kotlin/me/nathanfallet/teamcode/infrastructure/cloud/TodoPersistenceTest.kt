@@ -282,4 +282,45 @@ class TodoPersistenceTest {
             assertFalse("Item a" in row[TeamEvents.data])
         }
     }
+
+    @Test @Timeout(240)
+    fun aClosedTodoIsResetFromEitherReplicaAndANewOneStartsFromNothing() = runBlocking {
+        AutomationWorld.run(99) { w ->
+            val a = TodoService(SqlTodoStore(w.a.database), WaitBackedDropWaits(SqlWaitStore(w.a.database)))
+            val b = TodoService(SqlTodoStore(w.b.database), WaitBackedDropWaits(SqlWaitStore(w.b.database)))
+            val session = (w.a.sessions.create(w.member, null, CloudSessionDraft("Plan", w.profile.id, null, null, null, emptyMap(), null), null) as CloudCreateOutcome.Created).session.id
+            refusedWith("todo_not_found") { a.reset(w.member, session) }
+            a.create(w.member, session, "First task", emptyList(), listOf(item("a"), item("b", "a")))
+
+            // An active list is never cleared: the agent cannot skip an item with it.
+            refusedWith("todo_active") { b.reset(w.member, session) }
+            assertEquals(listOf("a", "b"), a.get(w.member, session)!!.items.map { it.id })
+            // Only the session's owner (or its own execution credential) acts on it.
+            refusedWith("not_found") { a.reset(w.admin, session) }
+
+            // Closed: the list stops taking items, which is the dead end a reset opens.
+            w.a.database.query { SessionTodos.update({ SessionTodos.sessionId eq session }) { it[status] = TodoListStatus.DONE.wire } }
+            refusedWith("todo_closed") { a.add(w.member, session, item("c"), "More work") }
+            b.reset(w.member, session)
+            assertNull(a.get(w.member, session), "both replicas see no todo")
+            assertNull(b.get(w.member, session))
+            w.a.database.query {
+                assertEquals(0L, SessionTodos.selectAll().where { SessionTodos.sessionId eq session }.count())
+                assertEquals(0L, SessionTodoItems.selectAll().where { SessionTodoItems.sessionId eq session }.count(), "the items went with the list")
+                val journal = AuditEvents.selectAll().where { (AuditEvents.action eq "todo.reset") and (AuditEvents.subjectId eq session) }.single()
+                assertEquals(w.member.member.id, journal[AuditEvents.actorId])
+                assertEquals("status=done items=2", journal[AuditEvents.details]!!.substringAfter(" "), "the journal keeps what was cleared, not its content")
+                val last = TeamEvents.selectAll().where { (TeamEvents.type eq "cloud.todo") and (TeamEvents.subjectId eq session) }.orderBy(TeamEvents.seq to SortOrder.DESC).first()
+                assertContains(last[TeamEvents.data], "\"status\":\"none\"")
+                assertEquals(w.member.member.id, last[TeamEvents.ownerId])
+            }
+
+            // A new todo, with the same item ids even, other reference and items.
+            val second = a.create(w.member, session, "Second task", emptyList(), listOf(item("a"), item("z")))
+            assertEquals(listOf("a", "z"), second.items.map { it.id })
+            assertEquals(TodoListStatus.ACTIVE, second.status)
+            assertEquals(TodoItemStatus.TODO, b.get(w.member, session)!!.item("a")!!.status, "nothing of the first list carries over")
+            assertEquals("Second task", b.get(w.member, session)!!.reference)
+        }
+    }
 }

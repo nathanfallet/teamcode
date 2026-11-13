@@ -21,6 +21,12 @@ interface TodoStore {
      * same transaction. [change] returns the new list and a value for the caller; `404 todo_not_found` when there is no list.
      */
     suspend fun <T> mutate(teamId: String, sessionId: String, change: (TodoList) -> Pair<TodoList, T>): T
+    /**
+     * Reads the session's list under its row lock, lets [check] refuse (it throws), then deletes the list and its items in the same
+     * transaction, journals `todo.reset` for [actor] and tells the feed; returns what was deleted. `404 todo_not_found` when there is no list.
+     * The one place a list is deleted: it is for a closed list, which [check] ([TodoRules.requireClosed]) makes sure of.
+     */
+    suspend fun reset(teamId: String, sessionId: String, actor: Principal, check: (TodoList) -> Unit): TodoList
     /** The current version of an artifact of the team that is not deleted, or null. */
     suspend fun artifactVersion(teamId: String, artifactId: String): Int?
     /** The status and answered action of a wait of this session, or null when it is not one of the session's. */

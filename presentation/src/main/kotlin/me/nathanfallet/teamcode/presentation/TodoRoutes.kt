@@ -118,6 +118,11 @@ internal fun Route.todoRoutes(todos: TodoService) {
             val input = call.jsonBody<LinkTodoItemRequest>(TODO_BYTES)
             call.respond(TodoSessionView(todos.link(call.principal, session(input.sessionId), call.itemId(), TodoLink(input.kind, input.ref, input.number, input.sha, input.tag), input.replaceClosed).view()))
         }
+        post("/reset") {
+            val input = call.jsonBody<ResetTodoRequest>(TODO_BYTES)
+            todos.reset(call.principal, session(input.sessionId))
+            call.respond(TodoSessionView(null))
+        }
         post("/items/{item}/drop") {
             val input = call.jsonBody<DropTodoItemRequest>(TODO_BYTES)
             call.respond(TodoSessionView(todos.requestDrop(call.principal, session(input.sessionId), call.itemId(), input.reason).view()))

@@ -43,6 +43,10 @@ class TodoMcpServerTest {
             when {
                 route == "GET /api/v1/todos/session" -> ok(todo)
                 route == "POST /api/v1/todos/session" -> { todo = view(item("a", checks = listOf(TodoCheckView("pr_merged", repo = repo)))); ok(todo) }
+                route == "POST /api/v1/todos/session/reset" -> {
+                    if (todo?.status == "active") return@MockEngine respond("""{"error":{"type":"todo_active","message":"still active"}}""", HttpStatusCode.Conflict, json)
+                    todo = null; ok(null)
+                }
                 route.endsWith("/start") -> respond(Serialization.json.encodeToString(StartTodoItemView(todo!!, "<!-- teamcode-todo: 7f3a9c10/a -->")), HttpStatusCode.OK, json)
                 else -> ok(todo)
             }
@@ -65,13 +69,13 @@ class TodoMcpServerTest {
     }
     private fun pr(state: String, sha: String? = null, body: String = "Does the thing.\n\n<!-- teamcode-todo: 7f3a9c10/a -->") = """[{"number":1310,"state":"$state","url":"https://github.com/$repo/pull/1310","author":{"login":"ada"},"body":${JsonPrimitive(body)},"mergeCommit":${if (sha == null) "null" else "{\"oid\":\"$sha\"}"}}]"""
 
-    @Test fun speaksMcpAndServesTheNineTools() = runBlocking {
+    @Test fun speaksMcpAndServesTheTenTools() = runBlocking {
         val server = Server(null)
         val init = Json.parseToJsonElement(server.mcp.handle(request("initialize", buildJsonObject { put("protocolVersion", "2025-06-18") }))!!).jsonObject["result"]!!.jsonObject
         assertEquals("teamcode-todo", init["serverInfo"]!!.jsonObject["name"]!!.jsonPrimitive.content)
         assertEquals(TodoDocs.INSTRUCTIONS, init["instructions"]!!.jsonPrimitive.content)
         val tools = Json.parseToJsonElement(server.mcp.handle(request("tools/list"))!!).jsonObject["result"]!!.jsonObject["tools"]!!.jsonArray
-        assertEquals(setOf("todo_create", "todo_show", "todo_start", "todo_complete", "todo_link", "todo_help", "todo_add", "todo_note", "todo_drop"), tools.map { it.jsonObject["name"]!!.jsonPrimitive.content }.toSet())
+        assertEquals(setOf("todo_create", "todo_show", "todo_start", "todo_complete", "todo_link", "todo_help", "todo_add", "todo_note", "todo_drop", "todo_reset"), tools.map { it.jsonObject["name"]!!.jsonPrimitive.content }.toSet())
         tools.forEach { assertTrue(it.jsonObject["description"]!!.jsonPrimitive.content.length > 40, "every tool says when to call it") }
         assertNull(server.mcp.handle("""{"jsonrpc":"2.0","method":"notifications/initialized"}"""))
         assertTrue("Unknown tool" in server.mcp.handle(request("tools/call", buildJsonObject { put("name", "ask_human") }))!!)
@@ -102,6 +106,19 @@ class TodoMcpServerTest {
         val (bad, why) = server.tool("todo_create", buildJsonObject { put("reference", "x"); put("items", buildJsonArray { addJsonObject { put("id", "a") } }) })
         assertTrue(bad && "todo_help" in why, why)
         assertEquals(1, server.requests.count { it.first == "POST /api/v1/todos/session" }, "nothing is sent for a malformed list")
+    }
+
+    @Test fun resetClearsAClosedTodoForItsOwnSessionAndAnActiveOneIsRefusedWithAHint() = runBlocking {
+        val server = Server(view(item("a", checks = listOf(TodoCheckView("pr_merged", repo = repo)))).copy(status = "done"))
+        val (error, text) = server.tool("todo_reset")
+        assertFalse(error, text); assertContains(text, "todo_create")
+        assertEquals("POST /api/v1/todos/session/reset", server.requests.single().first)
+        assertEquals(session, Json.parseToJsonElement(server.requests.single().second).jsonObject["sessionId"]!!.jsonPrimitive.content, "its own session, nothing else")
+        assertTrue("no todo yet" in server.tool("todo_show").second, "as if there never was one")
+
+        val active = Server(view(item("a", checks = listOf(TodoCheckView("pr_merged", repo = repo)))))
+        val (refused, why) = active.tool("todo_reset")
+        assertTrue(refused); assertContains(why, "todo_active"); assertContains(why, "todo_drop")
     }
 
     @Test fun startReturnsTheMarkerForAPrItem() = runBlocking {
@@ -236,11 +253,11 @@ class TodoMcpServerTest {
     }
 
     @Test fun theRelayAllowsTheTodoRoutesAndNothingElse() {
-        assertEquals(mapOf(HttpMethod.Get to 2, HttpMethod.Post to 6), TODO_RELAY_ROUTES.mapValues { it.value.size })
+        assertEquals(mapOf(HttpMethod.Get to 2, HttpMethod.Post to 7), TODO_RELAY_ROUTES.mapValues { it.value.size })
         assertTrue(TODO_RELAY_ROUTES.getValue(HttpMethod.Get).any { it.matches("/api/v1/todos/session/context") })
         val posts = TODO_RELAY_ROUTES.getValue(HttpMethod.Post)
         assertTrue(posts.any { it.matches("/api/v1/todos/session/wake") }, "the Stop hook of a local run holds through the relay")
-        for (path in listOf("/api/v1/todos/session", "/api/v1/todos/session/items", "/api/v1/todos/session/items/a/start", "/api/v1/todos/session/items/a-b/proof", "/api/v1/todos/session/items/a/link", "/api/v1/todos/session/items/a/drop", "/api/v1/todos/session/stop", "/api/v1/todos/session/hook-error"))
+        for (path in listOf("/api/v1/todos/session", "/api/v1/todos/session/items", "/api/v1/todos/session/items/a/start", "/api/v1/todos/session/items/a-b/proof", "/api/v1/todos/session/items/a/link", "/api/v1/todos/session/items/a/drop", "/api/v1/todos/session/stop", "/api/v1/todos/session/hook-error", "/api/v1/todos/session/reset"))
             assertTrue(posts.any { it.matches(path) }, path)
         for (path in listOf("/api/v1/todos", "/api/v1/todos/session/items/A/start", "/api/v1/todos/session/items/a/delete", "/api/v1/waits/x/answer", "/api/v1/todos/session/../waits"))
             assertTrue(posts.none { it.matches(path) }, path)

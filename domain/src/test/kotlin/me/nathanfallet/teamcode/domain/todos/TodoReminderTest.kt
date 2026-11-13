@@ -20,6 +20,10 @@ class TodoReminderTest {
         override suspend fun find(teamId: String, sessionId: String) = list?.takeIf { it.sessionId == sessionId }
         override suspend fun create(list: TodoList) { this.list = list }
         override suspend fun <T> mutate(teamId: String, sessionId: String, change: (TodoList) -> Pair<TodoList, T>): T { val (next, value) = change(list!!); list = next; return value }
+        override suspend fun reset(teamId: String, sessionId: String, actor: Principal, check: (TodoList) -> Unit): TodoList {
+            val current = list?.takeIf { it.sessionId == sessionId } ?: throw TeamFailure("todo_not_found", 404, "none")
+            check(current); list = null; return current
+        }
         override suspend fun artifactVersion(teamId: String, artifactId: String): Int? = null
         override suspend fun waitState(teamId: String, sessionId: String, waitId: String): WaitState? = null
         override suspend fun hasOpenWait(teamId: String, sessionId: String) = openWait

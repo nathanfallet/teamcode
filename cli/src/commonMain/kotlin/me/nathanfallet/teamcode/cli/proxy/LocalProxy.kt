@@ -313,7 +313,7 @@ internal val WORKFLOW_RELAY_ROUTES: Map<HttpMethod, List<Regex>> = mapOf(
  */
 internal val TODO_RELAY_ROUTES: Map<HttpMethod, List<Regex>> = mapOf(
     HttpMethod.Get to listOf(Regex("/api/v1/todos/session"), Regex("/api/v1/todos/session/context")),
-    HttpMethod.Post to listOf(Regex("/api/v1/todos/session"), Regex("/api/v1/todos/session/items"), Regex("/api/v1/todos/session/stop"), Regex("/api/v1/todos/session/wake"), Regex("/api/v1/todos/session/hook-error"), Regex("/api/v1/todos/session/items/[a-z0-9][a-z0-9-]{0,39}/(start|notes|proof|link|drop)")),
+    HttpMethod.Post to listOf(Regex("/api/v1/todos/session"), Regex("/api/v1/todos/session/items"), Regex("/api/v1/todos/session/stop"), Regex("/api/v1/todos/session/wake"), Regex("/api/v1/todos/session/hook-error"), Regex("/api/v1/todos/session/reset"), Regex("/api/v1/todos/session/items/[a-z0-9][a-z0-9-]{0,39}/(start|notes|proof|link|drop)")),
 )
 
 /** Relays the todo calls of `teamcode mcp todo`, as [apiRelay] does. */

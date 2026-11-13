@@ -25,6 +25,10 @@ class TodoServiceTest {
         override suspend fun find(teamId: String, sessionId: String) = list
         override suspend fun create(list: TodoList) { this.list = list }
         override suspend fun <T> mutate(teamId: String, sessionId: String, change: (TodoList) -> Pair<TodoList, T>): T { val (next, value) = change(list!!); list = next; return value }
+        override suspend fun reset(teamId: String, sessionId: String, actor: Principal, check: (TodoList) -> Unit): TodoList {
+            val current = list?.takeIf { it.sessionId == sessionId } ?: throw TeamFailure("todo_not_found", 404, "none")
+            check(current); list = null; return current
+        }
         override suspend fun artifactVersion(teamId: String, artifactId: String) = artifacts[artifactId]
         override suspend fun waitState(teamId: String, sessionId: String, waitId: String) = waits[waitId]
         override suspend fun hasOpenWait(teamId: String, sessionId: String) = openWait
@@ -135,6 +139,26 @@ class TodoServiceTest {
         service.stop(ada, "s1", verify(TodoStopItemReport("b", listOf(TodoCheckReport(0, true, "PR #2 MERGED again")))))
         val done = service.stop(ada, "s1", TodoStopInput(TodoStopPhase.SETTLE, items = listOf(TodoStopItemReport("a", listOf(TodoCheckReport(0, true, "ok"))), TodoStopItemReport("b", listOf(TodoCheckReport(0, true, "ok"))))))
         assertEquals(listOf(TodoStopAction.ALLOW, "settled", TodoListStatus.DONE), listOf(done.action, done.why, store.list!!.status))
+    }
+
+    @Test fun aClosedTodoIsResetAndANewOneStartsFromNothing() = runBlocking {
+        val store = Store(); val service = TodoService(store, Drops())
+        assertEquals("todo_not_found", assertFailsWith<TeamFailure> { runBlocking { service.reset(ada, "s1") } }.code, "Nothing to reset")
+        service.create(ada, "s1", "First task", emptyList(), listOf(item("a", pr)))
+        // Active: no way out by resetting, whatever the progress.
+        assertEquals("todo_active", assertFailsWith<TeamFailure> { runBlocking { service.reset(ada, "s1") } }.code)
+        assertEquals(TodoItemStatus.TODO, store.list!!.item("a")!!.status, "The refusal changed nothing")
+        service.stop(ada, "s1", verify(TodoStopItemReport("a", listOf(TodoCheckReport(0, true, "PR #1 MERGED")))))
+        service.stop(ada, "s1", TodoStopInput(TodoStopPhase.SETTLE, items = listOf(TodoStopItemReport("a", listOf(TodoCheckReport(0, true, "ok"))))))
+        assertEquals(TodoListStatus.DONE, store.list!!.status)
+        // Closed: a new item is refused, which is the dead end the reset opens.
+        assertEquals("todo_closed", assertFailsWith<TeamFailure> { runBlocking { service.add(ada, "s1", item("b", pr), "More work") } }.code)
+        service.reset(ada, "s1")
+        assertNull(store.list, "As if the session never had a todo")
+        assertNull(service.get(ada, "s1"))
+        val second = service.create(ada, "s1", "Second task", emptyList(), listOf(item("b", pr)))
+        assertEquals(listOf("b") to TodoListStatus.ACTIVE, second.items.map { it.id } to second.status, "A new todo, with its own items and reference")
+        assertEquals("Second task", store.list!!.reference)
     }
 
     @Test fun anUnknownOrFailedCheckNeverTicksAnItem() = runBlocking {

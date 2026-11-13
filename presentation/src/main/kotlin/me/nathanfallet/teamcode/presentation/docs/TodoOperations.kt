@@ -131,6 +131,17 @@ internal fun ApiCatalog.todoOperations() {
             conflict("The item already has a link of this kind (`already_linked`), or the todo is closed (`todo_closed`).")
         }
     }
+    post("/api/v1/todos/session/reset") {
+        operationId = "resetTodo"; tag(ApiTags.TODOS)
+        summary = "Clear a closed todo"
+        description = "Deletes the session's todo and its items once it is closed (`done` or `abandoned`), as if the session never had one, so `POST /todos/session` can create a new one. The deletion is journaled (`todo.reset`) and the feed's `cloud.todo` event says `none`. An active todo is refused: this is no way to skip an unfinished item. $TODO_TEXT"
+        body<ResetTodoRequest>("The session, when the caller is not bound to one.")
+        responses {
+            ok<TodoSessionView>("The session now has no todo (`todo` is null).")
+            notFound("No such session, or it has no todo (`todo_not_found`).")
+            conflict("The todo is still active (`todo_active`).")
+        }
+    }
     post("/api/v1/todos/session/items/{item}/drop") {
         operationId = "requestTodoDrop"; tag(ApiTags.TODOS)
         summary = "Ask to drop an item"

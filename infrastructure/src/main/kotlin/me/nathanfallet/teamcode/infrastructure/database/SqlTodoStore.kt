@@ -53,6 +53,20 @@ class SqlTodoStore(private val database: Database) : TodoStore, TodoReminderStor
         value
     }
 
+    override suspend fun reset(teamId: String, sessionId: String, actor: Principal, check: (TodoList) -> Unit): TodoList = database.query {
+        requireCurrent(this, actor)
+        val list = read(teamId, sessionId, lock = true) ?: throw TeamFailure("todo_not_found", 404, "This session has no todo.")
+        check(list)
+        // The items go with their list (ON DELETE CASCADE); nothing else refers to them. The journal keeps what was cleared, not its content.
+        SessionTodos.deleteWhere { (SessionTodos.sessionId eq sessionId) and (SessionTodos.teamId eq teamId) }
+        audit(teamId, actor.member.id, "todo.reset", sessionId, null, actor.tokenId, details = "list=${list.id} status=${list.status.wire} items=${list.items.size}")
+        val owner = CloudSessions.select(CloudSessions.ownerId, CloudSessions.kind).where { CloudSessions.id eq sessionId }.single()
+        publishTeamEvent(teamId, TeamEventType.TODO_UPDATED, sessionId, owner[CloudSessions.ownerId], buildJsonObject {
+            put("sessionId", sessionId); put("kind", owner[CloudSessions.kind]); put("status", "none"); put("done", 0); put("total", 0)
+        }, nowMillis())
+        list
+    }
+
     override suspend fun dropOutcomes(teamId: String, waitIds: Collection<String>): Map<String, DropOutcome> = database.query {
         if (waitIds.isEmpty()) return@query emptyMap()
         Waits.select(Waits.id, Waits.status, Waits.answerAction).where { (Waits.id inList waitIds.toList()) and (Waits.teamId eq teamId) and (Waits.status neq WaitStatus.OPEN.wire) }.limit(waitIds.size)
