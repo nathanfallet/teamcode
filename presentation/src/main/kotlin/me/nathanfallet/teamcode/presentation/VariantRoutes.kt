@@ -8,7 +8,7 @@ import me.nathanfallet.teamcode.domain.team.*
 import me.nathanfallet.teamcode.domain.variants.*
 
 private fun Variant.view() = VariantView(id, kind.name, target, name, binding.name, version, endpoint, config, hasSharedSecret, createdAt, updatedAt,
-    transport.wire.takeIf { kind == VariantKind.MCP }, command?.launcher?.wire, command?.pkg, command?.args.orEmpty())
+    transport.wire.takeIf { kind == VariantKind.MCP }, command?.launcher?.wire, command?.pkg, command?.args.orEmpty(), ownerId)
 private fun VariantTarget.view() = VariantTargetView(kind.name, name)
 private fun VariantAssignment.view() = VariantAssignmentView(target.kind.name, target.name, variantId, variantName, version, source.name, hasMemberSecret, assignedAt)
 private fun MemberVariantAssignments.view() = MemberVariantAssignmentsView(memberId, username, disabled, assignments.map { it.view() }, exclusions.map { it.view() })
@@ -71,6 +71,22 @@ internal fun Route.variantRoutes(variants: VariantService, publicOrigin: String,
         call.respond(variants.update(call.principal, call.parameters["id"]!!, VariantUpdate(input.expectedVersion, input.name, input.config, secret(input.secret, input.secretVariables), input.clearSecret)).view())
     }
     delete("/api/v1/variants/{id}") { variants.delete(call.principal, call.parameters["id"]!!); call.respond(HttpStatusCode.NoContent) }
+    get("/api/v1/variants/personal") { call.respond(variants.personal(call.principal).map { it.view() }) }
+    post("/api/v1/variants/{id}/promote") { call.respond(variants.promote(call.principal, call.parameters["id"]!!).view()) }
+
+    // A member's own environment values and remote MCP servers: assigned to them alone, interactive login only.
+    get("/api/v1/me/variants") { call.respond(variants.mine(call.principal).map { it.view() }) }
+    post("/api/v1/me/variants") {
+        val input = call.jsonBody<CreateVariantRequest>()
+        val created = variants.createPersonal(call.principal, NewVariant(kind(input.kind), input.target, input.name, binding(input.binding), input.endpoint, input.config,
+            secret(input.secret, input.secretVariables), McpTransport.parse(input.transport), command(input.launcher, input.pkg, input.args)))
+        call.respond(HttpStatusCode.Created, created.view())
+    }
+    patch("/api/v1/me/variants/{id}") {
+        val input = call.jsonBody<UpdateVariantRequest>()
+        call.respond(variants.updatePersonal(call.principal, call.parameters["id"]!!, VariantUpdate(input.expectedVersion, input.name, input.config, secret(input.secret, input.secretVariables), input.clearSecret)).view())
+    }
+    delete("/api/v1/me/variants/{id}") { variants.deletePersonal(call.principal, call.parameters["id"]!!); call.respond(HttpStatusCode.NoContent) }
     post("/api/v1/variants/{id}/bulk-assign") { call.respond(variants.bulkAssign(call.principal, call.parameters["id"]!!).view()) }
     get("/api/v1/variant-assignments") { call.respond(variants.assignments(call.principal).map { it.view() }) }
     get("/api/v1/members/{memberId}/variants") { call.respond(variants.assignments(call.principal, call.parameters["memberId"]!!).single().view()) }

@@ -22,9 +22,12 @@ object Variants : Table("variants") {
     /** A hosted command's launcher (`npm` or `pypi`), and its package then arguments as a JSON array. Null otherwise. */
     val command = varchar("command", 16).nullable()
     val args = text("args").nullable()
+    /** The owning member of a personal variant; empty for a team variant, so a name is unique per owner. */
+    val ownerId = varchar("owner_id", 36).default("")
     override val primaryKey = PrimaryKey(id)
     init {
-        uniqueIndex("variant_team_slot_name", teamId, kind, target, name)
+        uniqueIndex("variant_team_slot_name", teamId, kind, target, name, ownerId)
+        index("variant_team_owner", false, teamId, ownerId)
         // The MCP host's retain sweep reads every hosted command (transport stdio) of the installation once a minute, and
         // the dashboard one team's.
         index("variant_transport_team", false, transport, teamId)

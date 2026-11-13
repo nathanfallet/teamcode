@@ -173,6 +173,6 @@ The official Kotlin MCP SDK was evaluated. Its Streamable HTTP server keeps sess
 
 Apart from the opt-in real npm and PyPI packages of the [host's tests](mcp.md#measurements), no real MCP server, provider or agent was called by these tests. Whether Claude Code expands `${TEAMCODE_MCP_TOKEN}` in an inline `--mcp-config` and Codex accepts the `-c mcp_servers...` override still needs one launch of each real agent.
 
-## Planned: personal variants
+## Personal MCP servers
 
-Members will declare their own environment values and MCP servers, assigned to themselves only (hosted stdio ones behind an administrator setting, off by default). Design and rules: [memory and personal resources](memory.md#personal-skills-environment-values-and-mcp-servers). Not implemented.
+A member can declare a remote HTTPS MCP server of their own; it is assigned to them alone and reaches their agent through the same gateway endpoint and checks as a team server. Hosted stdio commands stay administrator-only. See [personal variants](variants.md#personal-variants).

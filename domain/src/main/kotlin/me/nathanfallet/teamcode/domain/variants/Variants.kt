@@ -9,6 +9,8 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import me.nathanfallet.teamcode.domain.team.Principal
 import me.nathanfallet.teamcode.domain.team.TeamFailure
+import me.nathanfallet.teamcode.domain.team.requireInteractive
+import me.nathanfallet.teamcode.domain.team.requireReady
 
 /** What a variant configures: one environment variable or one MCP server. */
 enum class VariantKind { ENV, MCP }
@@ -73,6 +75,8 @@ data class Variant(
     val id: String, val kind: VariantKind, val target: String, val name: String, val binding: VariantBinding,
     val version: Int, val endpoint: String?, val config: Map<String, String>, val hasSharedSecret: Boolean,
     val createdAt: Long, val updatedAt: Long, val transport: McpTransport = McpTransport.HTTP, val command: StdioCommand? = null,
+    /** The member who owns a personal variant, assigned to them alone; null for a team variant. */
+    val ownerId: String? = null,
 ) {
     val slot get() = VariantTarget(kind, target)
 }
@@ -130,6 +134,12 @@ data class MemberVariantAssignments(
 
 data class BulkAssignment(val assigned: Int, val keptDirect: Int, val excluded: Int)
 
+/** Managing one's own variants: an interactive, ready member. Service keys and execution credentials are refused. */
+fun Principal.requirePersonalVariantOwner() {
+    requireInteractive()
+    requireReady()
+}
+
 /** Administrator management of variants, assignments and exclusions. Adapters revalidate the actor in the write transaction. */
 interface VariantService {
     suspend fun list(actor: Principal): List<Variant>
@@ -147,8 +157,25 @@ interface VariantService {
     /** Every member of the team, or only [memberId], with their effective assignments. */
     suspend fun assignments(actor: Principal, memberId: String? = null): List<MemberVariantAssignments>
 
+    /** Members' personal variants in owner order (at most 500), as definitions with their owner and never a secret. Administrators only. */
+    suspend fun personal(actor: Principal): List<Variant>
+    /** The caller's own variants. Interactive, ready members only. */
+    suspend fun mine(actor: Principal): List<Variant>
+    /**
+     * Creates a variant owned by the caller and assigns it to them, in one transaction. Remote HTTPS servers and
+     * environment values only: a hosted command is refused (`hosted_not_allowed`) until an administrator setting exists.
+     * Refused when the caller already has a selection or an exclusion for the slot (`slot_taken`, `variant_excluded`).
+     */
+    suspend fun createPersonal(actor: Principal, variant: NewVariant): Variant
+    suspend fun updatePersonal(actor: Principal, id: String, update: VariantUpdate): Variant
+    suspend fun deletePersonal(actor: Principal, id: String)
+    /** Makes a reviewed personal variant a team variant: the owner is cleared and its owner keeps the selection. */
+    suspend fun promote(actor: Principal, id: String): Variant
+
     companion object {
         const val VARIANT_LIMIT = 500L
+        /** Personal variants per member. */
+        const val PERSONAL_LIMIT = 20L
         const val SECRET_LIMIT = 16_384
         const val STDIO_ARGS_LIMIT = 32
         const val STDIO_ARG_LENGTH = 512
