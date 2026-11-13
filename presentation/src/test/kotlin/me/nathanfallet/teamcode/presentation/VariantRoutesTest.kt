@@ -20,6 +20,12 @@ class VariantRoutesTest {
         var launchers = emptySet<StdioLauncher>()
         var writes = 0
         private fun write(actor: Principal) { actor.requireAdmin(); writes++ }
+        override suspend fun personal(actor: Principal): List<Variant> { actor.requireAdmin(); return emptyList() }
+        override suspend fun mine(actor: Principal) = error("unused")
+        override suspend fun createPersonal(actor: Principal, variant: NewVariant) = error("unused")
+        override suspend fun updatePersonal(actor: Principal, id: String, update: VariantUpdate) = error("unused")
+        override suspend fun deletePersonal(actor: Principal, id: String) = error("unused")
+        override suspend fun promote(actor: Principal, id: String): Variant { write(actor); error("unused") }
         override suspend fun list(actor: Principal): List<Variant> { actor.requireAdmin(); return variants.values.toList() }
         override suspend fun create(actor: Principal, variant: NewVariant): Variant {
             write(actor); VariantService.validate(variant, launchers)
@@ -99,6 +105,19 @@ class VariantRoutesTest {
         assertEquals(HttpStatusCode.OK, client.post("/api/v1/variants/$id/bulk-assign") { bearerAuth("admin") }.status)
         assertEquals(HttpStatusCode.NoContent, client.delete("/api/v1/variants/$id") { bearerAuth("admin") }.status)
         assertTrue(client.get("/api/v1/capabilities") { bearerAuth("admin") }.bodyAsText().contains("team.variants.v1"))
+    }
+
+    @Test fun personalVariantsAreInteractiveOnlyAndPromotionIsAdministratorOnly() = testApplication {
+        val registry = Registry()
+        application { configureGateway(gateway, team = team(), variants = registry) }
+        val body = """{"kind":"ENV","target":"MY_TOKEN","name":"mine","secret":"synthetic-personal-value"}"""
+        // Every service key, whatever its scopes, is refused before the store sees anything.
+        assertEquals(HttpStatusCode.Forbidden, client.get("/api/v1/me/variants") { bearerAuth("service") }.status)
+        assertEquals(HttpStatusCode.Forbidden, client.post("/api/v1/me/variants") { bearerAuth("service"); contentType(ContentType.Application.Json); setBody(body) }.status)
+        assertEquals(HttpStatusCode.Forbidden, client.delete("/api/v1/me/variants/any") { bearerAuth("service") }.status)
+        assertEquals(HttpStatusCode.Forbidden, client.post("/api/v1/variants/any/promote") { bearerAuth("member") }.status)
+        assertEquals(HttpStatusCode.Forbidden, client.post("/api/v1/variants/any/promote") { bearerAuth("service") }.status)
+        assertEquals(0, registry.writes)
     }
 
     @Test fun dashboardRequiresOriginAndCsrfEscapesContentAndNeverShowsSecrets() = testApplication {

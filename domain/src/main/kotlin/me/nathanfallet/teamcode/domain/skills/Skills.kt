@@ -14,6 +14,8 @@ data class Skill(
     val createdAt: Long,
     val updatedAt: Long,
     val allMembers: Boolean = false,
+    /** The member who owns a personal skill; null for a team skill. A personal skill reaches its owner only. */
+    val ownerId: String? = null,
 )
 
 /** An immutable published version. Its files and digest never change after publication. */

@@ -39,6 +39,12 @@ fun Principal.requireSkillPublication(pin: Boolean, allMembers: Boolean) {
     if (allMembers) requireSkillAudienceWriter()
 }
 
+/** Managing one's own personal skills: an interactive, ready member. Service keys and execution credentials are refused. */
+fun Principal.requirePersonalSkillOwner() {
+    requireInteractive()
+    requireReady()
+}
+
 /** Reading one's own delivery: an interactive member, or a service key with `skills:read`. Others require an administrator. */
 fun Principal.requireSkillReader(memberId: String) {
     if (member.id != memberId) return requireAdmin()
@@ -81,6 +87,29 @@ class ResolveEffectiveSkillsUseCase(private val store: SkillStore) {
             if (!SkillAccessPolicy.allowed(candidate.memberDecision, candidate.groupDecisions, candidate.skill.allMembers)) return@mapNotNull null
             EffectiveSkill(candidate.skill.name, pinned.version, pinned.digest, pinned.sizeBytes, pinned.fileCount) to pinned
         }.sortedBy { it.first.name }
+    }
+}
+
+/** A member's own skills. Everything is checked against the owner in the store, which also keeps names unique per team. */
+class ManagePersonalSkillsUseCase(private val store: SkillStore) {
+    suspend fun mine(actor: Principal): List<Skill> = store.mine(actor)
+    suspend fun versions(actor: Principal, name: String): Pair<Skill, List<SkillVersion>> = owned(actor, name) { store.personalVersions(actor, name) }
+    fun authorize(actor: Principal) = actor.requirePersonalSkillOwner()
+    suspend fun publish(actor: Principal, name: String, version: String, files: List<SkillFile>, pin: Boolean = false): SkillPublication {
+        actor.requirePersonalSkillOwner()
+        SkillArtifacts.validateName(name)
+        SkillArtifacts.validateVersion(version)
+        return store.publishPersonal(actor, name, version, SkillArtifacts.validate(files), pin)
+    }
+    suspend fun pin(actor: Principal, name: String, version: String): Skill = owned(actor, name, version) { store.pinPersonal(actor, name, version) }
+    suspend fun unpin(actor: Principal, name: String): Skill = owned(actor, name) { store.unpinPersonal(actor, name) }
+    suspend fun retire(actor: Principal, name: String): Skill = owned(actor, name) { store.retirePersonal(actor, name) }
+    suspend fun restore(actor: Principal, name: String): Skill = owned(actor, name) { store.restorePersonal(actor, name) }
+    private inline fun <T> owned(actor: Principal, name: String, version: String? = null, block: () -> T): T {
+        actor.requirePersonalSkillOwner()
+        SkillArtifacts.validateName(name)
+        version?.let(SkillArtifacts::validateVersion)
+        return block()
     }
 }
 
@@ -131,6 +160,8 @@ class ManageSkillCatalogUseCase(private val store: SkillStore) {
     /** Lets transports refuse a caller that may not pin before reading its body. */
     fun authorizePin(actor: Principal) = actor.requireSkillPinner()
     suspend fun unpin(actor: Principal, name: String): Skill = admin(actor, name) { store.unpin(actor, name) }
+    /** An administrator reviewed a member's personal skill and makes it a team skill, with nothing pinned yet. */
+    suspend fun promote(actor: Principal, name: String): Skill = admin(actor, name) { store.promote(actor, name) }
     suspend fun retire(actor: Principal, name: String): Skill = admin(actor, name) { store.retire(actor, name) }
     suspend fun restore(actor: Principal, name: String): Skill = admin(actor, name) { store.restore(actor, name) }
     suspend fun retireVersion(actor: Principal, name: String, version: String): SkillVersion = admin(actor, name, version) { store.retireVersion(actor, name, version) }
@@ -159,6 +190,7 @@ class ManageSkillCatalogUseCase(private val store: SkillStore) {
 /** Composition bundle for the transport layer. */
 class SkillCatalog(val store: SkillStore) {
     val manage = ManageSkillCatalogUseCase(store)
+    val personal = ManagePersonalSkillsUseCase(store)
     val publish = PublishSkillVersionUseCase(store)
     val effective = ResolveEffectiveSkillsUseCase(store)
     val download = DownloadSkillUseCase(store, effective)

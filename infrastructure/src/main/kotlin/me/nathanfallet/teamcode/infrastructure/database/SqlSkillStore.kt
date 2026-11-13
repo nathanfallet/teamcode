@@ -38,25 +38,79 @@ class SqlSkillStore(private val database: Database) : SkillStore {
         }
     }
 
+    override suspend fun mine(actor: Principal): List<Skill> {
+        actor.requirePersonalSkillOwner()
+        return database.query {
+            requireCurrent(this, actor)
+            Skills.join(SkillVersions, JoinType.LEFT, Skills.pinnedVersionId, SkillVersions.id)
+                .select(Skills.columns + SkillVersions.version).where { (Skills.teamId eq actor.teamId) and (Skills.ownerId eq actor.member.id) }
+                .orderBy(Skills.updatedAt to SortOrder.DESC, Skills.name to SortOrder.ASC).limit(SkillStore.PERSONAL_LIMIT.toInt())
+                .map { skill(it, it.getOrNull(SkillVersions.version)) }
+        }
+    }
+
+    override suspend fun personalVersions(actor: Principal, name: String): Pair<Skill, List<SkillVersion>> {
+        actor.requirePersonalSkillOwner()
+        return database.query {
+            requireCurrent(this, actor)
+            val row = ownedRow(actor, name)
+            skill(row) to SkillVersions.selectAll().where { SkillVersions.skillId eq row[Skills.id] }
+                .orderBy(SkillVersions.publishedAt to SortOrder.DESC, SkillVersions.version to SortOrder.ASC)
+                .limit(SkillStore.VERSION_LIMIT.toInt()).map(::version)
+        }
+    }
+
+    override suspend fun promote(actor: Principal, name: String): Skill {
+        actor.requireAdmin()
+        return database.query {
+            lockTeam(actor.teamId); requireCurrent(this, actor)
+            val row = skillRow(actor.teamId, name, lock = true)
+            if (row[Skills.ownerId] == null) throw TeamFailure("skill_not_personal", 409, "This skill already belongs to the team.")
+            val now = nowMillis()
+            Skills.update({ Skills.id eq row[Skills.id] }) { it[ownerId] = null; it[pinnedVersionId] = null; it[allMembers] = false; it[updatedAt] = now }
+            audit(actor.teamId, actor.member.id, "skill.promoted", row[Skills.id])
+            skill(skillRow(actor.teamId, name))
+        }
+    }
+
     override suspend fun publish(actor: Principal, name: String, version: String, artifact: SkillArtifact, pin: Boolean, allMembers: Boolean): SkillPublication {
         actor.requireSkillPublication(pin, allMembers)
+        return publishAs(actor, name, version, artifact, pin, allMembers, personal = false)
+    }
+
+    override suspend fun publishPersonal(actor: Principal, name: String, version: String, artifact: SkillArtifact, pin: Boolean): SkillPublication {
+        actor.requirePersonalSkillOwner()
+        return publishAs(actor, name, version, artifact, pin, allMembers = false, personal = true)
+    }
+
+    private suspend fun publishAs(
+        actor: Principal, name: String, version: String, artifact: SkillArtifact, pin: Boolean, allMembers: Boolean, personal: Boolean,
+    ): SkillPublication {
         // Short team-locked step: create the catalog entry once. The team lock also serializes admission, so the
         // content insert below holds only this skill's row lock.
         var createdHere = false
         val skillId = database.query {
             lockTeam(actor.teamId); requireCurrent(this, actor)
-            Skills.select(Skills.id).where { (Skills.teamId eq actor.teamId) and (Skills.name eq name) }.singleOrNull()?.get(Skills.id)
+            val existing = Skills.select(Skills.id, Skills.ownerId).where { (Skills.teamId eq actor.teamId) and (Skills.name eq name) }.singleOrNull()
+            // One namespace per team: a name used by the team or by another member is refused, naming nobody.
+            if (existing != null && existing[Skills.ownerId] != (if (personal) actor.member.id else null))
+                throw TeamFailure("name_taken", 409, "This skill name is already used in the team. Choose another name.")
+            existing?.get(Skills.id)
                 ?: run {
                     createdHere = true
-                    if (Skills.select(Skills.id).where { Skills.teamId eq actor.teamId }.count() >= SkillStore.SKILL_LIMIT)
+                    if (personal) {
+                        if (Skills.select(Skills.id).where { (Skills.teamId eq actor.teamId) and (Skills.ownerId eq actor.member.id) }.count() >= SkillStore.PERSONAL_LIMIT)
+                            throw TeamFailure("skill_limit", 409, "A member keeps at most ${SkillStore.PERSONAL_LIMIT} personal skills.")
+                    } else if (Skills.select(Skills.id).where { (Skills.teamId eq actor.teamId) and Skills.ownerId.isNull() }.count() >= SkillStore.SKILL_LIMIT)
                         throw TeamFailure("skill_limit", 409, "The catalog is limited to ${SkillStore.SKILL_LIMIT} skills.")
                     val id = UUID.randomUUID().toString()
                     val now = nowMillis()
                     Skills.insert {
                         it[Skills.id] = id; it[teamId] = actor.teamId; it[Skills.name] = name
                         it[pinnedVersionId] = null; it[retiredAt] = null; it[createdAt] = now; it[updatedAt] = now
+                        it[ownerId] = if (personal) actor.member.id else null
                     }
-                    audit(actor.teamId, actor.member.id, "skill.created", id, credential = keyId(actor))
+                    audit(actor.teamId, actor.member.id, if (personal) "skill.personal.created" else "skill.created", id, credential = keyId(actor))
                     id
                 }
         }
@@ -129,7 +183,10 @@ class SqlSkillStore(private val database: Database) : SkillStore {
     }
 
     /** Open to publishing keys with `skills:pin`, so CI can approve a version it published earlier. */
-    override suspend fun pin(actor: Principal, name: String, version: String): Skill = write(actor, name, { requireSkillPinner() }) { row, now ->
+    override suspend fun pin(actor: Principal, name: String, version: String): Skill = write(actor, name, { requireSkillPinner() }) { row, now -> pinChange(actor, row, version, now) }
+    override suspend fun pinPersonal(actor: Principal, name: String, version: String): Skill = write(actor, name, personal = true) { row, now -> pinChange(actor, row, version, now) }
+
+    private fun JdbcTransaction.pinChange(actor: Principal, row: ResultRow, version: String, now: Long) {
         if (row[Skills.retiredAt] != null) throw TeamFailure("skill_retired", 409, "Restore this skill before pinning a version.")
         val target = versionRow(row[Skills.id], version)
         if (target[SkillVersions.retiredAt] != null) throw TeamFailure("skill_version_retired", 409, "This version is retired and cannot be pinned.")
@@ -165,21 +222,27 @@ class SqlSkillStore(private val database: Database) : SkillStore {
     /** The service key behind a catalog write, for its audit event; null for an interactive login. */
     private fun keyId(actor: Principal) = actor.tokenId.takeIf { actor.serviceScopes != null }
 
-    override suspend fun unpin(actor: Principal, name: String): Skill = write(actor, name) { row, now ->
+    override suspend fun unpin(actor: Principal, name: String): Skill = write(actor, name) { row, now -> unpinChange(actor, row, now) }
+    override suspend fun unpinPersonal(actor: Principal, name: String): Skill = write(actor, name, personal = true) { row, now -> unpinChange(actor, row, now) }
+    private fun JdbcTransaction.unpinChange(actor: Principal, row: ResultRow, now: Long) {
         if (row[Skills.pinnedVersionId] != null) {
             Skills.update({ Skills.id eq row[Skills.id] }) { it[pinnedVersionId] = null; it[updatedAt] = now }
             audit(actor.teamId, actor.member.id, "skill.unpinned", row[Skills.id])
         }
     }
 
-    override suspend fun retire(actor: Principal, name: String): Skill = write(actor, name) { row, now ->
+    override suspend fun retire(actor: Principal, name: String): Skill = write(actor, name) { row, now -> retireChange(actor, row, now) }
+    override suspend fun retirePersonal(actor: Principal, name: String): Skill = write(actor, name, personal = true) { row, now -> retireChange(actor, row, now) }
+    private fun JdbcTransaction.retireChange(actor: Principal, row: ResultRow, now: Long) {
         if (row[Skills.retiredAt] == null) {
             Skills.update({ Skills.id eq row[Skills.id] }) { it[retiredAt] = now; it[pinnedVersionId] = null; it[updatedAt] = now }
             audit(actor.teamId, actor.member.id, "skill.retired", row[Skills.id])
         }
     }
 
-    override suspend fun restore(actor: Principal, name: String): Skill = write(actor, name) { row, now ->
+    override suspend fun restore(actor: Principal, name: String): Skill = write(actor, name) { row, now -> restoreChange(actor, row, now) }
+    override suspend fun restorePersonal(actor: Principal, name: String): Skill = write(actor, name, personal = true) { row, now -> restoreChange(actor, row, now) }
+    private fun JdbcTransaction.restoreChange(actor: Principal, row: ResultRow, now: Long) {
         if (row[Skills.retiredAt] != null) {
             Skills.update({ Skills.id eq row[Skills.id] }) { it[retiredAt] = null; it[updatedAt] = now }
             audit(actor.teamId, actor.member.id, "skill.restored", row[Skills.id])
@@ -192,6 +255,7 @@ class SqlSkillStore(private val database: Database) : SkillStore {
             lockTeam(actor.teamId); requireCurrent(this, actor)
             // Locks the skill row: a publication pinning this version holds it without the team lock.
             val row = skillRow(actor.teamId, name, lock = true)
+            if (row[Skills.ownerId] != null) throw TeamFailure("skill_personal", 409, "This is a member's personal skill. Promote it to the team first.")
             val target = versionRow(row[Skills.id], version)
             if (row[Skills.pinnedVersionId] == target[SkillVersions.id])
                 throw TeamFailure("skill_version_pinned", 409, "Pin another version before retiring the approved one.")
@@ -217,7 +281,9 @@ class SqlSkillStore(private val database: Database) : SkillStore {
         actor.requireAdmin()
         return database.query {
             lockTeam(actor.teamId); requireCurrent(this, actor)
-            val skill = skillRow(actor.teamId, name)[Skills.id]
+            val skillRow = skillRow(actor.teamId, name)
+            if (skillRow[Skills.ownerId] != null) throw TeamFailure("skill_personal", 409, "A personal skill reaches its owner only. Promote it to the team to assign it.")
+            val skill = skillRow[Skills.id]
             if (Members.select(Members.id).where { (Members.id eq memberId) and (Members.teamId eq actor.teamId) }.forUpdate().singleOrNull() == null)
                 throw TeamFailure("not_found", 404, "Member not found.")
             val where = (SkillAssignments.skillId eq skill) and (SkillAssignments.memberId eq memberId)
@@ -245,11 +311,13 @@ class SqlSkillStore(private val database: Database) : SkillStore {
             throw TeamFailure("not_found", 404, "Member not found.")
         Skills.join(SkillAssignments, JoinType.LEFT, Skills.id, SkillAssignments.skillId) { SkillAssignments.memberId eq memberId }
             .join(SkillVersions, JoinType.LEFT, Skills.pinnedVersionId, SkillVersions.id)
-            .selectAll().where { Skills.teamId eq actor.teamId }
-            .orderBy(Skills.name to SortOrder.ASC).limit(SkillStore.SKILL_LIMIT.toInt())
+            .selectAll().where { (Skills.teamId eq actor.teamId) and (Skills.ownerId.isNull() or (Skills.ownerId eq memberId)) }
+            .orderBy(Skills.name to SortOrder.ASC).limit((SkillStore.SKILL_LIMIT + SkillStore.PERSONAL_LIMIT).toInt())
             .map { row ->
                 val pinned = row.getOrNull(SkillVersions.id)?.let { version(row) }
-                SkillCandidate(skill(row, pinned?.version), pinned, row.getOrNull(SkillAssignments.decision)?.let(::decision))
+                // A personal skill is delivered to its owner without an assignment, and to nobody else.
+                val decision = if (row[Skills.ownerId] == memberId) SkillDecision.ALLOW else row.getOrNull(SkillAssignments.decision)?.let(::decision)
+                SkillCandidate(skill(row, pinned?.version), pinned, decision)
             }
     }
 
@@ -270,7 +338,7 @@ class SqlSkillStore(private val database: Database) : SkillStore {
             ?: throw TeamFailure("device_required", 409, "Sign in with the TeamCode CLI to report installations from a registered device.")
         if (reports.isEmpty()) return@query
         val ids = Skills.select(Skills.id, Skills.name)
-            .where { (Skills.teamId eq actor.teamId) and (Skills.name inList reports.map { it.name }) }
+            .where { (Skills.teamId eq actor.teamId) and (Skills.name inList reports.map { it.name }) and (Skills.ownerId.isNull() or (Skills.ownerId eq actor.member.id)) }
             .associate { it[Skills.name] to it[Skills.id] }
         val missing = reports.firstOrNull { it.name !in ids }
         if (missing != null) throw TeamFailure("not_found", 404, "Skill ${missing.name} is not in the catalog.")
@@ -314,16 +382,24 @@ class SqlSkillStore(private val database: Database) : SkillStore {
      * that row lock: reading it without one could act on a pin state that a concurrent publication just changed.
      */
     private suspend fun write(
-        actor: Principal, name: String, authorize: Principal.() -> Unit = { requireAdmin() },
+        actor: Principal, name: String, authorize: Principal.() -> Unit = { requireAdmin() }, personal: Boolean = false,
         change: JdbcTransaction.(ResultRow, Long) -> Unit,
     ): Skill {
-        actor.authorize()
+        if (personal) actor.requirePersonalSkillOwner() else actor.authorize()
         return database.query {
             lockTeam(actor.teamId); requireCurrent(this, actor)
-            change(skillRow(actor.teamId, name, lock = true), nowMillis())
+            val row = skillRow(actor.teamId, name, lock = true)
+            // The catalog's own operations never act on a member's personal skill, and a member only on their own.
+            if (personal) { if (row[Skills.ownerId] != actor.member.id) throw TeamFailure("not_found", 404, "Skill not found.") }
+            else if (row[Skills.ownerId] != null) throw TeamFailure("skill_personal", 409, "This is a member's personal skill. Promote it to the team first.")
+            change(row, nowMillis())
             skill(skillRow(actor.teamId, name))
         }
     }
+
+    /** A personal skill's row for its owner; any other caller sees it as absent. */
+    private fun ownedRow(actor: Principal, name: String) =
+        skillRow(actor.teamId, name).also { if (it[Skills.ownerId] != actor.member.id) throw TeamFailure("not_found", 404, "Skill not found.") }
 
     private fun skillRow(team: String, name: String, lock: Boolean = false) =
         Skills.selectAll().where { (Skills.teamId eq team) and (Skills.name eq name) }.let { if (lock) it.forUpdate() else it }.singleOrNull()
@@ -337,7 +413,7 @@ class SqlSkillStore(private val database: Database) : SkillStore {
         SkillVersions.select(SkillVersions.version).where { SkillVersions.id eq id }.singleOrNull()?.get(SkillVersions.version)
     })
     private fun skill(row: ResultRow, pinned: String?) =
-        Skill(row[Skills.id], row[Skills.name], pinned, row[Skills.retiredAt] != null, row[Skills.createdAt], row[Skills.updatedAt], row[Skills.allMembers])
+        Skill(row[Skills.id], row[Skills.name], pinned, row[Skills.retiredAt] != null, row[Skills.createdAt], row[Skills.updatedAt], row[Skills.allMembers], row[Skills.ownerId])
     private fun version(row: ResultRow) = SkillVersion(
         row[SkillVersions.id], row[SkillVersions.skillId], row[SkillVersions.version], row[SkillVersions.digest], row[SkillVersions.sizeBytes],
         row[SkillVersions.fileCount], row[SkillVersions.publishedBy], row[SkillVersions.publishedAt], row[SkillVersions.retiredAt] != null,

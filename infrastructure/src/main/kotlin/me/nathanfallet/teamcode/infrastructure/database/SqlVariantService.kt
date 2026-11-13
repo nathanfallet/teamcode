@@ -26,9 +26,103 @@ class SqlVariantService(
 ) : VariantService, EffectiveVariantSource, HostedMcpAssignmentSource {
     override suspend fun list(actor: Principal): List<Variant> = database.query {
         authorize(this, actor)
-        Variants.selectAll().where { Variants.teamId eq actor.teamId }
+        Variants.selectAll().where { (Variants.teamId eq actor.teamId) and (Variants.ownerId eq "") }
             .orderBy(Variants.kind to SortOrder.ASC, Variants.target to SortOrder.ASC, Variants.name to SortOrder.ASC)
             .limit(VariantService.VARIANT_LIMIT.toInt()).map(::variant)
+    }
+
+    /** Personal variants for review, in owner order (the index order, so the read stops at the limit), bounded: definitions and owners, never a secret. */
+    override suspend fun personal(actor: Principal): List<Variant> = database.query {
+        authorize(this, actor)
+        Variants.selectAll().where { (Variants.teamId eq actor.teamId) and (Variants.ownerId greater "") }
+            .orderBy(Variants.ownerId to SortOrder.ASC).limit(VariantService.VARIANT_LIMIT.toInt()).map(::variant)
+    }
+
+    override suspend fun mine(actor: Principal): List<Variant> {
+        actor.requirePersonalVariantOwner()
+        return database.query {
+            requireCurrent(this, actor)
+            Variants.selectAll().where { (Variants.teamId eq actor.teamId) and (Variants.ownerId eq actor.member.id) }
+                .orderBy(Variants.kind to SortOrder.ASC, Variants.target to SortOrder.ASC, Variants.name to SortOrder.ASC)
+                .limit(VariantService.PERSONAL_LIMIT.toInt()).map(::variant)
+        }
+    }
+
+    override suspend fun createPersonal(actor: Principal, variant: NewVariant): Variant {
+        actor.requirePersonalVariantOwner()
+        if (variant.kind == VariantKind.MCP && (variant.transport == McpTransport.STDIO || variant.command != null))
+            throw TeamFailure("hosted_not_allowed", 403, "A hosted command runs package code on the server: only an administrator can declare one.")
+        if (variant.binding != VariantBinding.SHARED) throw TeamFailure("invalid_variant", 400, "A personal variant holds its own value; use the shared binding.")
+        VariantService.validate(variant)
+        return database.query {
+            lockTeam(actor.teamId); requireCurrent(this, actor)
+            val me = actor.member.id
+            if (Variants.select(Variants.id).where { (Variants.teamId eq actor.teamId) and (Variants.ownerId eq me) }.count() >= VariantService.PERSONAL_LIMIT)
+                throw TeamFailure("variant_limit", 409, "A member keeps at most ${VariantService.PERSONAL_LIMIT} personal variants.")
+            val target = VariantTarget(variant.kind, variant.target)
+            if (excluded(me, target)) throw TeamFailure("variant_excluded", 409, "An administrator excluded you from this target.")
+            if (!VariantAssignments.select(VariantAssignments.memberId).where { (VariantAssignments.memberId eq me) and assignedTarget(target) }.empty())
+                throw TeamFailure("slot_taken", 409, "This target is already provided to you. Remove or replace that selection first, or use another name.")
+            if (!Variants.select(Variants.id).where { (Variants.teamId eq actor.teamId) and slot(variant.kind, variant.target) and (Variants.name eq variant.name) and (Variants.ownerId eq me) }.empty())
+                throw TeamFailure("variant_exists", 409, "You already have a variant with this name for this target.")
+            val id = UUID.randomUUID().toString()
+            val now = nowMillis()
+            Variants.insert {
+                it[Variants.id] = id; it[teamId] = actor.teamId; it[kind] = variant.kind.name; it[Variants.target] = variant.target
+                it[name] = variant.name; it[binding] = variant.binding.name; it[version] = 1; it[endpoint] = variant.endpoint
+                it[config] = Json.encodeToString(variant.config); it[sharedSecret] = variant.sharedSecret?.let { secret -> seal(secret, actor.teamId, id) }
+                it[createdAt] = now; it[updatedAt] = now; it[ownerId] = me
+            }
+            val created = requireVariant(actor.teamId, id)
+            VariantAssignments.insert { it.assignment(actor.teamId, me, created, AssignmentSource.DIRECT, null, now) }
+            audit(actor.teamId, me, "variant.personal.created", id)
+            created
+        }
+    }
+
+    override suspend fun updatePersonal(actor: Principal, id: String, update: VariantUpdate): Variant {
+        actor.requirePersonalVariantOwner()
+        return database.query {
+            lockTeam(actor.teamId); requireCurrent(this, actor)
+            val current = requireOwned(actor, id, lock = true)
+            VariantService.validate(current, update)
+            if (current.version != update.expectedVersion) throw TeamFailure("variant_conflict", 409, "This variant changed since you loaded it. Reload and try again.")
+            if (current.kind == VariantKind.ENV && !current.hasSharedSecret && update.sharedSecret == null)
+                throw TeamFailure("invalid_variant", 400, "An environment variant needs a value.")
+            if (!Variants.select(Variants.id).where { (Variants.teamId eq actor.teamId) and slot(current.kind, current.target) and (Variants.name eq update.name) and (Variants.ownerId eq actor.member.id) and (Variants.id neq id) }.empty())
+                throw TeamFailure("variant_exists", 409, "You already have a variant with this name for this target.")
+            Variants.update({ (Variants.id eq id) and (Variants.teamId eq actor.teamId) }) {
+                it[name] = update.name; it[config] = Json.encodeToString(update.config)
+                if (update.clearSharedSecret) it[sharedSecret] = null
+                update.sharedSecret?.let { secret -> it[sharedSecret] = seal(secret, actor.teamId, id) }
+                it[version] = current.version + 1; it[updatedAt] = nowMillis()
+            }
+            audit(actor.teamId, actor.member.id, "variant.personal.updated", id)
+            requireVariant(actor.teamId, id)
+        }
+    }
+
+    override suspend fun deletePersonal(actor: Principal, id: String) {
+        actor.requirePersonalVariantOwner()
+        database.query {
+            lockTeam(actor.teamId); requireCurrent(this, actor)
+            requireOwned(actor, id, lock = true)
+            VariantAssignments.deleteWhere { (variantId eq id) and (teamId eq actor.teamId) }
+            Variants.deleteWhere { (Variants.id eq id) and (teamId eq actor.teamId) }
+            audit(actor.teamId, actor.member.id, "variant.personal.deleted", id)
+        }
+    }
+
+    override suspend fun promote(actor: Principal, id: String): Variant = database.query {
+        write(this, actor)
+        val current = requireVariant(actor.teamId, id, lock = true)
+        if (current.ownerId == null) throw TeamFailure("variant_not_personal", 409, "This variant already belongs to the team.")
+        // The unique name per target is per owner: refuse a collision with a team variant instead of failing on the index.
+        if (!Variants.select(Variants.id).where { (Variants.teamId eq actor.teamId) and slot(current.kind, current.target) and (Variants.name eq current.name) and (Variants.ownerId eq "") }.empty())
+            throw TeamFailure("variant_exists", 409, "A team variant with this name already exists for this target. Rename the personal one first.")
+        Variants.update({ (Variants.id eq id) and (Variants.teamId eq actor.teamId) }) { it[ownerId] = ""; it[version] = current.version + 1; it[updatedAt] = nowMillis() }
+        audit(actor.teamId, actor.member.id, "variant.promoted", id)
+        requireVariant(actor.teamId, id)
     }
 
     override suspend fun create(actor: Principal, variant: NewVariant): Variant {
@@ -44,9 +138,9 @@ class SqlVariantService(
         VariantService.validate(variant, launchers)
         return database.query {
             write(this, actor)
-            if (Variants.select(Variants.id).where { Variants.teamId eq actor.teamId }.count() >= VariantService.VARIANT_LIMIT)
+            if (Variants.select(Variants.id).where { (Variants.teamId eq actor.teamId) and (Variants.ownerId eq "") }.count() >= VariantService.VARIANT_LIMIT)
                 throw TeamFailure("variant_limit", 409, "Delete an unused variant before creating another.")
-            if (!Variants.select(Variants.id).where { (Variants.teamId eq actor.teamId) and slot(variant.kind, variant.target) and (Variants.name eq variant.name) }.empty())
+            if (!Variants.select(Variants.id).where { (Variants.teamId eq actor.teamId) and slot(variant.kind, variant.target) and (Variants.name eq variant.name) and (Variants.ownerId eq "") }.empty())
                 throw TeamFailure("variant_exists", 409, "A variant with this name already exists for this target.")
             val id = UUID.randomUUID().toString()
             val now = nowMillis()
@@ -116,11 +210,12 @@ class SqlVariantService(
     override suspend fun update(actor: Principal, id: String, update: VariantUpdate): Variant = database.query {
         write(this, actor)
         val current = requireVariant(actor.teamId, id, lock = true)
+        if (current.ownerId != null) throw personalVariant()
         VariantService.validate(current, update)
         if (current.version != update.expectedVersion) throw TeamFailure("variant_conflict", 409, "This variant changed since you loaded it. Reload and try again.")
         if (current.kind == VariantKind.ENV && current.binding == VariantBinding.SHARED && !current.hasSharedSecret && update.sharedSecret == null)
             throw TeamFailure("invalid_variant", 400, "A shared environment variant needs a value.")
-        if (!Variants.select(Variants.id).where { (Variants.teamId eq actor.teamId) and slot(current.kind, current.target) and (Variants.name eq update.name) and (Variants.id neq id) }.empty())
+        if (!Variants.select(Variants.id).where { (Variants.teamId eq actor.teamId) and slot(current.kind, current.target) and (Variants.name eq update.name) and (Variants.ownerId eq "") and (Variants.id neq id) }.empty())
             throw TeamFailure("variant_exists", 409, "A variant with this name already exists for this target.")
         Variants.update({ (Variants.id eq id) and (Variants.teamId eq actor.teamId) }) {
             it[name] = update.name; it[config] = Json.encodeToString(update.config)
@@ -144,6 +239,7 @@ class SqlVariantService(
         write(this, actor)
         requireMember(actor.teamId, memberId)
         val variant = requireVariant(actor.teamId, variantId, lock = true)
+        if (variant.ownerId != null) throw personalVariant()
         VariantService.validateMemberSecret(variant, memberSecret)
         if (excluded(memberId, variant.slot)) throw TeamFailure("variant_excluded", 409, "This member is excluded from this target. Remove the exclusion first.")
         val now = nowMillis()
@@ -164,6 +260,7 @@ class SqlVariantService(
     override suspend fun bulkAssign(actor: Principal, variantId: String): BulkAssignment = database.query {
         write(this, actor)
         val variant = requireVariant(actor.teamId, variantId, lock = true)
+        if (variant.ownerId != null) throw personalVariant()
         if (variant.binding != VariantBinding.SHARED) throw TeamFailure("invalid_variant", 400, "Only shared variants can be assigned in bulk; assign per-member variants individually.")
         // Member state changes take the same team lock, so this read is stable until commit.
         val members = Members.select(Members.id).where { (Members.teamId eq actor.teamId) and (Members.disabled eq false) }.map { it[Members.id] }
@@ -267,6 +364,11 @@ class SqlVariantService(
         if (lock) query.forUpdate()
         return query.singleOrNull()?.let(::variant) ?: throw TeamFailure("not_found", 404, "Variant not found.")
     }
+    /** A personal variant of the caller; anyone else's reads as absent. */
+    private fun requireOwned(actor: Principal, id: String, lock: Boolean = false): Variant =
+        requireVariant(actor.teamId, id, lock).also { if (it.ownerId != actor.member.id) throw TeamFailure("not_found", 404, "Variant not found.") }
+    private fun personalVariant() = TeamFailure("variant_personal", 409, "This is a member's personal variant. Promote it to the team first.")
+    private fun assignedTarget(target: VariantTarget) = (VariantAssignments.kind eq target.kind.name) and (VariantAssignments.target eq target.name)
     private fun requireMember(team: String, id: String) {
         Members.select(Members.id).where { (Members.id eq id) and (Members.teamId eq team) }.singleOrNull()
             ?: throw TeamFailure("not_found", 404, "Member not found.")
@@ -299,7 +401,7 @@ class SqlVariantService(
         return Variant(
             row[Variants.id], VariantKind.valueOf(row[Variants.kind]), row[Variants.target], row[Variants.name], VariantBinding.valueOf(row[Variants.binding]),
             row[Variants.version], row[Variants.endpoint], Json.decodeFromString(row[Variants.config]), row[Variants.sharedSecret] != null,
-            row[Variants.createdAt], row[Variants.updatedAt], transport, command,
+            row[Variants.createdAt], row[Variants.updatedAt], transport, command, row[Variants.ownerId].ifEmpty { null },
         )
     }
 }

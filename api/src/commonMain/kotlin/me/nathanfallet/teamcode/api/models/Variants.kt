@@ -14,6 +14,8 @@ data class VariantView(
     val endpoint: String? = null, val config: Map<String, String> = emptyMap(), val hasSharedSecret: Boolean,
     val createdAt: Long, val updatedAt: Long,
     val transport: String? = null, val launcher: String? = null, @SerialName("package") val pkg: String? = null, val args: List<String> = emptyList(),
+    /** The member who owns a personal variant, which is assigned to them alone; null for a team variant. */
+    val ownerId: String? = null,
 )
 
 /**
