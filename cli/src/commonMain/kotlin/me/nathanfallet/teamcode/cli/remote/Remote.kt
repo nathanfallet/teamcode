@@ -23,6 +23,7 @@ import me.nathanfallet.teamcode.cli.platform.environment
 import me.nathanfallet.teamcode.cli.platform.servicePlatform
 import me.nathanfallet.teamcode.cli.platform.writePrivateFile
 import me.nathanfallet.teamcode.cli.sdk
+import me.nathanfallet.teamcode.cli.longLivedSdk
 import me.nathanfallet.teamcode.client.TeamCodeException
 import okio.FileSystem
 import okio.Path
@@ -56,7 +57,7 @@ private class RemoteStart : SuspendingCliktCommand(name = "start") {
     override suspend fun run() {
         val path = remoteDirectory(directory)
         val config = loadConfig()
-        val code = sdk(config).use { client ->
+        val code = longLivedSdk(config).use { client ->
             requireRemote(client)
             if (bypass) echo("Warning: the agent acts on your files without asking for permission.", err = true)
             val session = client.createCloudSession(CreateCloudSessionRequest(
@@ -80,7 +81,7 @@ private class RemoteHost : SuspendingCliktCommand(name = "host") {
     override suspend fun run() {
         val local = RemoteSessions().load(session)
             ?: throw CliUserException("This device has no record of session $session: a remote session runs only on the device it was started on.")
-        val code = sdk(loadConfig()).use { client ->
+        val code = longLivedSdk(loadConfig()).use { client ->
             requireRemote(client)
             hostRemoteSession(client, local, report = { echo(it, err = true) })
         }

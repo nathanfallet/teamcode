@@ -121,7 +121,7 @@ private class ProxyStart : SuspendingCliktCommand(name = "start") {
         if (port !in 1..65535) throw CliUserException("Port must be between 1 and 65535.")
         val localToken = environment("TEAMCODE_LOCAL_TOKEN") ?: throw CliUserException("Set TEAMCODE_LOCAL_TOKEN (at least 32 characters).")
         if (localToken.length < 32) throw CliUserException("The local token must contain at least 32 characters.")
-        val client = sdk(loadConfig())
+        val client = longLivedSdk(loadConfig())
         val server = proxyServer(client, localToken, port) { echo(it, err = true) }
         try {
             server.start(wait = false)
@@ -138,6 +138,23 @@ internal fun loadConfig() = configStore().load() ?: throw CliUserException("No c
 internal fun sdk(config: CliConfig): TeamCodeClient {
     contactedServer = config.serverUrl
     return TeamCodeClient(config.serverUrl, { config.accessToken }) { configure -> HttpClient() { configure(this) } }
+}
+
+/**
+ * The token a long-running command presents: the saved one, read again on every request. `teamcode login` revokes the
+ * session it replaces, so a proxy that kept the token it read at launch would be refused (`401`) by the server after any
+ * later sign-in on this machine, while its agent session is still running. The service already reads it this way. A
+ * file that cannot be read, or that now names another server, leaves the token read at launch.
+ */
+internal fun followingToken(launched: CliConfig, saved: () -> CliConfig? = { configStore().load() }): () -> String? = {
+    val latest = try { saved() } catch (error: CancellationException) { throw error } catch (_: Exception) { null }
+    latest?.takeIf { it.serverUrl == launched.serverUrl }?.accessToken ?: launched.accessToken
+}
+
+/** [sdk] for a command that outlives a sign-in: an agent run, a hosted remote session, the local proxy. */
+internal fun longLivedSdk(config: CliConfig, saved: () -> CliConfig? = { configStore().load() }): TeamCodeClient {
+    contactedServer = config.serverUrl
+    return TeamCodeClient(config.serverUrl, followingToken(config, saved)) { configure -> HttpClient() { configure(this) } }
 }
 
 /** The origin of the last server this command contacted, named in network failure messages; an origin has no credential. */

@@ -14,6 +14,7 @@ import me.nathanfallet.teamcode.cli.SystemExit
 import me.nathanfallet.teamcode.cli.cloud.parseLabels
 import me.nathanfallet.teamcode.cli.loadConfig
 import me.nathanfallet.teamcode.cli.sdk
+import me.nathanfallet.teamcode.cli.longLivedSdk
 import me.nathanfallet.teamcode.cli.platform.*
 import me.nathanfallet.teamcode.cli.proxy.LOCAL_TOKEN_HEADER
 import me.nathanfallet.teamcode.cli.proxy.proxyServer
@@ -69,7 +70,7 @@ private class LaunchAgent(private val agent: String) : SuspendingCliktCommand(na
     private suspend fun runAgent(): Int {
         val parsedLabels = parseLabels(labels)
         val config = loadConfig()
-        return sdk(config).use { client ->
+        return longLivedSdk(config).use { client ->
             val capabilities = client.capabilities()
             // An older server ignores unknown fields: never let it drop the labels silently.
             if (parsedLabels.isNotEmpty() && RUN_LABELS_CAPABILITY !in capabilities.features)
