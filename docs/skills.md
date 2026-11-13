@@ -230,6 +230,17 @@ Authorization and input validation live in `ManageSkillCatalogUseCase` and the p
 
 A cloud session installs the owner's effective skills for its agent every time the agent starts, under the agent's own UID, with the same digest checks and the same preservation of personal skills; see [cloud sessions](cloud-sessions.md#team-mcp-servers-and-skills). The execution's `tcex_` credential holds `skills:read` for this.
 
+## Personal skills
+
+A member can publish skills of their own. They are delivered to that member only, in `teamcode run` and in the member's cloud sessions (the same delivery as team skills, resolved for the current owner of the session), and to nobody else: no administrator assignment, no `allMembers`.
+
+- **Owner.** `skills.owner_id` is the owning member, null for a team skill. The catalog's own operations (pin, unpin, retire, retire a version, audience, assignments) refuse a personal skill with `409 skill_personal`; the owner's own routes refuse a skill that is not theirs as `404`.
+- **Names.** One namespace per team: a name used by the team or by another member is refused with `409 name_taken`, naming nobody, so two skills never fight over `~/.claude/skills/<name>`. At most 50 personal skills per member (`skill_limit`); they do not count toward the team's 500.
+- **Routes** (`/api/v1/me/skills`, interactive login only: every service key and execution credential is refused): `GET` the member's skills, `GET /{name}/versions`, `POST /{name}/versions` (same body as a team publication, without `allMembers`), `PUT`/`DELETE /{name}/pin`, `DELETE /{name}` (retire, which also unpins) and `POST /{name}/restore`. Typed client: `personalSkills`, `publishPersonalSkill`, `pinPersonalSkill`, `unpinPersonalSkill`, `retirePersonalSkill`, `restorePersonalSkill`.
+- **Delivery.** The owner's pinned version is delivered without an assignment row. Pinning is the owner's own, because the skill reaches only them.
+- **Administrators** see a personal skill in the catalog (`GET /api/v1/skills`, with `ownerId`) as metadata, and can read its versions. They cannot assign it to others: a skill that other people will run is reviewed first, then **promoted** with `POST /api/v1/skills/{name}/promote`, which clears the owner, the pin and the audience. The administrator pins a version afterwards and assigns it like any team skill. Audited as `skill.personal.created` and `skill.promoted`.
+- **Not yet implemented:** a CLI command and app screens to publish personal skills (the API and client exist), and the same for personal environment values and MCP servers (see [memory and personal resources](memory.md#personal-skills-environment-values-and-mcp-servers)).
+
 ## What is planned
 
 - **Native CLI synchronization** before `teamcode run`: an isolated, agent-compatible local installation of the effective pinned versions, preserving personal skills and reporting naming conflicts through the installation route. It will come after the current V1 CLI work.

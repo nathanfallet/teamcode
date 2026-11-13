@@ -28,6 +28,14 @@ class SkillCatalogTest {
             return SkillPublication(skill, SkillVersion("v", "s", version, artifact.digest, artifact.sizeBytes, artifact.entries.size, actor.member.id, 1, false), true)
         }
         override suspend fun reportInstallations(actor: Principal, reports: List<SkillInstallationReport>) { this.reports += reports }
+        override suspend fun mine(actor: Principal) = error("unused")
+        override suspend fun personalVersions(actor: Principal, name: String) = error("unused")
+        override suspend fun promote(actor: Principal, name: String) = error("unused")
+        override suspend fun publishPersonal(actor: Principal, name: String, version: String, artifact: SkillArtifact, pin: Boolean) = error("unused")
+        override suspend fun pinPersonal(actor: Principal, name: String, version: String) = error("unused")
+        override suspend fun unpinPersonal(actor: Principal, name: String) = error("unused")
+        override suspend fun retirePersonal(actor: Principal, name: String) = error("unused")
+        override suspend fun restorePersonal(actor: Principal, name: String) = error("unused")
         override suspend fun catalog(actor: Principal) = error("unused")
         override suspend fun versions(actor: Principal, name: String) = error("unused")
         override suspend fun pin(actor: Principal, name: String, version: String): Skill { pins += name to version; return Skill("s", name, version, false, 1, 1) }

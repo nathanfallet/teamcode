@@ -1186,6 +1186,42 @@ class TeamCodeClient(
         return request("/api/v1/skill-delivery/$name/$version", HttpMethod.Get)
     }
 
+    /** The signed-in member's own skills. Only the owner sees or receives them; interactive login only. */
+    suspend fun personalSkills(): List<SkillView> = request("/api/v1/me/skills", HttpMethod.Get)
+
+    /** Publishes a version of one of the member's own skills (created by its first publication); `pin` approves it for the member. */
+    suspend fun publishPersonalSkill(name: String, version: String, files: List<SkillFileUpload>, pin: Boolean = false): PublishSkillVersionResponse {
+        require(SKILL_NAME.matches(name) && name.length <= 64 && SKILL_VERSION.matches(version)) { "Invalid skill name or version." }
+        return request("/api/v1/me/skills/$name/versions", HttpMethod.Post, PublishSkillVersionRequest(version, files, pin))
+    }
+
+    suspend fun pinPersonalSkill(name: String, version: String): SkillView {
+        require(SKILL_NAME.matches(name) && name.length <= 64 && SKILL_VERSION.matches(version)) { "Invalid skill name or version." }
+        return request("/api/v1/me/skills/$name/pin", HttpMethod.Put, PinSkillRequest(version))
+    }
+
+    suspend fun unpinPersonalSkill(name: String): SkillView {
+        require(SKILL_NAME.matches(name) && name.length <= 64) { "Invalid skill name." }
+        return request("/api/v1/me/skills/$name/pin", HttpMethod.Delete)
+    }
+
+    /** Stops delivering a personal skill; its versions are kept and [restorePersonalSkill] brings it back unpinned. */
+    suspend fun retirePersonalSkill(name: String): SkillView {
+        require(SKILL_NAME.matches(name) && name.length <= 64) { "Invalid skill name." }
+        return request("/api/v1/me/skills/$name", HttpMethod.Delete)
+    }
+
+    suspend fun restorePersonalSkill(name: String): SkillView {
+        require(SKILL_NAME.matches(name) && name.length <= 64) { "Invalid skill name." }
+        return request("/api/v1/me/skills/$name/restore", HttpMethod.Post)
+    }
+
+    /** Administrator: makes a reviewed personal skill a team skill; nothing is pinned or delivered until the administrator pins it. */
+    suspend fun promoteSkill(name: String): SkillView {
+        require(SKILL_NAME.matches(name) && name.length <= 64) { "Invalid skill name." }
+        return request("/api/v1/skills/$name/promote", HttpMethod.Post)
+    }
+
     /** The team hooks the signed-in member is currently allowed to install: name, approved version, digest and definition. */
     suspend fun hookManifest(): HookManifestView = request("/api/v1/hook-delivery", HttpMethod.Get)
 

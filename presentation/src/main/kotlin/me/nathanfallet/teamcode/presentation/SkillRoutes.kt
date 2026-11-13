@@ -16,7 +16,7 @@ import me.nathanfallet.teamcode.domain.team.*
 private const val MAX_PUBLISH_BODY_BYTES = 8 * 1024 * 1024
 private const val MAX_REPORT_BODY_BYTES = 131_072
 
-private fun Skill.view() = SkillView(id, name, pinnedVersion, retired, createdAt, updatedAt, allMembers)
+private fun Skill.view() = SkillView(id, name, pinnedVersion, retired, createdAt, updatedAt, allMembers, ownerId)
 private fun SkillVersion.view(pinned: String?) = SkillVersionView(version, digest, sizeBytes, fileCount, publishedBy, publishedAt, retired, version == pinned)
 private fun SkillAssignment.view() = SkillAssignmentView(memberId, decision.wire, updatedAt)
 private fun EffectiveSkill.view() = EffectiveSkillView(name, version, digest, sizeBytes, fileCount)
@@ -97,6 +97,34 @@ internal fun Route.skillRoutes(skills: SkillCatalog, team: TeamService, origin: 
         store.assign(call.principal, call.skillName, call.parameters["memberId"]!!, null)
         call.respond(HttpStatusCode.NoContent)
     }
+
+    post("/api/v1/skills/{name}/promote") { call.respond(store.promote(call.principal, call.skillName).view()) }
+
+    // A member's own skills: only the owner sees or changes them, and only the owner receives them.
+    val own = skills.personal
+    get("/api/v1/me/skills") { call.respond(own.mine(call.principal).map { it.view() }) }
+    get("/api/v1/me/skills/{name}/versions") {
+        val (skill, versions) = own.versions(call.principal, call.skillName)
+        call.respond(SkillDetailView(skill.view(), versions.map { it.view(skill.pinnedVersion) }))
+    }
+    post("/api/v1/me/skills/{name}/versions") {
+        val name = call.skillName
+        own.authorize(call.principal) // Before buffering up to 8 MiB.
+        val input = call.boundedJson<PublishSkillVersionRequest>(MAX_PUBLISH_BODY_BYTES)
+        if (input.allMembers) throw TeamFailure("invalid_skill_audience", 400, "A personal skill reaches its owner only.")
+        val result = own.publish(call.principal, name, input.version, input.files(), input.pin)
+        call.respond(if (result.created) HttpStatusCode.Created else HttpStatusCode.OK,
+            PublishSkillVersionResponse(result.skill.view(), result.version.view(result.skill.pinnedVersion), result.created))
+    }
+    put("/api/v1/me/skills/{name}/pin") {
+        val name = call.skillName
+        own.authorize(call.principal)
+        val input = call.boundedJson<PinSkillRequest>(4_096)
+        call.respond(own.pin(call.principal, name, input.version).view())
+    }
+    delete("/api/v1/me/skills/{name}/pin") { call.respond(own.unpin(call.principal, call.skillName).view()) }
+    delete("/api/v1/me/skills/{name}") { call.respond(own.retire(call.principal, call.skillName).view()) }
+    post("/api/v1/me/skills/{name}/restore") { call.respond(own.restore(call.principal, call.skillName).view()) }
 
     // Member delivery: manifest, artifacts and installation status.
     for (base in listOf("/api/v1/skill-delivery", "/api/v1/members/{memberId}/skill-delivery")) get(base) {
