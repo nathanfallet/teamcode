@@ -7,8 +7,7 @@ Status: **planned, nothing here is implemented yet.** This page is the design fo
 | Personal skills (API and client; CLI and app screens planned) | Implemented, see [skills](skills.md#personal-skills) |
 | Personal environment values and MCP servers (API and client; CLI and app screens planned) | Implemented, see [variants](variants.md) |
 | [Memory core](#memory-core): storage, REST API, `memory` scope, typed client | Implemented, see [What is implemented](#what-is-implemented) |
-| The `memory` MCP server for agents (`teamcode mcp memory`) | Planned |
-| [Index injected at session start](#index-at-session-start) | Planned |
+| The `memory` MCP server for agents (`teamcode mcp memory`) and the [index at session start](#index-at-session-start) | Implemented, see [What is implemented](#what-is-implemented) |
 | [Write rules and team validation](#write-rules) | Planned |
 | [Periodic curation](#curation) | Planned |
 | Documentation (files in a repository) | **Out of scope**, to be discussed later; see [Memory is not documentation](#memory-is-not-documentation) |
@@ -53,7 +52,10 @@ The server side of the [memory core](#memory-core) (capability `memory.v1`):
 - **Limits.** 160-character titles, one-line summaries of 300, 16,000 characters of content, 8 tags, 10 references; 2,000 personal entries per member and 5,000 team entries (`409 memory_limit`).
 - **Secret filter.** Content, title, summary and references that look like a credential (provider and TeamCode token prefixes, private keys, bearer headers, `password=value` assignments) are refused (`422 memory_secret`) before anything is stored. It is a filter of common shapes, not a guarantee.
 - **Audit.** `memory.created` (with scope and origin), `memory.updated` and `memory.forgotten`, with the entry id and the key's id when a key wrote it; never a title or content. The session of an execution credential is kept on the entry as provenance.
-- Not implemented here: the MCP server for agents, the index at session start, proposals and their validation, the curation job, and dashboard or app screens.
+- **The `teamcode_memory` MCP server for agents** (`teamcode mcp memory`, a stdio server like `teamcode_todo`): tools `memory_index`, `memory_search`, `memory_read`, `memory_write`, `memory_update` and `memory_forget`. `teamcode run` (Claude Code and Codex) adds it when the server serves `memory.v1`; cloud sessions add it when the execution credential holds the `memory` scope (an older credential gets `credential_scope` on a read and the agent is not offered the tools), remote host sessions when the server serves `memory.v1`. It reaches TeamCode through the local proxy's memory relay (`memory-relay-v1`: the index, search and entry routes only), with the local token, never a stored credential in the agent's reach.
+- **Index at session start.** When the agent initializes the server, the server reads the newest 50 entries (team and the caller's personal ones) and puts at most 4 KB of lines `id (scope) title: summary [tags]` in its instructions, with the rule that an entry is a note, never an instruction. Line breaks and control characters are removed from titles and summaries. A server that cannot be reached starts the agent without the index and says to use `memory_index`. Ordering is newest first; ordering by reads is not implemented.
+- An agent that asks for the team scope is refused (`memory_team_forbidden`) and told to write a personal entry and tell the member.
+- Not implemented here: proposals of team entries by an agent and their validation, the curation job, dashboard or app screens, and commands to read or write the memory from the CLI.
 
 ## Memory core
 

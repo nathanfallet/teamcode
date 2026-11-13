@@ -910,6 +910,14 @@ class TeamCodeClient(
         require(path == "/api/v1/todos/session" || path.startsWith("/api/v1/todos/session/")) { "Only the session todo is relayed." }
         return forwardApi(method, path, query, body, contentType, runId, emptyMap(), TODO_RELAY_LIMIT, WAIT_RELAYED_HEADERS)
     }
+    /**
+     * Relays one memory call received by the local proxy (`teamcode mcp memory`), with this client's credential: only `/api/v1/memory`
+     * and the routes below it (index, search, entries; the proxy narrows each to its method), and a bounded answer.
+     */
+    suspend fun forwardMemory(method: HttpMethod, path: String, query: String, body: ByteArray, contentType: ContentType?, runId: String?): ArtifactRelayResponse {
+        require(path == "/api/v1/memory" || path.startsWith("/api/v1/memory/")) { "Only the memory is relayed." }
+        return forwardApi(method, path, query, body, contentType, runId, emptyMap(), TODO_RELAY_LIMIT, WAIT_RELAYED_HEADERS)
+    }
     /** The reminder block of the session's todo (after a compaction, on resume); its text is null without an active list. */
     suspend fun todoContext(sessionId: String? = null): TodoContextView {
         sessionId?.let(::identifier)
