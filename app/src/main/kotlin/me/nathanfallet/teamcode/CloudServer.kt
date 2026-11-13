@@ -118,6 +118,8 @@ class CloudServer(
         wake = me.nathanfallet.teamcode.domain.cloud.LocalWakeService(store, conversationStore, hasOpenWait = { teamId, sessionId -> todoStore.hasOpenWait(teamId, sessionId) }))
     /** The memory with its proposal waits: an agent's team entry asks the session's owner (docs/memory.md). */
     val memory = me.nathanfallet.teamcode.domain.memory.MemoryService(me.nathanfallet.teamcode.infrastructure.database.SqlMemoryStore(database), me.nathanfallet.teamcode.domain.memory.WaitBackedMemoryProposals(waitStore))
+    /** The memory's curation (docs/memory.md): off per team until an administrator turns it on, never calls a model. */
+    val memoryCuration = me.nathanfallet.teamcode.domain.memory.MemoryCurationService(me.nathanfallet.teamcode.infrastructure.database.SqlMemoryCurationStore(database))
     val waits = WaitService(waitStore, object : WaitSessions {
         override suspend fun authorize(actor: Principal, sessionId: String) = conversationService.authorizeWaitAnswer(actor, sessionId)
         override suspend fun deliver(actor: Principal, sessionId: String, text: String, clientKey: String) = conversationService.queueWaitAnswer(actor, sessionId, text, clientKey)
@@ -268,6 +270,8 @@ class CloudServer(
                 if (runtime.enabled) step("todo-reminder") { work.runDue("todos/remind", intervalMillis = 5_000, timeoutMillis = 60_000) { todoReminder.run() } }
                 step("maintain") { work.runDue("automations/maintain", intervalMillis = 60_000) { automationStore.purge(1_000) } }
                 // Waits that resolve by themselves (a time, an event that timed out) wake their sessions; a message to a paused session resumes it.
+                // Teams that turned the curation on: changed scopes are tidied, doubtful pairs queued; retention applies to all.
+                step("memory-curation") { work.runDue("memory/curate", intervalMillis = 60 * 60_000, timeoutMillis = 240_000) { memoryCuration.run(java.util.UUID.randomUUID().toString()) } }
                 // An answered or expired proposal of an agent's team entry is accepted or rejected; one replica at a time.
                 step("memory") { work.runDue("memory/settle", intervalMillis = 10_000, timeoutMillis = 60_000) { memory.settle() } }
                 if (runtime.enabled) step("waits") { work.runDue("waits/due", intervalMillis = 5_000, timeoutMillis = 60_000) { waits.resolveDue() } }

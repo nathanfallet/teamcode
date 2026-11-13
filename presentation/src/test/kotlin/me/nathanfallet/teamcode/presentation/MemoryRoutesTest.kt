@@ -109,4 +109,35 @@ class MemoryRoutesTest {
         assertEquals(HttpStatusCode.OK, client.post("/api/v1/memory/proposals/p1/reject") { bearerAuth("member") }.status)
         assertEquals(listOf("p1" to false), store.decisions)
     }
+
+    private class Curation : MemoryCurationStore {
+        val calls = mutableListOf<String>()
+        private val review = MemoryReview("r1", MemoryScope.PERSONAL, "m1", ReviewKind.SAME_TITLE, "why", "o1", "Old", MemoryOrigin.HUMAN, "n1", "New", MemoryOrigin.AGENT, 1)
+        override suspend fun settings(actor: Principal) = CurationSettings(false)
+        override suspend fun setEnabled(actor: Principal, enabled: Boolean): CurationSettings { calls += "enable:$enabled:${actor.member.role.isAdministrator}"; return CurationSettings(enabled) }
+        override suspend fun reviews(actor: Principal, limit: Int) = listOf(review)
+        override suspend fun resolve(actor: Principal, id: String, apply: Boolean): MemoryReview { calls += "resolve:$id:$apply"; return review }
+        override suspend fun superseded(actor: Principal, limit: Int) = listOf(SupersededMemory("o1", MemoryScope.PERSONAL, "m1", "Old", "S", "m1", "n1", 2))
+        override suspend fun restore(actor: Principal, id: String): MemoryEntry { calls += "restore:$id"; return MemoryEntry(id, MemoryScope.PERSONAL, "m1", "Old", "S", "C", emptyList(), emptyList(), MemoryStatus.ACTIVE, MemoryOrigin.HUMAN, "m1", null, null, null, 3, 1, 1, null, 0) }
+        override suspend fun curate(runId: String, maxScopes: Int) = CurationReport(0, 0, 0, 0)
+    }
+
+    @Test fun curationIsForSignedInMembersAndItsSettingForAdministrators() = testApplication {
+        val curation = Curation()
+        application { configureGateway(gateway, team = team(), memory = MemoryService(Store()), memoryCuration = MemoryCurationService(curation)) }
+        // A key, even with `memory`, never reaches the curation; a plain member reads their reviews but cannot change the setting.
+        for (path in listOf("/api/v1/memory/curation", "/api/v1/memory/reviews", "/api/v1/memory/superseded"))
+            assertEquals(HttpStatusCode.Forbidden, client.get(path) { bearerAuth("memory-key") }.status, path)
+        assertEquals(HttpStatusCode.Forbidden, client.post("/api/v1/memory/o1/restore") { bearerAuth("memory-key") }.status)
+        assertEquals(HttpStatusCode.Forbidden, client.get("/api/v1/memory/curation") { bearerAuth("member") }.status)
+        assertEquals(HttpStatusCode.Forbidden, client.put("/api/v1/memory/curation") { bearerAuth("member"); contentType(json); setBody("""{"enabled":true}""") }.status)
+        assertTrue(client.get("/api/v1/memory/reviews") { bearerAuth("member") }.bodyAsText().contains(""""kind":"same_title""""))
+        assertTrue(client.get("/api/v1/memory/superseded") { bearerAuth("member") }.bodyAsText().contains(""""supersededById":"n1""""))
+        assertEquals(HttpStatusCode.OK, client.post("/api/v1/memory/reviews/r1/apply") { bearerAuth("member") }.status)
+        assertEquals(HttpStatusCode.OK, client.post("/api/v1/memory/reviews/r1/dismiss") { bearerAuth("member") }.status)
+        assertEquals(HttpStatusCode.OK, client.post("/api/v1/memory/o1/restore") { bearerAuth("member") }.status)
+        assertEquals(HttpStatusCode.OK, client.put("/api/v1/memory/curation") { bearerAuth("admin"); contentType(json); setBody("""{"enabled":true}""") }.status)
+        assertEquals(HttpStatusCode.OK, client.get("/api/v1/memory/curation") { bearerAuth("admin") }.status)
+        assertEquals(listOf("resolve:r1:true", "resolve:r1:false", "restore:o1", "enable:true:true"), curation.calls)
+    }
 }

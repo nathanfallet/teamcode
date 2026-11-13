@@ -1256,6 +1256,14 @@ class TeamCodeClient(
     suspend fun readMemory(id: String): MemoryEntryView { identifier(id); return request("/api/v1/memory/$id", HttpMethod.Get) }
     suspend fun createMemory(request: CreateMemoryRequest): MemoryEntryView = request("/api/v1/memory", HttpMethod.Post, request)
     suspend fun updateMemory(id: String, request: UpdateMemoryRequest): MemoryEntryView { identifier(id); return request("/api/v1/memory/$id", HttpMethod.Patch, request) }
+    /** Administrator: the curation setting and what the last run did. */
+    suspend fun memoryCuration(): MemoryCurationView = request("/api/v1/memory/curation", HttpMethod.Get)
+    suspend fun setMemoryCuration(enabled: Boolean): MemoryCurationView = request("/api/v1/memory/curation", HttpMethod.Put, SetMemoryCurationRequest(enabled))
+    /** Pairs curation left to the caller: their own personal ones, and the team's for an administrator. */
+    suspend fun memoryReviews(): MemoryReviewsView = request("/api/v1/memory/reviews", HttpMethod.Get)
+    suspend fun resolveMemoryReview(id: String, apply: Boolean): MemoryReviewView { identifier(id); return request("/api/v1/memory/reviews/$id/" + if (apply) "apply" else "dismiss", HttpMethod.Post) }
+    suspend fun supersededMemory(): SupersededMemoriesView = request("/api/v1/memory/superseded", HttpMethod.Get)
+    suspend fun restoreMemory(id: String): MemoryEntryView { identifier(id); return request("/api/v1/memory/$id/restore", HttpMethod.Post) }
     suspend fun forgetMemory(id: String) { identifier(id); request<Unit>("/api/v1/memory/$id", HttpMethod.Delete) }
 
     /** The signed-in member's own environment values and remote MCP servers, assigned to them alone. Interactive login only. */

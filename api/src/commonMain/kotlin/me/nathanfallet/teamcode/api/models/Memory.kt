@@ -56,3 +56,27 @@ data class UpdateMemoryRequest(
 ) {
     override fun toString() = "UpdateMemoryRequest(expectedVersion=$expectedVersion, title=[REDACTED])"
 }
+
+/** Whether the team's memory is curated (duplicates superseded, doubtful pairs queued for a person), and what the last run did. Off by default. */
+@Serializable
+data class MemoryCurationView(val enabled: Boolean, val lastRunAt: Long? = null, val lastRunId: String? = null, val lastSuperseded: Int = 0, val lastQueued: Int = 0)
+
+@Serializable
+data class SetMemoryCurationRequest(val enabled: Boolean)
+
+/** A pair curation did not decide alone: applying it supersedes `olderId` by `newerId`; dismissing it keeps both. `kind` is `duplicate` or `same_title`. */
+@Serializable
+data class MemoryReviewView(
+    val id: String, val scope: String, val kind: String, val reason: String, val olderId: String, val olderTitle: String, val olderOrigin: String,
+    val newerId: String, val newerTitle: String, val newerOrigin: String, val createdAt: Long,
+)
+
+@Serializable
+data class MemoryReviewsView(val reviews: List<MemoryReviewView>)
+
+/** An entry curation replaced; restorable until 90 days after `supersededAt`. */
+@Serializable
+data class SupersededMemoryView(val id: String, val scope: String, val title: String, val summary: String, val authorId: String, val supersededById: String? = null, val supersededAt: Long)
+
+@Serializable
+data class SupersededMemoriesView(val entries: List<SupersededMemoryView>)

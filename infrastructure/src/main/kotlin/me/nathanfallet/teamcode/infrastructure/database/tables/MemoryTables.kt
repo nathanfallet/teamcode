@@ -25,6 +25,8 @@ object Memories : Table("memories") {
     val supersedesId = varchar("supersedes_id", 36).nullable()
     /** The wait asking the session's owner about a proposal; null for any other entry. */
     val proposalWaitId = varchar("proposal_wait_id", 36).nullable()
+    /** Set on an entry curation superseded: the newer entry that replaced it. */
+    val supersededById = varchar("superseded_by_id", 36).nullable()
     val expiresAt = long("expires_at").nullable()
     val version = integer("version")
     val createdAt = long("created_at")
@@ -51,4 +53,46 @@ object MemoryTags : Table("memory_tags") {
     val ownerId = varchar("owner_id", 36).default("")
     override val primaryKey = PrimaryKey(memoryId, tag)
     init { index("memory_tag_lookup", false, teamId, scope, ownerId, tag, memoryId) }
+}
+
+/** A team's curation setting (off until an administrator turns it on) and what its last run did. A missing row means off. */
+object MemorySettings : Table("memory_settings") {
+    val teamId = reference("team_id", Teams.id, onDelete = ReferenceOption.CASCADE)
+    val curationEnabled = bool("curation_enabled").default(false)
+    val lastRunAt = long("last_run_at").nullable()
+    val lastRunId = varchar("last_run_id", 36).nullable()
+    val lastSuperseded = integer("last_superseded").default(0)
+    val lastQueued = integer("last_queued").default(0)
+    override val primaryKey = PrimaryKey(teamId)
+}
+
+/** When a scope (the team's entries, or one member's personal ones) was last curated: a run only reads scopes that changed since. */
+object MemoryCurationState : Table("memory_curation_state") {
+    val teamId = varchar("team_id", 36)
+    val scope = varchar("scope", 16)
+    val ownerId = varchar("owner_id", 36).default("")
+    val curatedAt = long("curated_at")
+    override val primaryKey = PrimaryKey(teamId, scope, ownerId)
+}
+
+/** A pair curation did not decide alone. `team_id`, `scope` and `owner_id` repeat the older entry's, so a reviewer's queue is one index range. */
+object MemoryReviews : Table("memory_reviews") {
+    val id = varchar("id", 36)
+    val teamId = varchar("team_id", 36)
+    val scope = varchar("scope", 16)
+    val ownerId = varchar("owner_id", 36).default("")
+    val olderId = reference("older_id", Memories.id, onDelete = ReferenceOption.CASCADE)
+    val newerId = reference("newer_id", Memories.id, onDelete = ReferenceOption.CASCADE)
+    val kind = varchar("kind", 16)
+    val reason = varchar("reason", 200)
+    /** `open`, `applied` or `dismissed`. */
+    val status = varchar("status", 12)
+    val createdAt = long("created_at")
+    val resolvedAt = long("resolved_at").nullable()
+    override val primaryKey = PrimaryKey(id)
+    init {
+        uniqueIndex("memory_review_pair", olderId, newerId)
+        index("memory_review_queue", false, teamId, status, scope, ownerId, createdAt)
+        index("memory_review_closed", false, status, resolvedAt)
+    }
 }
