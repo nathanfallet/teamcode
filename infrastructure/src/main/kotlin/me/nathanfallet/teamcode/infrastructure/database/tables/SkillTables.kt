@@ -27,8 +27,10 @@ object Skills : Table("skills") {
     val updatedAt = long("updated_at")
     /** Delivered to every member without an explicit decision, including later members. */
     val allMembers = bool("all_members").default(false)
+    /** The owning member of a personal skill; null for a team skill. Names stay unique per team across both. */
+    val ownerId = varchar("owner_id", 36).nullable()
     override val primaryKey = PrimaryKey(id)
-    init { uniqueIndex("skill_team_name", teamId, name) }
+    init { uniqueIndex("skill_team_name", teamId, name); index("skill_team_owner", false, teamId, ownerId) }
 }
 
 /** Immutable published versions. Rows are never updated except for the retirement marker. */

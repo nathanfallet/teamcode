@@ -4,7 +4,8 @@ Status: **planned, nothing here is implemented yet.** This page is the design fo
 
 | Part | Status |
 | --- | --- |
-| [Personal skills and MCP servers](#personal-skills-environment-values-and-mcp-servers) | Planned |
+| Personal skills (API and client; CLI and app screens planned) | Implemented, see [skills](skills.md#personal-skills) |
+| Personal environment values and MCP servers | Planned |
 | [Memory core](#memory-core): storage, API, `memory` MCP server | Planned |
 | [Index injected at session start](#index-at-session-start) | Planned |
 | [Write rules and team validation](#write-rules) | Planned |
@@ -27,12 +28,12 @@ Today only an administrator publishes skills and declares [variants](variants.md
 - A skill or a variant has an optional **owner** (a member). No owner means team-wide, as today. Existing rows keep no owner.
 - A member creates, edits, deletes and publishes their own from the API, the CLI and the app (interactive login only; service keys are refused, as for administration). Routes live under `/api/v1/me/...` and check the owner on every call.
 - A personal resource is **assigned to its owner automatically**: no assignment row is needed, and it is delivered wherever the owner's resources are resolved (`teamcode run`, cloud sessions through the same resolution as the team ones). After a [cloud transfer](cloud-sessions.md#transfer) the recipient receives their own personal resources, never the former owner's.
-- **Names** share one namespace with the team's: a personal skill, environment name or MCP slot cannot have the name of a team resource (`409 name_taken`), and an administrator publishing a team resource whose name a member already uses is refused until the member renames theirs. This avoids two directories or two slots fighting over `~/.claude/skills/<name>` or `tracker`.
-- An **administrator can assign** a personal resource to other members with the existing decisions and assignments (audited, the owner shown), or **promote** it to a team resource by clearing its owner after review. Nobody else receives it.
+- **Names** share one namespace per team: a personal skill, environment name or MCP slot cannot take a name used by the team or by another member (`409 name_taken`), and an administrator publishing a team resource whose name a member already uses is refused until the member renames theirs. This avoids two directories or two slots fighting over `~/.claude/skills/<name>` or `tracker`.
+- An **administrator can promote** a personal resource to a team resource after review, which clears its owner (and, for a skill, its pin and audience), then assigns it as usual. A personal resource is never assigned to others directly, because what other people will run is reviewed first. Nobody else receives it.
 - **Secrets stay with the owner.** Credentials use the existing AES-256-GCM envelopes bound to the row and the member, are write-only, and no administrator API returns them. Administrators see the definition of a personal resource and its owner (name, target, endpoint and configuration are not secret) so they can review it before promoting it, never a secret value.
 - **Limits** per member (default 50 skills, 20 variants), set by the same bounds as team resources (200 files and 5 MiB per skill version, 32 MCP servers per member).
 - **Hosted stdio MCP servers** run package code on the server's MCP host. A team setting `memberHostedMcp` (administrator, **off by default**) decides whether members may declare one; when on, the launcher and exact-version rules are those of administrator-declared commands, and a member's process is always `PER_MEMBER` (never shared with anyone). Remote HTTPS servers are allowed by default, under the same upstream address checks as team servers. Until that setting exists, a member's hosted command is simply refused.
-- A personal skill that an administrator assigns to others is subject to the usual pin (the owner pins their own for themselves; an assignment to others needs the administrator to pin that version).
+- Names are unique across the whole team, personal ones included (`name_taken` names nobody).
 
 ### Pull requests
 

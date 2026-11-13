@@ -10,6 +10,8 @@ import kotlinx.serialization.Serializable
 data class SkillView(
     val id: String, val name: String, val pinnedVersion: String? = null, val retired: Boolean, val createdAt: Long, val updatedAt: Long,
     val allMembers: Boolean = false,
+    /** The member who owns a personal skill (null for a team skill). A personal skill reaches its owner only. */
+    val ownerId: String? = null,
 )
 
 @Serializable

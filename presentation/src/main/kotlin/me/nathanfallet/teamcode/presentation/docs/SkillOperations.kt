@@ -61,6 +61,88 @@ internal fun ApiCatalog.skillOperations() {
             conflict("The skill or the version is retired (`skill_retired`, `skill_version_retired`).")
         }
     }
+    post("/api/v1/skills/{name}/promote") {
+        operationId = "promoteSkill"; tag(ApiTags.SKILLS)
+        summary = "Promote a personal skill to the team"
+        description = "After reviewing a member's personal skill, makes it a team skill: the owner, the pin and the audience " +
+            "are cleared, so nothing is delivered until an administrator pins a version. Interactive administrators only."
+        parameters { skillName() }
+        responses {
+            ok<SkillView>("The team skill.")
+            notFound("No such skill (`not_found`).")
+            conflict("The skill already belongs to the team (`skill_not_personal`).")
+        }
+    }
+    get("/api/v1/me/skills") {
+        operationId = "listMySkills"; tag(ApiTags.SKILLS)
+        summary = "List my personal skills"
+        description = "The caller's own skills, delivered to them only. Interactive login only: service keys are refused."
+        responses { ok<List<SkillView>>("The caller's skills.") }
+    }
+    get("/api/v1/me/skills/{name}/versions") {
+        operationId = "listMySkillVersions"; tag(ApiTags.SKILLS)
+        summary = "A personal skill and its versions"
+        parameters { skillName() }
+        responses {
+            ok<SkillDetailView>("The skill.")
+            notFound("No such personal skill of the caller (`not_found`).")
+        }
+    }
+    post("/api/v1/me/skills/{name}/versions") {
+        operationId = "publishMySkillVersion"; tag(ApiTags.SKILLS)
+        summary = "Publish a version of a personal skill"
+        description = "Same body and bounds as a team publication, without `allMembers`. The first publication creates the " +
+            "skill for the caller; its name must be free in the whole team (`name_taken`). With `pin: true` the caller " +
+            "approves the version for themself."
+        parameters { skillName() }
+        body<PublishSkillVersionRequest>("The version label and its files, base64-encoded.")
+        responses {
+            ok<PublishSkillVersionResponse>("The version already existed with the same content (`created: false`).")
+            ok<PublishSkillVersionResponse>("Published.", HttpStatusCode.Created)
+            badRequest("An invalid name, version, path, mode or base64 content (`invalid_skill_artifact`), or `allMembers` (`invalid_skill_audience`).")
+            conflict("The name is used in the team (`name_taken`), the version exists with other content (`skill_version_conflict`), a version or the skill is retired, or a limit is reached (`skill_limit`, `skill_version_limit`).")
+            error(HttpStatusCode.PayloadTooLarge, "The body exceeds 8 MiB (`payload_too_large`).")
+        }
+    }
+    put("/api/v1/me/skills/{name}/pin") {
+        operationId = "pinMySkillVersion"; tag(ApiTags.SKILLS)
+        summary = "Approve a version of a personal skill"
+        parameters { skillName() }
+        body<PinSkillRequest>("The version to pin.")
+        responses {
+            ok<SkillView>("The skill with its new pin.")
+            notFound("No such skill or version (`not_found`).")
+            conflict("The skill or the version is retired (`skill_retired`, `skill_version_retired`).")
+        }
+    }
+    delete("/api/v1/me/skills/{name}/pin") {
+        operationId = "unpinMySkill"; tag(ApiTags.SKILLS)
+        summary = "Stop delivering a personal skill"
+        parameters { skillName() }
+        responses {
+            ok<SkillView>("The skill without a pin.")
+            notFound("No such personal skill of the caller (`not_found`).")
+        }
+    }
+    delete("/api/v1/me/skills/{name}") {
+        operationId = "retireMySkill"; tag(ApiTags.SKILLS)
+        summary = "Retire a personal skill"
+        description = "Stops delivery and unpins; versions are kept. Restoring does not pin a version."
+        parameters { skillName() }
+        responses {
+            ok<SkillView>("The retired skill.")
+            notFound("No such personal skill of the caller (`not_found`).")
+        }
+    }
+    post("/api/v1/me/skills/{name}/restore") {
+        operationId = "restoreMySkill"; tag(ApiTags.SKILLS)
+        summary = "Restore a personal skill"
+        parameters { skillName() }
+        responses {
+            ok<SkillView>("The restored skill, not pinned.")
+            notFound("No such personal skill of the caller (`not_found`).")
+        }
+    }
     put("/api/v1/skills/{name}/audience") {
         operationId = "setSkillAudience"; tag(ApiTags.SKILLS)
         summary = "Deliver a skill to all members"
