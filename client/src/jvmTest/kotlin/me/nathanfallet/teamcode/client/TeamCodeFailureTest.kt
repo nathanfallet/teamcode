@@ -22,6 +22,15 @@ class TeamCodeFailureTest {
         }
     }
 
+    @Test fun theMemoryRelayForwardsTheMemoryRoutesAndNothingElse() = runBlocking {
+        failing(HttpStatusCode.OK, "{}").use { client ->
+            for (path in listOf("/api/v1/memory", "/api/v1/memory/index", "/api/v1/memory/search", "/api/v1/memory/e1"))
+                assertEquals(200, client.forwardMemory(HttpMethod.Get, path, "", ByteArray(0), null, null).status, path)
+            for (path in listOf("/api/v1/memories", "/api/v1/me/skills", "/api/v1/todos/session"))
+                assertFailsWith<IllegalArgumentException>(path) { client.forwardMemory(HttpMethod.Get, path, "", ByteArray(0), null, null) }
+        }
+    }
+
     @Test fun everyRequestStyleCarriesTheApiErrorCode() = runBlocking {
         val body = """{"error":{"type":"forbidden","message":"Administrator access is required."}}"""
         failing(HttpStatusCode.Forbidden, body).use { client ->

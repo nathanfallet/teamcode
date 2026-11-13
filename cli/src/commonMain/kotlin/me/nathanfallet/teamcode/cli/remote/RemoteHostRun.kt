@@ -16,6 +16,7 @@ import me.nathanfallet.teamcode.cli.launch.ArtifactsMcp
 import me.nathanfallet.teamcode.cli.launch.WaitsMcp
 import me.nathanfallet.teamcode.cli.launch.WorkflowMcp
 import me.nathanfallet.teamcode.cli.launch.TodoMcp
+import me.nathanfallet.teamcode.cli.launch.MemoryMcp
 import me.nathanfallet.teamcode.api.models.Todos
 import me.nathanfallet.teamcode.cli.launch.ENVIRONMENT_CAPABILITY
 import me.nathanfallet.teamcode.cli.launch.GuidancePlugin
@@ -312,6 +313,14 @@ internal class HostAgentTools(
         if (Todos.CAPABILITY !in features) return null
         return try { TodoMcp(executable(), session) } catch (error: CancellationException) { throw error } catch (_: Exception) {
             report("The todo tools could not be prepared; the agent starts without them."); null
+        }
+    }
+
+    /** Likewise for the memory tools: the capability is enough, and they need no session. */
+    override suspend fun memory(): MemoryMcp? {
+        if (me.nathanfallet.teamcode.api.models.MemoryApi.CAPABILITY !in features) return null
+        return try { MemoryMcp(executable()) } catch (error: CancellationException) { throw error } catch (_: Exception) {
+            report("The memory tools could not be prepared; the agent starts without them."); null
         }
     }
 

@@ -34,7 +34,7 @@ private val TOKEN_VARIABLES = listOf("TEAMCODE_MCP_TOKEN", "TEAMCODE_LOCAL_TOKEN
 
 class Mcp : SuspendingNoOpCliktCommand(name = "mcp") {
     override fun help(context: Context) = "MCP servers: the team's servers assigned to you, and the ones TeamCode runs beside an agent, over stdio."
-    init { subcommands(McpList(), ArtifactsMcpCommand(), WaitsMcpCommand(), WorkflowMcpCommand(), TodoMcpCommand()) }
+    init { subcommands(McpList(), ArtifactsMcpCommand(), WaitsMcpCommand(), WorkflowMcpCommand(), TodoMcpCommand(), MemoryMcpCommand()) }
 }
 
 /** One line of `teamcode mcp list`: the name agents see, the transport, and a hosted command's state. */
@@ -168,6 +168,26 @@ private class TodoMcpCommand : SuspendingCliktCommand(name = "todo") {
         run?.let { if (!RunIdentifiers.isValid(it)) throw CliUserException("--run must be a run UUID.") }
         relayClient("TEAMCODE_TODO", run).use {
             val server = TodoMcpServer(it, session, me.nathanfallet.teamcode.cli.todo.TodoChecks(me.nathanfallet.teamcode.cli.todo.ProcessRunner, session))
+            while (true) {
+                val line = readlnOrNull() ?: break
+                if (line.isBlank()) continue
+                val answer = server.handle(line) ?: continue
+                print(answer + "\n")
+                flushStandardOutput()
+            }
+        }
+    }
+}
+
+private class MemoryMcpCommand : SuspendingCliktCommand(name = "memory") {
+    override val hiddenFromHelp = true
+    private val run by option("--run", help = "The agent run this server belongs to.")
+    override fun help(context: Context) = "The stdio MCP server an agent reads and writes the team's and its owner's memory with (memory_index, memory_read, memory_write…). " +
+        "teamcode run and the session runners add it to Claude Code and Codex; its instructions carry the memory index."
+    override suspend fun run() {
+        run?.let { if (!RunIdentifiers.isValid(it)) throw CliUserException("--run must be a run UUID.") }
+        relayClient("TEAMCODE_MEMORY", run).use {
+            val server = MemoryMcpServer(it)
             while (true) {
                 val line = readlnOrNull() ?: break
                 if (line.isBlank()) continue

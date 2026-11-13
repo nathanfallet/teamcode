@@ -250,6 +250,8 @@ private class LaunchAgent(private val agent: String) : SuspendingCliktCommand(na
         val command = servicePlatform().executable
         val waits = local?.let { WaitsMcp(command, it.sessionId) }
         val todo = local?.let { TodoMcp(command, it.sessionId) }
+        // The memory tools need no session: the capability of the server is enough.
+        val memory = if (memoryServed(client)) MemoryMcp(command) else null
         val ownSettings = options.any { it == "--settings" || it.startsWith("--settings=") }
         if (local != null && agent == "claude" && ownSettings) echo("Your own --settings replace TeamCode's hooks: the todo does not block a stop and ask_human does not wake the agent in this run.", err = true)
         val hooks = if (local == null || agent != "claude" || ownSettings || runId == null) emptyList() else cloudHookSettings(emptyList(),
@@ -258,7 +260,7 @@ private class LaunchAgent(private val agent: String) : SuspendingCliktCommand(na
         try {
             val plan = agentLaunch(agent, arguments, port, token, plugin?.directory?.toString(), guidance.arguments, workload, runId, mcpServers,
                 claudeLogin, environment("ANTHROPIC_CUSTOM_HEADERS"), hookToken = plugin != null && guided, artifacts = artifactServer,
-                waits = waits, todo = todo, codexInstructions = codexInstructions, identity = identity)
+                waits = waits, todo = todo, memory = memory, codexInstructions = codexInstructions, identity = identity)
             val settings = hooks
             // The variables go first: TeamCode's own settings always win (the server already refuses their names).
             val environment = variables.orEmpty() + plan.environment + mapOf("TEAMCODE_ACTIVITY" to null) + guidance.environment
@@ -387,6 +389,12 @@ internal class TodoMcp(val command: String, val sessionId: String) {
 }
 
 /**
+ * `teamcode mcp memory`, started by the agent itself as a stdio server: [command] is this TeamCode executable. It needs no session, only
+ * the relay and its token, so a local run, a cloud session and a remote host session all have it when the server serves the memory.
+ */
+internal class MemoryMcp(val command: String)
+
+/**
  * The caller's options without `--append-system-prompt`, and the text Claude Code would have used (the last one), so it
  * can be merged into TeamCode's. `--append-system-prompt-file` is left alone: Claude Code combines it with the text.
  */
@@ -452,7 +460,7 @@ internal fun mcpLabel(server: String) = "teamcode-" + server.replace('.', '_')
 
 /** Null values remove inherited provider credentials without changing the parent environment or config files. */
 internal class AgentLaunch(val arguments: List<String>, val environment: Map<String, String?>)
-internal fun agentLaunch(agent: String, arguments: List<String>, port: Int, token: String, guidancePlugin: String? = null, codexGuidance: List<String> = emptyList(), workload: String = "interactive", runId: String? = null, mcpServers: List<String> = emptyList(), claudeLogin: Boolean = false, inheritedHeaders: String? = null, hookToken: Boolean = guidancePlugin != null, artifacts: ArtifactsMcp? = null, codexInstructions: Boolean = true, identity: String? = null, waits: WaitsMcp? = null, workflow: WorkflowMcp? = null, todo: TodoMcp? = null): AgentLaunch {
+internal fun agentLaunch(agent: String, arguments: List<String>, port: Int, token: String, guidancePlugin: String? = null, codexGuidance: List<String> = emptyList(), workload: String = "interactive", runId: String? = null, mcpServers: List<String> = emptyList(), claudeLogin: Boolean = false, inheritedHeaders: String? = null, hookToken: Boolean = guidancePlugin != null, artifacts: ArtifactsMcp? = null, codexInstructions: Boolean = true, identity: String? = null, waits: WaitsMcp? = null, workflow: WorkflowMcp? = null, todo: TodoMcp? = null, memory: MemoryMcp? = null): AgentLaunch {
     require(agent in setOf("claude", "codex") && port in 1..65535 && token.length >= 32 && workload in setOf("interactive", "background"))
     require(runId == null || me.nathanfallet.teamcode.api.models.RunIdentifiers.isValid(runId))
     require(mcpServers.all { TeamCodeClient.MCP_SERVER_NAME.matches(it) })
@@ -475,15 +483,17 @@ internal fun agentLaunch(agent: String, arguments: List<String>, port: Int, toke
     val workflowArguments = workflow?.let { listOf("mcp", "workflow", "--session", it.sessionId) + (runId?.let { id -> listOf("--run", id) } ?: emptyList()) }
     // The todo tools reach the same proxy's todo relay, which relays this session's list and nothing else.
     val todoArguments = todo?.let { listOf("mcp", "todo", "--session", it.sessionId) + (runId?.let { id -> listOf("--run", id) } ?: emptyList()) }
+    // The memory tools reach the same proxy's memory relay, which relays the memory routes and nothing else.
+    val memoryArguments = memory?.let { listOf("mcp", "memory") + (runId?.let { id -> listOf("--run", id) } ?: emptyList()) }
     val relay = "http://127.0.0.1:$port"
     // What TeamCode adds to the agent's instructions: who runs the session ([OwnerIdentity]), then the artifact and wait tools.
-    val instructions = listOfNotNull(identity, ARTIFACTS_INSTRUCTIONS.takeIf { artifacts != null }, WAITS_INSTRUCTIONS.takeIf { waits != null }, WORKFLOW_INSTRUCTIONS.takeIf { workflow != null }, me.nathanfallet.teamcode.cli.todo.TodoDocs.PROMPT.takeIf { todo != null })
+    val instructions = listOfNotNull(identity, ARTIFACTS_INSTRUCTIONS.takeIf { artifacts != null }, WAITS_INSTRUCTIONS.takeIf { waits != null }, WORKFLOW_INSTRUCTIONS.takeIf { workflow != null }, me.nathanfallet.teamcode.cli.todo.TodoDocs.PROMPT.takeIf { todo != null }, me.nathanfallet.teamcode.cli.memory.MemoryDocs.PROMPT.takeIf { memory != null })
         .joinToString("\n\n").ifEmpty { null }
     // Agent options go before a literal "--" delimiter, and after the caller's own options because
     // Claude Code's --mcp-config is variadic and would otherwise swallow a following prompt argument.
     val delimiter = arguments.indexOf("--").let { if (it < 0) arguments.size else it }
     return if (agent == "claude") {
-        val mcpConfig = if (mcp.isEmpty() && artifacts == null && waits == null && workflow == null && todo == null) emptyList() else listOf("--mcp-config", buildJsonObject {
+        val mcpConfig = if (mcp.isEmpty() && artifacts == null && waits == null && workflow == null && todo == null && memory == null) emptyList() else listOf("--mcp-config", buildJsonObject {
             putJsonObject("mcpServers") {
                 for ((label, server) in mcp) putJsonObject(label) {
                     put("type", "http"); put("url", mcpUrl(server))
@@ -510,6 +520,11 @@ internal fun agentLaunch(agent: String, arguments: List<String>, port: Int, toke
                     putJsonArray("args") { todoArguments!!.forEach { add(it) } }
                     putJsonObject("env") { put("TEAMCODE_TODO_URL", relay); put("TEAMCODE_TODO_TOKEN", "\${TEAMCODE_MCP_TOKEN}"); put("TEAMCODE_TODO_TOKEN_VAR", "TEAMCODE_TODO_TOKEN") }
                 }
+                if (memory != null) putJsonObject(me.nathanfallet.teamcode.cli.memory.MemoryDocs.LABEL) {
+                    put("type", "stdio"); put("command", memory.command)
+                    putJsonArray("args") { memoryArguments!!.forEach { add(it) } }
+                    putJsonObject("env") { put("TEAMCODE_MEMORY_URL", relay); put("TEAMCODE_MEMORY_TOKEN", "\${TEAMCODE_MCP_TOKEN}"); put("TEAMCODE_MEMORY_TOKEN_VAR", "TEAMCODE_MEMORY_TOKEN") }
+                }
             }
         }.toString())
         // Logged in with claude.ai, Claude Code keeps that login, as under TeamClaude: an environment credential
@@ -531,7 +546,7 @@ internal fun agentLaunch(agent: String, arguments: List<String>, port: Int, toke
         AgentLaunch((guidancePlugin?.let { listOf("--plugin-dir", it) }.orEmpty()) + options + artifactOptions + mcpConfig + arguments.drop(delimiter), claudeProviderOverrides + mapOf(
         "TEAMCODE_HOOK_TOKEN" to if (guidancePlugin != null && hookToken) token else null,
         "TEAMCODE_RUN_ID" to runId,
-        "TEAMCODE_MCP_TOKEN" to if (mcp.isNotEmpty() || artifacts != null || waits != null || workflow != null || todo != null) token else null,
+        "TEAMCODE_MCP_TOKEN" to if (mcp.isNotEmpty() || artifacts != null || waits != null || workflow != null || todo != null || memory != null) token else null,
         "ANTHROPIC_BASE_URL" to origin,
         "ANTHROPIC_AUTH_TOKEN" to if (keepLogin) null else token,
         "ANTHROPIC_CUSTOM_HEADERS" to headers,
@@ -549,6 +564,8 @@ internal fun agentLaunch(agent: String, arguments: List<String>, port: Int, toke
                 "args=[${workflowArguments!!.joinToString(",") { toml(it) }}],env={TEAMCODE_WORKFLOW_URL=${toml(relay)},TEAMCODE_WORKFLOW_TOKEN_VAR=\"TEAMCODE_LOCAL_TOKEN\"},env_vars=[\"TEAMCODE_LOCAL_TOKEN\"]}")) +
             (if (todo == null) emptyList() else listOf("-c", "mcp_servers.${me.nathanfallet.teamcode.cli.todo.TodoDocs.LABEL}={command=${toml(todo.command)}," +
                 "args=[${todoArguments!!.joinToString(",") { toml(it) }}],env={TEAMCODE_TODO_URL=${toml(relay)},TEAMCODE_TODO_TOKEN_VAR=\"TEAMCODE_LOCAL_TOKEN\"},env_vars=[\"TEAMCODE_LOCAL_TOKEN\"]}")) +
+            (if (memory == null) emptyList() else listOf("-c", "mcp_servers.${me.nathanfallet.teamcode.cli.memory.MemoryDocs.LABEL}={command=${toml(memory.command)}," +
+                "args=[${memoryArguments!!.joinToString(",") { toml(it) }}],env={TEAMCODE_MEMORY_URL=${toml(relay)},TEAMCODE_MEMORY_TOKEN_VAR=\"TEAMCODE_LOCAL_TOKEN\"},env_vars=[\"TEAMCODE_LOCAL_TOKEN\"]}")) +
             // Codex has no artifact tool of its own; it only gets the instructions, unless the caller set its own
             // developer instructions, which an override would replace.
             (if (instructions == null || !codexInstructions || hasCodexOverride(arguments, "developer_instructions")) emptyList()
@@ -559,3 +576,8 @@ internal fun agentLaunch(agent: String, arguments: List<String>, port: Int, toke
             mapOf("TEAMCODE_LOCAL_TOKEN" to token, "TEAMCODE_HOOK_TOKEN" to null, "TEAMCODE_RUN_ID" to runId))
     }
 }
+
+/** Whether the server serves the memory (`memory.v1`); a server that cannot be asked counts as not serving it. */
+private suspend fun memoryServed(client: TeamCodeClient): Boolean = try {
+    me.nathanfallet.teamcode.api.models.MemoryApi.CAPABILITY in client.capabilities().features
+} catch (error: CancellationException) { throw error } catch (_: Exception) { false }

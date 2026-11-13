@@ -64,7 +64,7 @@ fun Application.localProxy(client: TeamCodeClient, localToken: String, maximumBo
                     if (challenge != null) put("proof", serviceProof(localToken, challenge, serviceId, serverUrl))
                     else { put("id", serviceId); put("serverUrl", serverUrl) }
                     put("version", me.nathanfallet.teamcode.cli.VERSION)
-                    putJsonArray("capabilities") { add(JsonPrimitive("workload-routing-v1")); add(JsonPrimitive("run-routing-v1")); add(JsonPrimitive("mcp-relay-v1")); add(JsonPrimitive("local-token-header-v1")); add(JsonPrimitive("artifact-relay-v1")); add(JsonPrimitive("activity-relay-v1")); add(JsonPrimitive("wait-relay-v1")); add(JsonPrimitive("workflow-relay-v1")); add(JsonPrimitive("todo-relay-v1")) }
+                    putJsonArray("capabilities") { add(JsonPrimitive("workload-routing-v1")); add(JsonPrimitive("run-routing-v1")); add(JsonPrimitive("mcp-relay-v1")); add(JsonPrimitive("local-token-header-v1")); add(JsonPrimitive("artifact-relay-v1")); add(JsonPrimitive("activity-relay-v1")); add(JsonPrimitive("wait-relay-v1")); add(JsonPrimitive("workflow-relay-v1")); add(JsonPrimitive("todo-relay-v1")); add(JsonPrimitive("memory-relay-v1")) }
                 }.toString(), ContentType.Application.Json)
             }
         }
@@ -73,6 +73,7 @@ fun Application.localProxy(client: TeamCodeClient, localToken: String, maximumBo
         waitRelay(sessionClient ?: client, localToken, maximumBodyBytes)
         workflowRelay(sessionClient ?: client, localToken, maximumBodyBytes)
         todoRelay(sessionClient ?: client, localToken, maximumBodyBytes)
+        memoryRelay(sessionClient ?: client, localToken, maximumBodyBytes)
         for (path in listOf("/v1/messages", "/v1/responses")) {
             for (mode in listOf("interactive", "background", "run")) {
                 val prefix = when (mode) { "background" -> "/_teamcode/workloads/background"; "run" -> "/_teamcode/runs/{runId}/{workload}"; else -> "" }
@@ -286,6 +287,7 @@ internal val ARTIFACT_RELAY_ROUTES: Map<HttpMethod, List<Regex>> = mapOf(
 )
 
 private const val WAIT_ID = "[a-zA-Z0-9-]{1,36}"
+private const val MEMORY_ID = "[a-zA-Z0-9-]{1,36}"
 
 /**
  * The wait API calls `teamcode mcp waits` makes, and nothing else: listing, reading, asking and withdrawing. Answering
@@ -315,6 +317,23 @@ internal val TODO_RELAY_ROUTES: Map<HttpMethod, List<Regex>> = mapOf(
     HttpMethod.Get to listOf(Regex("/api/v1/todos/session"), Regex("/api/v1/todos/session/context")),
     HttpMethod.Post to listOf(Regex("/api/v1/todos/session"), Regex("/api/v1/todos/session/items"), Regex("/api/v1/todos/session/stop"), Regex("/api/v1/todos/session/wake"), Regex("/api/v1/todos/session/hook-error"), Regex("/api/v1/todos/session/reset"), Regex("/api/v1/todos/session/items/[a-z0-9][a-z0-9-]{0,39}/(start|notes|proof|link|drop)")),
 )
+
+/**
+ * The memory calls of `teamcode mcp memory`: the index, the search and the entries. Who may read or write an entry is decided by the
+ * server for the credential, so a personal entry stays its owner's whatever this relay carries.
+ */
+internal val MEMORY_RELAY_ROUTES: Map<HttpMethod, List<Regex>> = mapOf(
+    HttpMethod.Get to listOf(Regex("/api/v1/memory/index"), Regex("/api/v1/memory/search"), Regex("/api/v1/memory/$MEMORY_ID")),
+    HttpMethod.Post to listOf(Regex("/api/v1/memory")),
+    HttpMethod.Patch to listOf(Regex("/api/v1/memory/$MEMORY_ID")),
+    HttpMethod.Delete to listOf(Regex("/api/v1/memory/$MEMORY_ID")),
+)
+
+/** Relays the memory calls of `teamcode mcp memory`, as [apiRelay] does. */
+private fun Routing.memoryRelay(client: TeamCodeClient, localToken: String, maximumBodyBytes: Int) =
+    apiRelay("/api/v1/memory", MEMORY_RELAY_ROUTES, localToken, maximumBodyBytes) { request ->
+        client.forwardMemory(request.method, request.path, request.query, request.body, request.contentType, request.runId)
+    }
 
 /** Relays the todo calls of `teamcode mcp todo`, as [apiRelay] does. */
 private fun Routing.todoRelay(client: TeamCodeClient, localToken: String, maximumBodyBytes: Int) =

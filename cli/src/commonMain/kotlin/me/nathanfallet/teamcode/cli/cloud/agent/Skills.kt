@@ -360,6 +360,9 @@ internal interface AgentTools {
     /** The todo tools (`todo_create`…) to start beside the agent for this session, or null. Never throws except on cancellation. */
     suspend fun todo(): me.nathanfallet.teamcode.cli.launch.TodoMcp? = null
 
+    /** The memory tools (`memory_read`, `memory_write`…) to start beside the agent when the server serves the memory, or null. Never throws except on cancellation. */
+    suspend fun memory(): me.nathanfallet.teamcode.cli.launch.MemoryMcp? = null
+
     /** A Claude Code plugin directory carrying hooks (a member's approved team hooks on their own device), or null. */
     suspend fun claudePlugin(): String? = null
 }
@@ -540,6 +543,28 @@ internal class RunnerAgentTools(
         }
         catch (_: Exception) { false }
         return if (usable) try { me.nathanfallet.teamcode.cli.launch.TodoMcp(command, session) } catch (_: IllegalArgumentException) { null } else null
+    }
+
+    /**
+     * `teamcode mcp memory` in the agent's container when the server serves the memory (`memory.v1`) and the execution's credential may use it:
+     * an execution credential from before the `memory` scope gets a `403 credential_scope` on the index read, and then the agent is not
+     * offered tools that would always be refused. The read changes nothing.
+     */
+    override suspend fun memory(): me.nathanfallet.teamcode.cli.launch.MemoryMcp? {
+        val command = binary ?: return null
+        val usable = try {
+            withTimeout(20_000) {
+                if (me.nathanfallet.teamcode.api.models.MemoryApi.CAPABILITY !in client.capabilities().features) false
+                else { client.memoryIndex(limit = 1); true }
+            }
+        } catch (error: kotlinx.coroutines.TimeoutCancellationException) { false }
+        catch (error: CancellationException) { throw error }
+        catch (error: me.nathanfallet.teamcode.client.TeamCodeException) {
+            if (error.code == "credential_scope") log("This execution's credential cannot use the memory; the memory tools are not connected.")
+            false
+        }
+        catch (_: Exception) { false }
+        return if (usable) me.nathanfallet.teamcode.cli.launch.MemoryMcp(command) else null
     }
 
     /**
