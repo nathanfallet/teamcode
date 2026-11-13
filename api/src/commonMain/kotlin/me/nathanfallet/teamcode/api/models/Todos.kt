@@ -62,6 +62,9 @@ data class NoteTodoItemRequest(val sessionId: String? = null, val text: String)
 
 @Serializable
 data class DropTodoItemRequest(val sessionId: String? = null, val reason: String)
+/** Clears the session's closed todo (`POST /todos/session/reset`); the answer is a [TodoSessionView] without a todo. */
+@Serializable
+data class ResetTodoRequest(val sessionId: String? = null)
 
 /**
  * Binds a PR, a release (their https address in [ref]), an artifact or a wait (their id) to an item. A link is frozen: the same [ref]

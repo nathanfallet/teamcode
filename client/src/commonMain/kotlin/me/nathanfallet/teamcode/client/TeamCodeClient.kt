@@ -921,6 +921,8 @@ class TeamCodeClient(
     suspend fun todoWake(request: TodoWakeRequest): TodoWakeView = coded(HttpMethod.Post, "/api/v1/todos/session/wake", request)
     /** Records a failure of the Stop hook on the session's list. */
     suspend fun todoHookError(request: TodoHookErrorRequest): TodoSessionView = coded(HttpMethod.Post, "/api/v1/todos/session/hook-error", request)
+    /** Clears the session's closed todo, as if it never had one; `409 todo_active` while it is not closed. */
+    suspend fun resetTodo(request: ResetTodoRequest): TodoSessionView = coded(HttpMethod.Post, "/api/v1/todos/session/reset", request)
     /** Asks the session's owner to drop an item; nothing is deleted until they say yes. */
     suspend fun requestTodoDrop(itemId: String, request: DropTodoItemRequest): TodoSessionView {
         identifier(itemId); return coded(HttpMethod.Post, "/api/v1/todos/session/items/$itemId/drop", request)

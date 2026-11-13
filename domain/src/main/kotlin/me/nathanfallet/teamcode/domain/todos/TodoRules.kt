@@ -151,13 +151,21 @@ object TodoRules {
         return TodoList(id, sessionId, teamId, reference, refs, TodoListStatus.ACTIVE, 0, null, items.map { toItem(it, TodoOrigin.PLAN, null) }, now, now)
     }
 
+    /**
+     * A closed list (every item done or dropped and verified, or abandoned) can be reset; an active one cannot: the agent never
+     * deletes an item of a list that still holds its Stop hook, so a reset is no way to skip an unfinished item.
+     */
+    fun requireClosed(list: TodoList) {
+        if (list.status == TodoListStatus.ACTIVE) throw conflict("todo_active", "This todo is still active: finish its items (todo_show lists them), or ask the owner to drop one with todo_drop. Only a closed todo is reset.")
+    }
+
     /** Refuses a second list for a session. */
     fun requireNoList(existing: TodoList?) {
-        if (existing != null) throw conflict("todo_exists", "This session already has a todo: use todo_add to add an item.")
+        if (existing != null) throw conflict("todo_exists", "This session already has a todo: use todo_add to add an item, or todo_reset once it is closed to start a new one.")
     }
 
     private fun requireActive(list: TodoList) {
-        if (list.status != TodoListStatus.ACTIVE) throw conflict("todo_closed", "This todo is ${list.status.wire}.")
+        if (list.status != TodoListStatus.ACTIVE) throw conflict("todo_closed", "This todo is ${list.status.wire}: call todo_reset to clear it, then todo_create a new one.")
     }
     private fun requireItem(list: TodoList, id: String) = list.item(id) ?: throw TeamFailure("unknown_item", 404, "No item '$id' in this todo.")
 

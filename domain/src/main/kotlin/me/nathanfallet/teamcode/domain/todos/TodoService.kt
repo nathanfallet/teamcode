@@ -65,6 +65,15 @@ class TodoService(private val store: TodoStore, private val drops: TodoDropWaits
         return list
     }
 
+    /**
+     * Clears a closed todo, as if the session never had one, so a new one can be created with other references and items. Refused while
+     * the list is active (`409 todo_active`) and when there is none (`404 todo_not_found`). The deleted list is journaled, not kept.
+     */
+    suspend fun reset(actor: Principal, sessionId: String?) {
+        val id = session(actor, sessionId, write = true)
+        store.reset(actor.teamId, id, actor, TodoRules::requireClosed)
+    }
+
     suspend fun add(actor: Principal, sessionId: String?, item: TodoItemDefinition, reason: String): TodoList {
         val id = session(actor, sessionId, write = true)
         val now = store.now()

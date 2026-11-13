@@ -25,6 +25,10 @@ class TodoRoutesTest {
         override suspend fun <T> mutate(teamId: String, sessionId: String, change: (TodoList) -> Pair<TodoList, T>): T {
             val (next, value) = change(list ?: throw TeamFailure("todo_not_found", 404, "none")); list = next; return value
         }
+        override suspend fun reset(teamId: String, sessionId: String, actor: Principal, check: (TodoList) -> Unit): TodoList {
+            val current = list?.takeIf { it.sessionId == sessionId } ?: throw TeamFailure("todo_not_found", 404, "none")
+            check(current); list = null; return current
+        }
         override suspend fun artifactVersion(teamId: String, artifactId: String) = 2.takeIf { artifactId == "art-1" }
         override suspend fun waitState(teamId: String, sessionId: String, waitId: String): WaitState? = null
         override suspend fun hasOpenWait(teamId: String, sessionId: String) = false
@@ -89,6 +93,28 @@ class TodoRoutesTest {
         assertEquals("Waiting for review", noted.items.first { it.id == "b" }.notes.single().text)
         val added = todo(call(HttpMethod.Post, "/api/v1/todos/session/items", "admin", """{"sessionId":"s1","reason":"Found a migration","item":${item("extra")}}"""))
         assertEquals("discovered", added.items.first { it.id == "extra" }.origin)
+    }
+
+    @Test fun aClosedTodoIsResetThroughItsRouteAndAnActiveOneIsRefused() = testApplication {
+        val store = Store()
+        application { configureGateway(gateway, team = team(), todos = TodoService(store)) }
+        suspend fun call(method: HttpMethod, path: String, token: String, json: String? = null) = client.request(path) {
+            this.method = method; bearerAuth(token)
+            if (json != null) { contentType(ContentType.Application.Json); setBody(json) }
+        }
+        suspend fun code(response: HttpResponse) = Serialization.json.decodeFromString<ApiError>(response.bodyAsText()).error.type
+        assertEquals("todo_not_found", code(call(HttpMethod.Post, "/api/v1/todos/session/reset", "admin", """{"sessionId":"s1"}""")))
+        assertEquals(HttpStatusCode.Created, call(HttpMethod.Post, "/api/v1/todos/session", "admin", create).status)
+        assertEquals("todo_active", code(call(HttpMethod.Post, "/api/v1/todos/session/reset", "admin", """{"sessionId":"s1"}""")))
+        assertNotNull(store.list, "an active todo is kept")
+        // A key that only reads never resets; the execution credential resets its own session's todo, whatever it names.
+        assertEquals(HttpStatusCode.Forbidden, call(HttpMethod.Post, "/api/v1/todos/session/reset", "reader", """{"sessionId":"s1"}""").status)
+        store.list = store.list!!.copy(status = TodoListStatus.DONE)
+        val reset = call(HttpMethod.Post, "/api/v1/todos/session/reset", "exec-token", """{"sessionId":"other"}""")
+        assertEquals(HttpStatusCode.OK, reset.status)
+        assertNull(Serialization.json.decodeFromString<TodoSessionView>(reset.bodyAsText()).todo)
+        assertNull(store.list)
+        assertEquals(HttpStatusCode.Created, call(HttpMethod.Post, "/api/v1/todos/session", "admin", create).status, "a new todo can be created")
     }
 
     @Test fun badInputIsRefusedWithItsCodeAndKeysAreLimitedToTheirScope() = testApplication {

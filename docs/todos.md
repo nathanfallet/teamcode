@@ -24,7 +24,8 @@ A session keeps one todo: a free-text `reference` (usually a link to the plan) a
 - `next`: the first `todo` item whose dependencies are done. A dropped dependency counts as settled, so a dropped item never stalls the list.
 - `start`: one item `doing` at a time, except an item given to a background agent.
 - `add`: marked `discovered` with its reason, placed after the item in progress and after its own dependencies.
-- Name, description and conditions are frozen; `note` only appends. `requestDrop` puts an item in `drop_requested`; only `resolveDrop` with the owner's yes drops it. Nothing is deleted.
+- Name, description and conditions are frozen; `note` only appends. `requestDrop` puts an item in `drop_requested`; only `resolveDrop` with the owner's yes drops it. No item is ever deleted from an active list.
+- `reset` (`requireClosed`): a list that is closed (`done` or `abandoned`) is deleted whole, with its items, as if the session never had one, so a new one can be created with other references and items. An active list is refused (`409 todo_active`): a reset is no way to skip an unfinished item, and a closed list takes no more items (`409 todo_closed`), which is the dead end it opens.
 - `complete`: done only when every check passed; a failed or unknown check (unreachable, not linked yet) refuses, and the proof of what was seen is kept.
 - `settle`: once every item is done or dropped, a final verification runs; an item whose check now fails is reopened, otherwise the list is done.
 - `stop`: the stall counter. A blocked stop with no item finished, no item added and no note since the previous blocked stop adds one; at 3 (`STALL_LIMIT`) the hook asks the owner.
@@ -45,6 +46,7 @@ Every route lives under `/api/v1/todos/session` and is advertised by the capabil
 | `POST /items/{item}/proof` | Reports what each check observed; done only if all passed (`409 not_done` keeps the proof) |
 | `POST /items/{item}/link` | Binds a PR, a release, an artifact or a wait to an item; a link is frozen (`409 already_linked`), except to replace a PR closed without merge |
 | `POST /items/{item}/drop` | Opens a wait for the owner; the item is `drop_requested` until they answer |
+| `POST /reset` | Deletes the session's closed list and its items (`409 todo_active` while it is active, `404 todo_not_found` without a list). Journaled as `todo.reset` (list id, status and item count, not the content); the feed's `cloud.todo` says `status: none`, `done: 0`, `total: 0`. Same callers as the other writes: the owner, or the session's execution credential (`todo:session`) |
 | `GET /context` | The reminder block (`text` is null without an active list); read by the `SessionStart` hook |
 | `POST /stop` | One stop of the agent, asked by the Stop hook in up to three phases (see [The Stop hook](#the-stop-hook)) |
 | `POST /hook-error` | Records a failure of the Stop hook on the list (`hookEvents`, the newest 20) |
@@ -72,8 +74,9 @@ A read is two queries (the list row, then its items in order) plus one on `waits
 | `todo_complete` | Runs the item's stored checks and asks the server to decide; refusals say what is missing |
 | `todo_link` | Binds an existing PR, release, artifact or wait; the kind of a GitHub address is deduced |
 | `todo_add`, `todo_note`, `todo_drop` | Add an item with a reason, append a note, ask the owner to drop an item |
+| `todo_reset` | Clears the todo once it is closed, so `todo_create` can start a new one when the agent is given other work; refused while it is active (`todo_active`) |
 
-The server instructions (field `instructions` of the MCP handshake) and `todo_help` are `TodoDocs`; the refusals of the server carry a code and the tool adds the action to take (`not_done`, `todo_exists`, `already_linked`…). The typed client carries only the server's error code, so `todo_complete` reads the proof the server stored for a refusal and shows that.
+The server instructions (field `instructions` of the MCP handshake) and `todo_help` are `TodoDocs`; the refusals of the server carry a code and the tool adds the action to take (`not_done`, `todo_exists`, `todo_closed`, `todo_active`, `already_linked`…). The typed client carries only the server's error code, so `todo_complete` reads the proof the server stored for a refusal and shows that.
 
 ### Where each check runs
 

@@ -68,6 +68,7 @@ internal class TodoMcpServer(
             "todo_link" -> link(arguments)
             "todo_add" -> add(arguments)
             "todo_note" -> note(arguments)
+            "todo_reset" -> reset()
             else -> drop(arguments)
         }
     } catch (error: CancellationException) {
@@ -161,6 +162,11 @@ internal class TodoMcpServer(
         return McpTools.text("Noted on $id.")
     }
 
+    private suspend fun reset(): JsonObject {
+        client.resetTodo(ResetTodoRequest(sessionId))
+        return McpTools.text("The todo is cleared: this session has none now. Call todo_create to start a new one, with its own reference and items.")
+    }
+
     private suspend fun drop(arguments: JsonObject): JsonObject {
         val id = required(arguments, "id")
         client.requestTodoDrop(id, DropTodoItemRequest(sessionId, required(arguments, "reason")))
@@ -170,7 +176,9 @@ internal class TodoMcpServer(
     /** The server's refusals, each with what to do about it. */
     private fun hint(error: TeamCodeException): String? = when (error.code) {
         "not_done" -> "Fix what is missing (merge the PR, wait for CI, publish the release), then call todo_complete again."
-        "todo_exists" -> "Use todo_add to add an item to the existing todo."
+        "todo_exists" -> "Use todo_add to add an item to the existing todo, or, if it is closed, todo_reset and then todo_create a new one."
+        "todo_closed" -> "The todo is closed: call todo_reset to clear it, then todo_create a new one."
+        "todo_active" -> "The todo is not closed yet: finish its items (todo_show lists them), or ask the owner to drop one with todo_drop. Only a closed todo is reset."
         "todo_not_found" -> "Create the todo first with todo_create (todo_help shows the format)."
         "already_linked" -> "A link does not change. If the PR was closed without merge, pass replaceClosed: true."
         "credential_scope" -> "This session's credential cannot keep a todo; carry on without it."
@@ -179,7 +187,7 @@ internal class TodoMcpServer(
     }
 
     companion object {
-        private val TOOL_NAMES = setOf("todo_create", "todo_show", "todo_start", "todo_complete", "todo_link", "todo_help", "todo_add", "todo_note", "todo_drop")
+        private val TOOL_NAMES = setOf("todo_create", "todo_show", "todo_start", "todo_complete", "todo_link", "todo_help", "todo_add", "todo_note", "todo_drop", "todo_reset")
 
         private val ITEM_SCHEMA = buildJsonObject {
             put("type", "object"); put("description", "A complete item: id (slug), name (one line), description (80+ characters: what, where, why, out of scope), dependsOn (ids), doneWhen {text, checks[]}.")
@@ -218,6 +226,8 @@ internal class TodoMcpServer(
             tool("todo_note", "Add a dated note to an item: where you are, what you tried. Notes are never rewritten and count as progress.", schema(listOf("id", "text")) {
                 text("id", "The item's id."); text("text", "The note.")
             })
+            tool("todo_reset", "Clear this session's todo once it is closed (every item done or dropped, and the list done), as if the session never had one, so you can todo_create a new one with new references and items. " +
+                "Use it when the work you were asked is finished and you are given another task: a closed todo takes no more items (todo_add is refused). Refused while the todo is still active: you cannot skip an unfinished item with it.", schema(emptyList()) {})
             tool("todo_drop", "Ask the session's owner to drop an item that no longer makes sense. Nothing is deleted: a wait asks them, and the item stays until they say yes. End your turn after calling it.", schema(listOf("id", "reason")) {
                 text("id", "The item's id."); text("reason", "Why it no longer makes sense.")
             })
