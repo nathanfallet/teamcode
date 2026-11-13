@@ -56,6 +56,13 @@ object MemoryRules {
     /** A proposal not answered in this long is rejected; a rejected one is kept this long for the audit. */
     const val PROPOSAL_DAYS = 14L
     const val REJECTED_DAYS = 30L
+    /** A superseded entry is kept, restorable, this long; an expired one this long after it expired; a scope is curated again at least this often. */
+    const val SUPERSEDED_DAYS = 90L
+    const val EXPIRED_DAYS = 7L
+    const val RECURATE_DAYS = 7L
+    /** Curation looks at this many same-title groups per scope per run, and at most this many entries of a group. */
+    const val CURATION_GROUPS = 20
+    const val CURATION_GROUP_SIZE = 8
     private val tag = Regex("[a-z0-9][a-z0-9._-]{0,${TAG_LENGTH - 1}}")
 
     /**

@@ -71,7 +71,7 @@ class ApiDocsTest {
             automations = me.nathanfallet.teamcode.domain.automations.AutomationService(stub(), stub(), stub()),
             waits = me.nathanfallet.teamcode.domain.waits.WaitService(stub()),
             workflows = me.nathanfallet.teamcode.domain.workflows.WorkflowService(stub()),
-            workflowRuns = me.nathanfallet.teamcode.domain.workflows.WorkflowRunService(stub()), todos = me.nathanfallet.teamcode.domain.todos.TodoService(stub()), memory = me.nathanfallet.teamcode.domain.memory.MemoryService(stub()),
+            workflowRuns = me.nathanfallet.teamcode.domain.workflows.WorkflowRunService(stub()), todos = me.nathanfallet.teamcode.domain.todos.TodoService(stub()), memory = me.nathanfallet.teamcode.domain.memory.MemoryService(stub()), memoryCuration = me.nathanfallet.teamcode.domain.memory.MemoryCurationService(stub()),
             notifications = me.nathanfallet.teamcode.domain.notifications.NotificationService(stub(), listOf("push")),
             push = me.nathanfallet.teamcode.domain.notifications.PushRegistrationService(stub()),
             pushAdmin = me.nathanfallet.teamcode.domain.notifications.PushAdministrationService(stub(),

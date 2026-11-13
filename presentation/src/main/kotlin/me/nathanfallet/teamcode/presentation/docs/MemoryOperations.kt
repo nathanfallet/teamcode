@@ -98,4 +98,50 @@ internal fun ApiCatalog.memoryOperations() {
             error(HttpStatusCode.Forbidden, "Not allowed to delete this team entry (`memory_team_forbidden`).")
         }
     }
+    get("/api/v1/memory/curation") {
+        operationId = "getMemoryCuration"; tag(ApiTags.MEMORY)
+        summary = "The memory curation setting"
+        description = "Whether the team's memory is curated and what the last run did. Administrators, interactive login only. Curation is off until an administrator turns it on; it never calls a model."
+        responses { ok<MemoryCurationView>("The setting."); error(HttpStatusCode.Forbidden, "Not an administrator (`forbidden`).") }
+    }
+    put("/api/v1/memory/curation") {
+        operationId = "setMemoryCuration"; tag(ApiTags.MEMORY)
+        summary = "Turn the memory curation on or off"
+        description = "On: about once an hour the server reads the scopes that changed (the team's entries, and each member's personal ones, alone), supersedes the older of two equal entries, and queues for a person every pair it cannot decide. Audited."
+        body<SetMemoryCurationRequest>("The setting.")
+        responses { ok<MemoryCurationView>("The setting."); error(HttpStatusCode.Forbidden, "Not an administrator (`forbidden`).") }
+    }
+    get("/api/v1/memory/reviews") {
+        operationId = "listMemoryReviews"; tag(ApiTags.MEMORY)
+        summary = "Pairs for a person to decide"
+        description = "Open reviews, oldest first, at most 100: the caller's own personal ones, plus the team's for an administrator. Interactive login only. $MEMORY_TEXT"
+        responses { ok<MemoryReviewsView>("The reviews.") }
+    }
+    post("/api/v1/memory/reviews/{id}/apply") {
+        operationId = "applyMemoryReview"; tag(ApiTags.MEMORY)
+        summary = "Supersede the older entry"
+        description = "The older entry of the pair becomes superseded by the newer one (restorable). $MEMORY_TEXT"
+        parameters { pathId("id", "The review's identifier.") }
+        responses { ok<MemoryReviewView>("The review."); notFound("No such review, or not yours (`not_found`)."); conflict("Already answered (`memory_review_closed`), or an entry is no longer active (`memory_review_stale`).") }
+    }
+    post("/api/v1/memory/reviews/{id}/dismiss") {
+        operationId = "dismissMemoryReview"; tag(ApiTags.MEMORY)
+        summary = "Keep both entries"
+        description = "Both entries stay; the pair is never queued again. $MEMORY_TEXT"
+        parameters { pathId("id", "The review's identifier.") }
+        responses { ok<MemoryReviewView>("The review."); notFound("No such review, or not yours (`not_found`)."); conflict("Already answered (`memory_review_closed`).") }
+    }
+    get("/api/v1/memory/superseded") {
+        operationId = "listSupersededMemory"; tag(ApiTags.MEMORY)
+        summary = "Superseded entries"
+        description = "Entries curation replaced, newest first, at most 100: the caller's own personal ones (nobody else sees them), and the team's for an administrator or their author. Kept 90 days. Interactive login only."
+        responses { ok<SupersededMemoriesView>("The entries.") }
+    }
+    post("/api/v1/memory/{id}/restore") {
+        operationId = "restoreMemory"; tag(ApiTags.MEMORY)
+        summary = "Restore a superseded entry"
+        description = "The entry is active again and the one that replaced it, if still active, becomes the superseded one. Audited `memory.restored`. A personal entry by its owner; a team entry by its author or an administrator."
+        parameters { pathId("id", "The entry's identifier.") }
+        responses { ok<MemoryEntryView>("The restored entry."); notFound("No such superseded entry, or not yours (`not_found`)."); error(HttpStatusCode.Forbidden, "Not the author or an administrator (`forbidden`)."); conflict("The memory is full (`memory_limit`).") }
+    }
 }

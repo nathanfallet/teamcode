@@ -12,6 +12,9 @@ private val memoryId = Regex("[a-zA-Z0-9-]{1,36}")
 
 private fun MemoryIndexEntry.view() = MemoryIndexEntryView(id, scope.wire, title, summary, tags, updatedAt)
 private fun MemoryEntry.view() = MemoryEntryView(id, scope.wire, title, summary, content, tags, refs, status.wire, origin.wire, authorId, sessionId, supersedesId, expiresAt, version, createdAt, updatedAt, lastReadAt, readCount)
+private fun CurationSettings.view() = MemoryCurationView(enabled, lastRunAt, lastRunId, lastSuperseded, lastQueued)
+private fun MemoryReview.view() = MemoryReviewView(id, scope.wire, kind.wire, reason, olderId, olderTitle, olderOrigin.wire, newerId, newerTitle, newerOrigin.wire, createdAt)
+private fun SupersededMemory.view() = SupersededMemoryView(id, scope.wire, title, summary, authorId, supersededById, supersededAt)
 private fun id(value: String?) = value?.takeIf { memoryId.matches(it) } ?: throw TeamFailure("not_found", 404, "Memory entry not found.")
 private fun tags(value: String?) = value?.split(',')?.map { it.trim() }?.filter { it.isNotEmpty() }.orEmpty()
 private fun limit(value: String?, default: Int) = value?.let { it.toIntOrNull() ?: throw MemoryRules.invalid("Use a number as the limit.") } ?: default
@@ -24,8 +27,17 @@ private fun cursor(value: String?) = value?.let {
 }
 
 /** The memory of docs/memory.md: a member's own and the team's entries, for members, their agents and keys with `memory`. */
-internal fun Route.memoryRoutes(memory: MemoryService) {
+internal fun Route.memoryRoutes(memory: MemoryService, curation: MemoryCurationService? = null) {
     route("/api/v1/memory") {
+        if (curation != null) {
+            get("/curation") { call.respond(curation.settings(call.principal).view()) }
+            put("/curation") { call.respond(curation.setEnabled(call.principal, call.jsonBody<SetMemoryCurationRequest>(1024).enabled).view()) }
+            get("/reviews") { call.respond(MemoryReviewsView(curation.reviews(call.principal).map { it.view() })) }
+            post("/reviews/{id}/apply") { call.respond(curation.resolve(call.principal, id(call.parameters["id"]), apply = true).view()) }
+            post("/reviews/{id}/dismiss") { call.respond(curation.resolve(call.principal, id(call.parameters["id"]), apply = false).view()) }
+            get("/superseded") { call.respond(SupersededMemoriesView(curation.superseded(call.principal).map { it.view() })) }
+            post("/{id}/restore") { call.respond(curation.restore(call.principal, id(call.parameters["id"])).view()) }
+        }
         get("/index") {
             val page = memory.index(call.principal, scope(call.request.queryParameters["scope"]), tags(call.request.queryParameters["tags"]),
                 cursor(call.request.queryParameters["after"]), limit(call.request.queryParameters["limit"], MemoryRules.PAGE_LIMIT))
