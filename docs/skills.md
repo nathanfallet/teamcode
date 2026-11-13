@@ -235,4 +235,5 @@ A cloud session installs the owner's effective skills for its agent every time t
 - **Native CLI synchronization** before `teamcode run`: an isolated, agent-compatible local installation of the effective pinned versions, preserving personal skills and reporting naming conflicts through the installation route. It will come after the current V1 CLI work.
 - **Typed SDK methods** in the `client` module for these routes.
 - **Group decisions**, using the precedence above.
+- **Personal skills**: a member publishes skills that only they (and, by an administrator's decision, others they are assigned to) receive; see [memory and personal resources](memory.md#personal-skills-environment-values-and-mcp-servers).
 - **Pruning** of old, retired versions; versions are currently kept forever (bounded at 200 per skill).

@@ -133,3 +133,7 @@ So a value rotated, added or removed while the agent runs, and the recipient's v
 ## TeamClaude reference
 
 TeamClaude has no comparable mechanism: its MCP endpoint (`test/mcp-endpoint.test.js`, `test/mcp-tools.test.js`) exposes the proxy's own control plane as tools, and it has no per-user environment or upstream MCP registry. This model therefore follows TeamCode's own patterns: team-scoped Exposed tables, `CredentialCipher` envelopes, administrator revalidation under the team lock and metadata-only audit.
+
+## Planned: personal variants
+
+Members will declare their own environment values and MCP servers, assigned to themselves only (hosted stdio ones behind an administrator setting, off by default). Design and rules: [memory and personal resources](memory.md#personal-skills-environment-values-and-mcp-servers). Not implemented.
