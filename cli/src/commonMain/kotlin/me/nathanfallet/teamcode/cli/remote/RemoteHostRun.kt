@@ -319,7 +319,7 @@ internal class HostAgentTools(
     /** Likewise for the memory tools: the capability is enough, and they need no session. */
     override suspend fun memory(): MemoryMcp? {
         if (me.nathanfallet.teamcode.api.models.MemoryApi.CAPABILITY !in features) return null
-        return try { MemoryMcp(executable()) } catch (error: CancellationException) { throw error } catch (_: Exception) {
+        return try { MemoryMcp(executable(), sessionId) } catch (error: CancellationException) { throw error } catch (_: Exception) {
             report("The memory tools could not be prepared; the agent starts without them."); null
         }
     }

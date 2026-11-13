@@ -96,6 +96,24 @@ class MemoryMcpTest {
         assertTrue(server().tool("memory_read").first)
     }
 
+    @Test fun aTeamEntryIsSentWithTheSessionAndTheAgentIsToldItIsAProposal() = runBlocking {
+        val recorder = Recorder()
+        val server = MemoryMcpServer(TeamCodeClient("https://team.example", { "token" }) { config -> HttpClient(MockEngine { request ->
+            recorder.requests += "${request.method.value} ${request.url.encodedPath}" to request.body.toByteArray().decodeToString()
+            respond(full.replace("\"status\":\"active\"", "\"status\":\"proposed\"").replace("\"scope\":\"personal\"", "\"scope\":\"team\""), HttpStatusCode.Created, headersOf(HttpHeaders.ContentType, "application/json"))
+        }) { config(this) } }, "11111111-2222-4333-8444-555555555555")
+        val (error, text) = server.tool("memory_write", buildJsonObject { put("title", "T"); put("summary", "S"); put("content", "C"); put("scope", "team") })
+        assertFalse(error); assertTrue("\"status\":\"proposed\"" in text && "your owner was asked" in text, text)
+        assertTrue("\"sessionId\":\"11111111-2222-4333-8444-555555555555\"" in recorder.requests.single().second, recorder.requests.single().second)
+    }
+
+    @Test fun theLaunchPassesTheSessionOfALocalRunToTheMemoryServer() {
+        val launch = agentLaunch("claude", listOf("--", "prompt"), 4242, token, memory = MemoryMcp("/opt/teamcode/teamcode", "00000000-0000-4000-8000-0000000000cc"))
+        val servers = Json.parseToJsonElement(launch.arguments[launch.arguments.indexOf("--mcp-config") + 1]).jsonObject["mcpServers"]!!.jsonObject
+        assertEquals(listOf("mcp", "memory", "--session", "00000000-0000-4000-8000-0000000000cc"), servers["teamcode_memory"]!!.jsonObject["args"]!!.jsonArray.map { it.jsonPrimitive.content })
+        assertFailsWith<IllegalArgumentException> { MemoryMcp("/opt/teamcode/teamcode", "../other") }
+    }
+
     @Test fun theRelayCarriesTheMemoryRoutesAndNothingElse() {
         assertEquals(setOf(HttpMethod.Get, HttpMethod.Post, HttpMethod.Patch, HttpMethod.Delete), MEMORY_RELAY_ROUTES.keys)
         assertTrue(MEMORY_RELAY_ROUTES.getValue(HttpMethod.Get).any { it.matches("/api/v1/memory/index") })

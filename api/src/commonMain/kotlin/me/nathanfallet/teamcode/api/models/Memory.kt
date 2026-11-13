@@ -3,7 +3,16 @@ package me.nathanfallet.teamcode.api.models
 import kotlinx.serialization.Serializable
 
 /** Capability advertised by a server with the memory (`GET /api/v1/capabilities`). */
-object MemoryApi { const val CAPABILITY = "memory.v1" }
+object MemoryApi {
+    const val CAPABILITY = "memory.v1"
+    /** Set by the local relay on every call it forwards for an agent: the call is an agent's, whoever's login it carries. */
+    const val ORIGIN_HEADER = "x-teamcode-origin"
+    const val AGENT_ORIGIN = "agent"
+}
+
+/** The entries of the team waiting for an answer: an administrator sees all, a member their own. */
+@Serializable
+data class MemoryProposalsView(val proposals: List<MemoryEntryView>)
 
 /** What an index or a search returns: enough to decide whether to read the entry, never its content. `scope` is `team` or `personal`. */
 @Serializable
@@ -33,6 +42,8 @@ data class MemoryEntryView(
 data class CreateMemoryRequest(
     val title: String, val summary: String, val content: String, val scope: String = "personal", val tags: List<String> = emptyList(),
     val refs: List<String> = emptyList(), val expiresAt: Long? = null,
+    /** The session an agent proposes a team entry from (its owner is asked); an execution credential names its own. */
+    val sessionId: String? = null,
 ) {
     override fun toString() = "CreateMemoryRequest(title=[REDACTED], scope=$scope)"
 }

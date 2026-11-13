@@ -31,6 +31,14 @@ class TeamCodeFailureTest {
         }
     }
 
+    @Test fun everyMemoryCallThroughTheRelayIsMarkedAsAnAgents() = runBlocking {
+        val seen = mutableListOf<String?>()
+        TeamCodeClient("https://team.example", { "synthetic-token" }) { configure ->
+            HttpClient(MockEngine { request -> seen += request.headers["x-teamcode-origin"]; respond("{}", HttpStatusCode.OK, headersOf(HttpHeaders.ContentType, "application/json")) }) { configure(this) }
+        }.use { it.forwardMemory(HttpMethod.Post, "/api/v1/memory", "", ByteArray(0), null, null) }
+        assertEquals(listOf<String?>("agent"), seen)
+    }
+
     @Test fun everyRequestStyleCarriesTheApiErrorCode() = runBlocking {
         val body = """{"error":{"type":"forbidden","message":"Administrator access is required."}}"""
         failing(HttpStatusCode.Forbidden, body).use { client ->

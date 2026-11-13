@@ -34,16 +34,36 @@ internal fun ApiCatalog.memoryOperations() {
     post("/api/v1/memory") {
         operationId = "createMemory"; tag(ApiTags.MEMORY)
         summary = "Remember something"
-        description = "A personal entry by default. A team entry is written by an interactive member only for now (`memory_team_forbidden` for an agent or a key). " +
+        description = "A personal entry by default. A team entry written by an interactive member is direct; one written by an agent (an execution credential, or a call through an agent's relay) is stored as a proposal and the session's owner is asked through a wait: the response is the entry with status `proposed`, and it joins the team's memory only once accepted. A key that is no agent's session cannot propose (`memory_team_forbidden`). " +
             "Content that looks like a credential is refused. At most 2,000 personal and 5,000 team entries. $MEMORY_TEXT"
         body<CreateMemoryRequest>("The entry.")
         responses {
             ok<MemoryEntryView>("Created.", HttpStatusCode.Created)
             badRequest("An invalid field (`invalid_memory`).")
-            error(HttpStatusCode.Forbidden, "A team entry from an agent or a key (`memory_team_forbidden`), or a key without `memory` (`credential_scope`).")
-            conflict("The memory is full (`memory_limit`).")
+            error(HttpStatusCode.Forbidden, "A team entry from a key that is no agent's session (`memory_team_forbidden`), or a key without `memory` (`credential_scope`).")
+            conflict("The memory is full (`memory_limit`), or 20 proposals of the caller are waiting (`memory_proposals_limit`).")
             error(HttpStatusCode.UnprocessableEntity, "The content looks like a credential (`memory_secret`).")
         }
+    }
+    get("/api/v1/memory/proposals") {
+        operationId = "listMemoryProposals"; tag(ApiTags.MEMORY)
+        summary = "Proposals waiting for an answer"
+        description = "Team entries an agent proposed, oldest first, at most 100: every member's for an administrator, the caller's own otherwise. Interactive login only. $MEMORY_TEXT"
+        responses { ok<MemoryProposalsView>("The proposals."); error(HttpStatusCode.Forbidden, "A key (`memory_team_forbidden`).") }
+    }
+    post("/api/v1/memory/proposals/{id}/accept") {
+        operationId = "acceptMemoryProposal"; tag(ApiTags.MEMORY)
+        summary = "Accept a proposal"
+        description = "An administrator adds the proposed entry to the team's memory and closes its wait. The owner of the session normally answers the wait instead, where the text can be edited first. $MEMORY_TEXT"
+        parameters { pathId("id", "The proposal's identifier.") }
+        responses { ok<MemoryEntryView>("The accepted entry."); conflict("Not a proposal waiting for an answer (`memory_not_proposed`)."); error(HttpStatusCode.Forbidden, "Not an administrator (`forbidden`).") }
+    }
+    post("/api/v1/memory/proposals/{id}/reject") {
+        operationId = "rejectMemoryProposal"; tag(ApiTags.MEMORY)
+        summary = "Reject a proposal"
+        description = "An administrator, or the proposal's author, drops it and closes its wait. Rejected proposals are deleted after 30 days. $MEMORY_TEXT"
+        parameters { pathId("id", "The proposal's identifier.") }
+        responses { ok<MemoryEntryView>("The rejected entry."); conflict("Not a proposal waiting for an answer (`memory_not_proposed`)."); error(HttpStatusCode.Forbidden, "Neither an administrator nor the author (`forbidden`).") }
     }
     get("/api/v1/memory/{id}") {
         operationId = "readMemory"; tag(ApiTags.MEMORY)

@@ -8,7 +8,7 @@ enum class MemoryScope(val wire: String) {
     companion object { fun parse(value: String) = entries.find { it.wire == value } ?: throw MemoryRules.invalid("Use the team or personal scope.") }
 }
 
-/** `PROPOSED`, `SUPERSEDED` and `REJECTED` are written by later steps (validation, curation) and never listed or searched. */
+/** `PROPOSED` (a team entry an agent suggests, waiting for its session's owner) and `REJECTED` are written by the proposal flow, `SUPERSEDED` by curation; none is listed or searched. */
 enum class MemoryStatus(val wire: String) { ACTIVE("active"), PROPOSED("proposed"), SUPERSEDED("superseded"), REJECTED("rejected") }
 
 enum class MemoryOrigin(val wire: String) { HUMAN("human"), AGENT("agent"), CURATION("curation") }
@@ -51,6 +51,11 @@ object MemoryRules {
     const val TEAM_LIMIT = 5_000L
     const val PAGE_LIMIT = 50
     const val SEARCH_LIMIT = 20
+    /** Proposals an owner's agents may have waiting at once. */
+    const val PROPOSALS_LIMIT = 20L
+    /** A proposal not answered in this long is rejected; a rejected one is kept this long for the audit. */
+    const val PROPOSAL_DAYS = 14L
+    const val REJECTED_DAYS = 30L
     private val tag = Regex("[a-z0-9][a-z0-9._-]{0,${TAG_LENGTH - 1}}")
 
     /**

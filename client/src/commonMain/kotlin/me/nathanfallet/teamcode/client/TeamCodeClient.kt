@@ -916,7 +916,8 @@ class TeamCodeClient(
      */
     suspend fun forwardMemory(method: HttpMethod, path: String, query: String, body: ByteArray, contentType: ContentType?, runId: String?): ArtifactRelayResponse {
         require(path == "/api/v1/memory" || path.startsWith("/api/v1/memory/")) { "Only the memory is relayed." }
-        return forwardApi(method, path, query, body, contentType, runId, emptyMap(), TODO_RELAY_LIMIT, WAIT_RELAYED_HEADERS)
+        // Every call through this relay is an agent's, whoever's login it carries: the server proposes, never writes, the team's entries from it.
+        return forwardApi(method, path, query, body, contentType, runId, mapOf(MemoryApi.ORIGIN_HEADER to MemoryApi.AGENT_ORIGIN), TODO_RELAY_LIMIT, WAIT_RELAYED_HEADERS)
     }
     /** The reminder block of the session's todo (after a compaction, on resume); its text is null without an active list. */
     suspend fun todoContext(sessionId: String? = null): TodoContextView {
