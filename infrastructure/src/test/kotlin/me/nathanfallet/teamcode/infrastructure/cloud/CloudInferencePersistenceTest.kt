@@ -63,7 +63,7 @@ class CloudInferencePersistenceTest {
                 assertTrue(first.token.startsWith("tcex_")); assertFalse(first.toString().contains(first.token))
                 val principal = assertNotNull(ra.team.authenticate(first.token))
                 assertEquals(member.member.id, principal.member.id)
-                assertEquals(setOf(ServiceScope.INFERENCE, ServiceScope.MCP, ServiceScope.SKILLS_READ, ServiceScope.HOOKS_READ, ServiceScope.ARTIFACTS_WRITE, ServiceScope.WAITS_SESSION, ServiceScope.WORKFLOW_SESSION, ServiceScope.TODO_SESSION), principal.serviceScopes)
+                assertEquals(setOf(ServiceScope.INFERENCE, ServiceScope.MCP, ServiceScope.SKILLS_READ, ServiceScope.HOOKS_READ, ServiceScope.ARTIFACTS_WRITE, ServiceScope.WAITS_SESSION, ServiceScope.WORKFLOW_SESSION, ServiceScope.TODO_SESSION, ServiceScope.MEMORY), principal.serviceScopes)
                 // The owner's inference, MCP gateway, skills and artifacts; nothing that publishes skills, manages or reads usage or cloud sessions.
                 for (action in listOf(CredentialAction.INFERENCE, CredentialAction.MCP, CredentialAction.SKILLS_READ, CredentialAction.HOOKS_READ,
                     CredentialAction.ARTIFACTS_READ, CredentialAction.ARTIFACTS_WRITE, CredentialAction.WAITS_READ, CredentialAction.WAITS_WRITE, CredentialAction.WORKFLOW_DELIVER)) AuthorizeCredentialUseCase().check(principal, action)

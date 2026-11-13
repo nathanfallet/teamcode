@@ -5,7 +5,8 @@ Status: **planned, nothing here is implemented yet.** This page is the design fo
 | Part | Status |
 | --- | --- |
 | [Personal skills and MCP servers](#personal-skills-environment-values-and-mcp-servers) | Planned |
-| [Memory core](#memory-core): storage, API, `memory` MCP server | Planned |
+| [Memory core](#memory-core): storage, REST API, `memory` scope, typed client | Implemented, see [What is implemented](#what-is-implemented) |
+| The `memory` MCP server for agents (`teamcode mcp memory`) | Planned |
 | [Index injected at session start](#index-at-session-start) | Planned |
 | [Write rules and team validation](#write-rules) | Planned |
 | [Periodic curation](#curation) | Planned |
@@ -38,6 +39,20 @@ Today only an administrator publishes skills and declares [variants](variants.md
 
 1. Skills: `owner_member_id` on `skills`, the `me` routes, resolution and cloud delivery of the owner's personal skills, dashboard and app screens, tests.
 2. Variants: `owner_member_id` on `variants`, the `me` routes, automatic assignment, the `memberHostedMcp` setting, tests, `EXPLAIN` for the resolution queries.
+
+## What is implemented
+
+The server side of the [memory core](#memory-core) (capability `memory.v1`):
+
+- Tables `memories` and `memory_tags`. `memory_tags` repeats the entry's team, scope and owner (they never change), so a tag filter is one covering index range of the caller's own scope. Entries are `active` (the only status listed, searched or read; `proposed`, `superseded` and `rejected` are reserved for the next steps). No expiry by default; an entry with `expiresAt` in the past is not listed, searched or read.
+- Routes under `/api/v1/memory`: `GET /index` (scope, tags, keyset `after`, limit up to 50), `GET /search` (`q`, up to 5 words, every one in the title, summary or a tag, never the content; up to 20), `POST` (create), `GET /{id}` (the content; counts a read), `PATCH /{id}` (with `expectedVersion`) and `DELETE /{id}`. Typed client: `memoryIndex`, `searchMemory`, `readMemory`, `createMemory`, `updateMemory`, `forgetMemory`. Search over the content is not implemented: a fulltext index would need a hand-written migration outside the Exposed tables, and the index and title search are what the agent flow uses first.
+- The scope `memory` (`ServiceScope.MEMORY`): held by an interactive member, by the execution credential of a cloud session and of a remote host session, and offered on a member's own service key. Every other key, including those with `todo:session` or `inference`, is refused (`credential_scope`).
+- **Visibility is in every query.** A team entry is read by every member of the team. A personal entry is read, changed and forgotten by its owner only: no administrator, no key of another member, no route. Another member's entry reads as `404`, whether by id, index or search.
+- **Writes.** A personal entry is written directly by any caller with `memory` (an agent's `origin` is `agent`, a member's `human`). A team entry is written by an interactive member only (`403 memory_team_forbidden` for an agent or a key); the agent proposal and its validation are the next step. A team entry is changed or forgotten by its author or an interactive administrator. Updates need the version read (`409 memory_conflict`).
+- **Limits.** 160-character titles, one-line summaries of 300, 16,000 characters of content, 8 tags, 10 references; 2,000 personal entries per member and 5,000 team entries (`409 memory_limit`).
+- **Secret filter.** Content, title, summary and references that look like a credential (provider and TeamCode token prefixes, private keys, bearer headers, `password=value` assignments) are refused (`422 memory_secret`) before anything is stored. It is a filter of common shapes, not a guarantee.
+- **Audit.** `memory.created` (with scope and origin), `memory.updated` and `memory.forgotten`, with the entry id and the key's id when a key wrote it; never a title or content. The session of an execution credential is kept on the entry as provenance.
+- Not implemented here: the MCP server for agents, the index at session start, proposals and their validation, the curation job, and dashboard or app screens.
 
 ## Memory core
 

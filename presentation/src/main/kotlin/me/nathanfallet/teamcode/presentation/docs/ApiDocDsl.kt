@@ -46,6 +46,7 @@ internal val apiOperations: List<ApiOperation> by lazy {
         automationOperations()
         waitOperations()
         todoOperations()
+        memoryOperations()
         notificationOperations()
         pushOperations()
         pushAdminOperations()
@@ -89,6 +90,7 @@ internal object ApiTags {
     const val AUTOMATIONS = "Automations"
     const val WAITS = "Waits"
     const val TODOS = "Todos"
+    const val MEMORY = "Memory"
     const val NOTIFICATIONS = "Notifications"
     const val WORKFLOWS = "Workflows"
     const val ARTIFACTS_ADMIN = "Artifact administration"
@@ -124,6 +126,7 @@ internal object ApiTags {
         GITHUB to "The team's GitHub App and members' GitHub links.",
         WEBHOOKS to "Signed, retried HTTP deliveries of the team's event feed to your own services.",
         AUTOMATIONS to "Cloud sessions started on a schedule or by a signed webhook, as their owner, and their run history.",
+        MEMORY to "What agents and members remember: team entries every member reads and personal entries only their owner reads, as an index, a search and entries read on demand.",
         TODOS to "A cloud session's todo: the plan reference and the items an agent must finish, each with a typed end condition checked before it is done.",
         WAITS to "What sessions need from people before they can go on: questions, reviews, access, decisions, with fields to fill and actions that end them.",
         WORKFLOWS to "Saved sequences of agent, human and sub-workflow steps with typed deliverables: definitions, versions and who may edit them.",
@@ -175,6 +178,7 @@ internal class ApiAccess(val public: Boolean, val keyScopes: List<String>?) {
                 CredentialAction.TODO_WRITE -> listOf("cloud:write", "admin:cloud", "todo:session")
                 CredentialAction.ARTIFACTS_READ -> listOf("artifacts:read", "artifacts:write", "team:read")
                 CredentialAction.ARTIFACTS_WRITE -> listOf("artifacts:write")
+                CredentialAction.MEMORY -> listOf("memory")
                 CredentialAction.INTERACTIVE -> null
             }
             return ApiAccess(public = false, keyScopes = scopes)

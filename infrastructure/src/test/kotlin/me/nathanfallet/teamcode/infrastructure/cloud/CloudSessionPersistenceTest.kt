@@ -761,7 +761,7 @@ class CloudSessionPersistenceTest {
         assertTrue(issued.token.startsWith("tcex_")); assertFalse(issued.toString().contains(issued.token))
         val principal = assertNotNull(rb.logins.authenticate(issued.token))
         assertEquals(owner.member.id, principal.member.id, "It acts as the member the execution runs for")
-        assertEquals(setOf(ServiceScope.ARTIFACTS_WRITE, ServiceScope.WAITS_SESSION, ServiceScope.WORKFLOW_SESSION, ServiceScope.TODO_SESSION), principal.serviceScopes)
+        assertEquals(setOf(ServiceScope.ARTIFACTS_WRITE, ServiceScope.WAITS_SESSION, ServiceScope.WORKFLOW_SESSION, ServiceScope.TODO_SESSION, ServiceScope.MEMORY), principal.serviceScopes)
         for (action in listOf(CredentialAction.WAITS_READ, CredentialAction.WAITS_WRITE, CredentialAction.WORKFLOW_DELIVER, CredentialAction.ARTIFACTS_READ, CredentialAction.ARTIFACTS_WRITE))
             AuthorizeCredentialUseCase().check(principal, action)
         for (action in listOf(CredentialAction.INFERENCE, CredentialAction.MCP, CredentialAction.SKILLS_READ, CredentialAction.HOOKS_READ, CredentialAction.SKILLS_PUBLISH,

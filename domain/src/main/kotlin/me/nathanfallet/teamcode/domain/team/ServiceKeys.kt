@@ -67,8 +67,13 @@ enum class ServiceScope(val wire: String) {
      * creating a key.
      */
     TODO_SESSION("todo:session"),
+    /**
+     * Read and write the owner's memory: the team's entries and the owner's own personal entries (docs/memory.md). Held by
+     * execution credentials of the owner's sessions, and offered on a member's own key. An agent writes personal entries only.
+     */
+    MEMORY("memory"),
 }
-enum class CredentialAction { DISCOVERY, IDENTITY, LOGOUT, INFERENCE, USAGE_READ, GUIDANCE, SKILLS_READ, SKILLS_PUBLISH, HOOKS_READ, HOOKS_PUBLISH, MCP, CLOUD_READ, CLOUD_WRITE, WAITS_READ, WAITS_WRITE, WORKFLOW_DELIVER, TODO_READ, TODO_WRITE, TEAM_READ, TEAM_DIRECTORY, ARTIFACTS_READ, ARTIFACTS_WRITE, INTERACTIVE }
+enum class CredentialAction { DISCOVERY, IDENTITY, LOGOUT, INFERENCE, USAGE_READ, GUIDANCE, SKILLS_READ, SKILLS_PUBLISH, HOOKS_READ, HOOKS_PUBLISH, MCP, CLOUD_READ, CLOUD_WRITE, WAITS_READ, WAITS_WRITE, WORKFLOW_DELIVER, TODO_READ, TODO_WRITE, TEAM_READ, TEAM_DIRECTORY, ARTIFACTS_READ, ARTIFACTS_WRITE, MEMORY, INTERACTIVE }
 
 fun Principal.requireInteractive() {
     if (serviceScopes != null) throw TeamFailure("credential_scope", 403, "Sign in with an interactive account for this operation.")
@@ -154,6 +159,9 @@ fun Principal.requireArtifactRead() {
     if (serviceScopes != null && serviceScopes.none { it == ServiceScope.ARTIFACTS_READ || it == ServiceScope.ARTIFACTS_WRITE || it == ServiceScope.TEAM_READ })
         throw TeamFailure("credential_scope", 403, "This service key does not grant artifacts:read access.")
 }
+/** The memory: an interactive login, or a credential or key with `memory`. */
+fun Principal.requireMemory() = requireScope(ServiceScope.MEMORY)
+
 /** Artifact publication and invitations: an interactive login, or a key with `artifacts:write`. */
 fun Principal.requireArtifactWrite() = requireScope(ServiceScope.ARTIFACTS_WRITE)
 /** Cloud writes: an interactive login, or a key with `cloud:write` or `admin:cloud`. */
@@ -202,6 +210,7 @@ class AuthorizeCredentialUseCase {
             CredentialAction.TODO_WRITE -> actor.requireTodoWrite()
             CredentialAction.ARTIFACTS_READ -> actor.requireArtifactRead()
             CredentialAction.ARTIFACTS_WRITE -> actor.requireArtifactWrite()
+            CredentialAction.MEMORY -> actor.requireMemory()
             CredentialAction.INTERACTIVE -> actor.requireInteractive()
         }
     }

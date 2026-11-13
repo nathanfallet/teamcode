@@ -1195,6 +1195,24 @@ class TeamCodeClient(
         return request("/api/v1/hook-delivery/$name/$version", HttpMethod.Get)
     }
 
+    /** The memory index: the team's entries and the caller's own personal ones, newest first, never the content. `after` is the previous page's `next`. */
+    suspend fun memoryIndex(scope: String? = null, tags: List<String> = emptyList(), after: String? = null, limit: Int? = null): MemoryIndexView {
+        val query = listOfNotNull(scope?.let { "scope=${it.encodeURLParameter()}" }, tags.takeIf { it.isNotEmpty() }?.let { "tags=${it.joinToString(",").encodeURLParameter()}" },
+            after?.let { "after=${it.encodeURLParameter()}" }, limit?.let { "limit=$it" })
+        return request("/api/v1/memory/index" + if (query.isEmpty()) "" else "?" + query.joinToString("&"), HttpMethod.Get)
+    }
+
+    /** Entries whose title, summary or tags contain every word of [query]. */
+    suspend fun searchMemory(query: String, tags: List<String> = emptyList(), limit: Int? = null): MemorySearchView {
+        val parts = listOfNotNull("q=${query.encodeURLParameter()}", tags.takeIf { it.isNotEmpty() }?.let { "tags=${it.joinToString(",").encodeURLParameter()}" }, limit?.let { "limit=$it" })
+        return request("/api/v1/memory/search?" + parts.joinToString("&"), HttpMethod.Get)
+    }
+
+    suspend fun readMemory(id: String): MemoryEntryView { identifier(id); return request("/api/v1/memory/$id", HttpMethod.Get) }
+    suspend fun createMemory(request: CreateMemoryRequest): MemoryEntryView = request("/api/v1/memory", HttpMethod.Post, request)
+    suspend fun updateMemory(id: String, request: UpdateMemoryRequest): MemoryEntryView { identifier(id); return request("/api/v1/memory/$id", HttpMethod.Patch, request) }
+    suspend fun forgetMemory(id: String) { identifier(id); request<Unit>("/api/v1/memory/$id", HttpMethod.Delete) }
+
     /** MCP servers currently assigned to the signed-in member; each has its own gateway endpoint. */
     suspend fun mcpServers(): List<McpServerView> = request("/api/v1/mcp/servers", HttpMethod.Get)
 
