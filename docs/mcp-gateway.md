@@ -172,3 +172,7 @@ The official Kotlin MCP SDK was evaluated. Its Streamable HTTP server keeps sess
 - `LocalProxyTest` and `AgentLaunchTest` (CLI): the local relay forwards each server to its own gateway endpoint with the TeamCode credential and refuses unauthenticated, browser, malformed and oversized requests; Claude Code and Codex receive one MCP server per assignment, the local token only through the environment.
 
 Apart from the opt-in real npm and PyPI packages of the [host's tests](mcp.md#measurements), no real MCP server, provider or agent was called by these tests. Whether Claude Code expands `${TEAMCODE_MCP_TOKEN}` in an inline `--mcp-config` and Codex accepts the `-c mcp_servers...` override still needs one launch of each real agent.
+
+## Planned: personal variants
+
+Members will declare their own environment values and MCP servers, assigned to themselves only (hosted stdio ones behind an administrator setting, off by default). Design and rules: [memory and personal resources](memory.md#personal-skills-environment-values-and-mcp-servers). Not implemented.
