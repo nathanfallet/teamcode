@@ -32,7 +32,7 @@ Notifications come from the [team event journal](cloud-conversations.md), the sa
 | `turn_failed` | `cloud.wait.created` of the `turn_failed` wait (it offers the retry) | The session's owner | "The agent's turn failed." |
 | `session_failed` | `cloud.session.ended` with `state: failed` | The session's owner | "The session failed." |
 
-Waits resolved by a timer or an event ask nobody and never notify. A session someone terminated does not notify. The question or the tool input of a permission request is never put in a notification. The text is short English; a client may render the kind in its own language from `sessionId` and `waitId` instead.
+Waits resolved by a timer or an event ask nobody and never notify. Neither does a permission request the owner's standing [bypass](cloud-conversations.md#permission-bypass) approves by itself (no `cloud.session.waiting` event is journaled for it): nobody is asked, so nobody is told. A question of the agent is never approved that way and still notifies. A session someone terminated does not notify. The question or the tool input of a permission request is never put in a notification. The text is short English; a client may render the kind in its own language from `sessionId` and `waitId` instead.
 
 ## Settings
 
