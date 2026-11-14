@@ -112,6 +112,17 @@ class CloudConversationPersistenceTest {
                 assertEquals(colleague.member.id, allow.authorId)
                 assertEquals(CloudConversationRules.bypassAllowText(requestId), allow.text)
                 assertEquals(64, allow.requestDigest?.length, "The digest is a SHA-256, like a member's answer")
+                // Answered by the standing approval, the tool use asks nobody and sends no "waiting" event (so no notification); a question still does.
+                suspend fun waiting(): Long = a.query { TeamEvents.selectAll().where { (TeamEvents.type eq "cloud.session.waiting") and (TeamEvents.subjectId eq s.id) }.count() }
+                assertEquals(0L, waiting(), "no notification for a request the standing approval answered")
+                val question = """{"requestId":"11111111-2222-4333-8444-555555555555","toolName":"AskUserQuestion","input":{},"question":true}"""
+                assertEquals(3, ra.agent.events(team, s.id, 1, listOf(RunnerEvent(3, CloudEventType.PERMISSION_REQUEST, question))).acceptedThrough)
+                assertEquals(1L, waiting(), "a question is never answered by it, so its owner is told")
+                // Without the standing approval a tool use notifies as before.
+                ra.sessions.setPermissionBypass(colleague, null, s.id, false)
+                val again = """{"requestId":"22222222-2222-4333-8444-555555555555","toolName":"Bash","input":{"command":"ls"},"question":false}"""
+                assertEquals(4, ra.agent.events(team, s.id, 1, listOf(RunnerEvent(4, CloudEventType.PERMISSION_REQUEST, again))).acceptedThrough)
+                assertEquals(2L, waiting())
             } }
         }
     }

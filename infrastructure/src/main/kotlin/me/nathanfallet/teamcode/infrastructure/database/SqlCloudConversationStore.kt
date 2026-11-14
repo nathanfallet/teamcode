@@ -39,6 +39,9 @@ class SqlCloudConversationStore(private val database: Database) : CloudConversat
         // A request raised while the session takes no answer (a pause asked: the runner denies it) never shows as waiting.
         val answerable = DesiredState.parse(session[CloudSessions.desiredState]) == DesiredState.RUNNING &&
             CloudSessionState.parse(session[CloudSessions.state]).let { it == CloudSessionState.READY || it == CloudSessionState.ACTIVE }
+        // The owner's standing approval answers a tool use itself ([RunnerConversationUseCase]): nobody is asked, so nobody is notified.
+        // A question is never answered that way, and neither is a request of a session whose standing approval someone else holds.
+        val standingApproval = session[CloudSessions.bypassBy] != null && session[CloudSessions.bypassBy] == session[CloudSessions.ownerId]
         val subagents = SubagentTracker(sessionId, now)
         for (event in events.sortedBy { it.sequence }) {
             if (event.sequence <= through) continue
@@ -65,7 +68,7 @@ class SqlCloudConversationStore(private val database: Database) : CloudConversat
             val event = when (type) {
                 CloudEventType.TURN -> turnEvent(sessionId, owner, seq, data, now)
                 CloudEventType.PERMISSION_EXPIRED -> expiredEvent(sessionId, owner, seq, data, now)
-                else -> waitingEvent(sessionId, owner, seq, data, now)
+                else -> if (standingApproval && jsonObject(data).str("question") != "true") null else waitingEvent(sessionId, owner, seq, data, now)
             }
             // A failed turn opens a `turn_failed` wait for the owner; the next turn to start cancels it. In transcript order, after the turn\'s own event.
             val turnWaits = if (type != CloudEventType.TURN) emptyList() else when (event?.data?.get("phase")?.jsonPrimitive?.contentOrNull) {
@@ -596,7 +599,7 @@ class SqlCloudConversationStore(private val database: Database) : CloudConversat
 
     private fun lockSession(sessionId: String): ResultRow =
         CloudSessions.select(CloudSessions.id, CloudSessions.teamId, CloudSessions.ownerId, CloudSessions.state, CloudSessions.desiredState, CloudSessions.blockedCode, CloudSessions.currentEpoch, CloudSessions.kind,
-            CloudSessions.awaitingReason, CloudSessions.awaitingRequestId, CloudSessions.awaitingSince, CloudSessions.awaitingEventSeq, CloudSessions.awaitingEpoch)
+            CloudSessions.awaitingReason, CloudSessions.awaitingRequestId, CloudSessions.awaitingSince, CloudSessions.awaitingEventSeq, CloudSessions.awaitingEpoch, CloudSessions.bypassBy)
             .where { CloudSessions.id eq sessionId }.forUpdate().singleOrNull() ?: throw TeamFailure("not_found", 404, "Cloud session not found.")
 
     private fun ownerChanged() = TeamFailure("session_busy", 409, "The cloud session changed owner. Retry the request.")
