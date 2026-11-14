@@ -95,6 +95,7 @@ class PoolGateway(private val admission: AdmissionStore, private val credentials
         var translationFailure: TeamFailure? = null
         var waitingFailure: TeamFailure? = null
         var poolFailure: TeamFailure? = null
+        var accountActionFailure: TeamFailure? = null
         val failover = ProviderFailoverBudget()
         var previousReservation: String? = null
         // Exhaust eligible accounts for each preferred target before trying the next configured provider/model.
@@ -164,6 +165,7 @@ class PoolGateway(private val admission: AdmissionStore, private val credentials
                     // This definite rejection settled with zero charge and nothing reached the client; the account is
                     // already paused or recorded at its limit. Select another one unless the rate-limit switch is spent.
                     previousReservation = reservation.id
+                    if (retry.accountAction != null) accountActionFailure = retry.failure
                     if (!failover.record(transport.provider, retry.refusal, retry.retryAfterSeconds)) {
                         poolFailure = moreHopeful(poolFailure, failover.failure(transport.provider)!!)
                         break
@@ -173,6 +175,7 @@ class PoolGateway(private val admission: AdmissionStore, private val credentials
         }
         if (!compatibleTargetFound) translationFailure?.let { throw it }
         waitingFailure?.let { throw it }
+        accountActionFailure?.let { throw it }
         throw poolFailure ?: TeamFailure("pool_unavailable", 429, "No account of your TeamCode pool can take this request on its configured routes. Retry shortly.")
     }
 
@@ -184,7 +187,8 @@ class PoolGateway(private val admission: AdmissionStore, private val credentials
     }
 
     /** A refusal before any output: [refusal] says how far it reaches, [retryAfterSeconds] how long the account is paused. */
-    private class SafeRetry(val failure: TeamFailure, val refusal: ProviderRefusal, val retryAfterSeconds: Long) : RuntimeException()
+    private class SafeRetry(val failure: TeamFailure, val refusal: ProviderRefusal, val retryAfterSeconds: Long,
+        val accountAction: ProviderAccountAction? = null) : RuntimeException()
 
     /** Best-effort write after the provider answered; cancellation still propagates. */
     private suspend fun bookkeeping(reservation: Reservation, step: String, block: suspend () -> Unit) {
@@ -234,6 +238,11 @@ class PoolGateway(private val admission: AdmissionStore, private val credentials
                             if (status == 401 && reauthenticatedAccounts.add(reservation.account.id)) {
                                 refreshRejected = true
                                 return@send
+                            }
+                            transport.accountActionRequired(response)?.let { action ->
+                                admission.coolDown(reservation.account.id, now + action.cooldownSeconds * 1000)
+                                System.out.println("TeamCode inference account refused request=${reservation.id} account=${reservation.account.id} provider=${transport.provider} status=$status code=${action.code} cooldownSeconds=${action.cooldownSeconds}")
+                                throw SafeRetry(action.failure(), ProviderRefusal.ACCOUNT, action.cooldownSeconds, action)
                             }
                             val retry = response.headers["retry-after"]?.toLongOrNull()?.coerceIn(1, 3600) ?: 60
                             val spent = observations.filter { it.utilization >= 1.0 && it.appliesTo(model, observation.modelLimit?.limit) }

@@ -6,7 +6,8 @@ import me.nathanfallet.teamcode.domain.team.TeamFailure
 
 /**
  * What a provider's definite refusal, answered before any output reached the client, says about trying another account
- * for the same request. Anything else (5xx, another 4xx, a transport failure, a failure after output) is never tried
+ * for the same request. A transport may also recognize a specific account-policy refusal such as terms acceptance
+ * and classify it as [ACCOUNT]. Unknown 4xx, 5xx, transport failures and failures after output are never tried
  * elsewhere: the provider may have done the work, and a committed stream is never replayed.
  */
 enum class ProviderRefusal {

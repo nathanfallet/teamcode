@@ -128,4 +128,21 @@ class GatewayTest {
         assertEquals("invalid_request_error", kotlinx.serialization.json.Json.parseToJsonElement(invalid.bodyAsText()).jsonObject["error"]!!.jsonObject["type"]!!.jsonPrimitive.content)
         assertEquals("false", invalid.headers["x-should-retry"])
     }
+
+    @Test fun `terms acceptance reaches both agents without automatic retries`() = testApplication {
+        val failure = me.nathanfallet.teamcode.domain.gateway.ProviderAccountAction.ACCEPT_CLAUDE_TERMS.failure()
+        application { configureGateway(RefusingGateway(failure), accessToken) }
+        for ((path, request) in listOf(
+            "/v1/messages" to """{"model":"claude-test","stream":true,"messages":[]}""",
+            "/v1/responses" to """{"model":"gpt-test","stream":true,"input":"hi"}""",
+        )) {
+            val response = refuse(path, request)
+            assertEquals(HttpStatusCode.ServiceUnavailable, response.status)
+            assertEquals("false", response.headers["x-should-retry"])
+            assertEquals("provider_terms_required", response.headers["x-teamcode-error"])
+            val error = kotlinx.serialization.json.Json.parseToJsonElement(response.bodyAsText()).jsonObject["error"]!!.jsonObject
+            assertEquals(failure.message, error["message"]!!.jsonPrimitive.content)
+            assertEquals(if (path == "/v1/messages") "api_error" else "server_error", error["type"]!!.jsonPrimitive.content)
+        }
+    }
 }

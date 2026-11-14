@@ -500,6 +500,107 @@ class PoolGatewayTest {
         "anthropic-ratelimit-unified-5h-reset" to listOf((System.currentTimeMillis() / 1000 + 3600).toString()),
     )
 
+    @Test fun aTermsAcceptanceRefusalPausesOnlyThatAccountAndTriesAnotherWithoutExposingTheRefusal() = runBlocking {
+        val store = FakeAdmission(account, accountsPerProvider = 3)
+        var calls = 0
+        HttpClient(MockEngine {
+            calls++
+            if (calls == 1) respond(claudeTermsRefusal(), HttpStatusCode.BadRequest)
+            else respond(FixtureGatewayService.EVENTS.joinToString(""), headers = headersOf(HttpHeaders.ContentType, "text/event-stream"))
+        }) { install(HttpTimeout) }.use { http ->
+            val gateway = PoolGateway(store, credentials, listOf(ClaudeTransport(http)), FakeModelPolicies())
+            val before = System.currentTimeMillis()
+            val output = StringBuilder()
+            var heads = 0
+            gateway.forward(request()) { head, chunks ->
+                heads++
+                assertEquals(200, head.status)
+                chunks.collect { output.append(it.decodeToString()) }
+            }
+            assertEquals(1, heads)
+            assertEquals(FixtureGatewayService.EVENTS.joinToString(""), output.toString())
+            assertEquals(2, calls)
+            val (paused, until, reconnect) = store.cooldowns.single()
+            assertEquals("anthropic-0", paused)
+            assertTrue(until in before + 60_000..System.currentTimeMillis() + 60_000)
+            assertFalse(reconnect, "Accepting terms does not require rotating credentials")
+            assertEquals<List<Long?>>(listOf(0L, 6L), store.charges)
+            assertNull(store.usages.first(), "A definite refusal consumed no tokens")
+        }
+    }
+
+    @Test fun noAvailableFallbackExplainsTheTermsActionInsteadOfReportingAGeneric400OrPoolExhaustion() = runBlocking {
+        val store = FakeAdmission(account, accountsPerProvider = 3)
+        var calls = 0
+        HttpClient(MockEngine { calls++; respond(claudeTermsRefusal(), HttpStatusCode.BadRequest) }) { install(HttpTimeout) }.use { http ->
+            val gateway = PoolGateway(store, credentials, listOf(ClaudeTransport(http)), FakeModelPolicies())
+            val error = assertFailsWith<TeamFailure> { gateway.forward(request()) { _, _ -> fail("The refusal must not be committed before trying other accounts") } }
+            assertEquals("provider_terms_required", error.code)
+            assertEquals(503, error.status)
+            assertFalse(error.retryable)
+            assertContains(error.message!!, "https://claude.ai")
+            assertContains(error.message!!, "accept")
+            assertFalse(error.message!!.contains(account.displayName), "Members never see the subscription's identity")
+            assertEquals(3, calls, "Account refusals are not limited by the plain rate-limit hop budget")
+            assertEquals(listOf("anthropic-0", "anthropic-1", "anthropic-2"), store.cooldowns.map { it.first })
+            assertEquals<List<Long?>>(listOf(0L, 0L, 0L), store.charges)
+        }
+    }
+
+    @Test fun termsAcceptanceStillAllowsAnotherExplicitlyConfiguredProvider() = runBlocking {
+        val store = FakeAdmission(account)
+        val seen = mutableListOf<String>()
+        val responses = "data: {\"type\":\"response.created\",\"response\":{\"id\":\"test\"}}\n\ndata: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}}\n\n"
+        HttpClient(MockEngine { req ->
+            seen += req.url.host
+            if (req.url.host == "api.anthropic.com") respond(claudeTermsRefusal(), HttpStatusCode.BadRequest)
+            else respond(responses, headers = headersOf(HttpHeaders.ContentType, "text/event-stream"))
+        }) { install(HttpTimeout) }.use { http ->
+            val gateway = PoolGateway(store, credentials, listOf(ClaudeTransport(http), CodexTransport(http)), FakeModelPolicies(),
+                routes(RouteTarget("anthropic"), RouteTarget("codex", "gpt-6-astra")))
+            gateway.forward(request()) { head, chunks -> assertEquals("codex", head.headers["x-teamcode-provider"]); chunks.collect {} }
+            assertEquals(listOf("api.anthropic.com", "chatgpt.com"), seen)
+            assertEquals(listOf("anthropic-0"), store.cooldowns.map { it.first })
+            assertEquals<List<Long?>>(listOf(0L, 6L), store.charges)
+        }
+    }
+
+    @Test fun other400ErrorsStayRequestScopedAndNeverExposeTheProviderBodyOrPauseAccounts() = runBlocking {
+        for (body in listOf(
+            claudeTermsRefusal("Invalid signature in thinking block: secret diagnostic"),
+            claudeTermsRefusal("Invalid tools.0.description: You must accept the updated Terms of Service and Privacy Policy at https://claude.ai."),
+            "not json", "{}",
+        )) {
+            val store = FakeAdmission(account, accountsPerProvider = 3)
+            var calls = 0
+            HttpClient(MockEngine { calls++; respond(body, HttpStatusCode.BadRequest) }) { install(HttpTimeout) }.use { http ->
+                val gateway = PoolGateway(store, credentials, listOf(ClaudeTransport(http)), FakeModelPolicies())
+                gateway.forward(request()) { head, chunks ->
+                    assertEquals(400, head.status)
+                    assertEquals("upstream_error", head.headers["x-teamcode-error"])
+                    chunks.collect { assertFalse(it.decodeToString().contains("secret diagnostic")) }
+                }
+                assertEquals(1, calls)
+                assertTrue(store.cooldowns.isEmpty())
+                assertEquals<List<Long?>>(listOf(0L), store.charges)
+            }
+        }
+    }
+
+    @Test fun aTermsErrorInsideAnAcceptedStreamIsPassedThroughWithoutReplayingIt() = runBlocking {
+        val store = FakeAdmission(account, accountsPerProvider = 3)
+        var calls = 0
+        val events = FixtureGatewayService.EVENTS.first() + "event: error\ndata: ${claudeTermsRefusal()}\n\n"
+        HttpClient(MockEngine { calls++; respond(events, headers = headersOf(HttpHeaders.ContentType, "text/event-stream")) }) { install(HttpTimeout) }.use { http ->
+            val gateway = PoolGateway(store, credentials, listOf(ClaudeTransport(http)), FakeModelPolicies())
+            val output = StringBuilder()
+            gateway.forward(request()) { head, chunks -> assertEquals(200, head.status); chunks.collect { output.append(it.decodeToString()) } }
+            assertEquals(events, output.toString())
+            assertEquals(1, calls)
+            assertTrue(store.cooldowns.isEmpty())
+        }
+    }
+
     @Test fun aRateLimitBeforeAnyOutputFailsOverToAnotherAccountAndPausesTheFirstAsBefore() = runBlocking {
         val store = FakeAdmission(account, accountsPerProvider = 3)
         var calls = 0
