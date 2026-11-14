@@ -103,7 +103,10 @@ class LaunchersTest {
             // TLS, loader and site redirections that would weaken the pinned download or the runtime.
             "NODE_TLS_REJECT_UNAUTHORIZED", "NODE_ICU_DATA", "GLIBC_TUNABLES", "CURL_CA_BUNDLE", "PYTHONUSERBASE", "SSLKEYLOGFILE",
             // At least every prefix the variant model refuses (domain Variants.kt), so the host never accepts less.
-            "NODE_REPL_EXTERNAL_MODULE", "PYTHONBREAKPOINT", "COREPACK_NPM_REGISTRY", "SSL_ANYTHING", "CURL_HOME")) {
+            "NODE_REPL_EXTERNAL_MODULE", "PYTHONBREAKPOINT", "COREPACK_NPM_REGISTRY", "SSL_ANYTHING", "CURL_HOME",
+            // And every further name of the variant model.
+            "DOTNET_STARTUP_HOOKS", "CLASSPATH", "SHELLOPTS", "GIT_ASKPASS", "SSH_ASKPASS", "GIT_DIR", "RIPGREP_CONFIG_PATH", "BASH_FUNC_X",
+            "GIT_SSL_NO_VERIFY", "GCONV_PATH")) {
             invalid(npm(env = mapOf(name to "value")))
             invalid(npm(secrets = mapOf(name to secret)))
         }

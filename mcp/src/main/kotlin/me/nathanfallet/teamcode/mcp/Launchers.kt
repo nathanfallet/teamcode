@@ -128,9 +128,15 @@ class Launchers(private val config: HostConfig) {
             // The same environment applies to the download: nothing may weaken its TLS or redirect the loader or the site directories.
             "NODE_TLS_REJECT_UNAUTHORIZED", "NODE_ICU_DATA", "NODE_V8_COVERAGE", "GLIBC_TUNABLES", "CURL_CA_BUNDLE", "SSLKEYLOGFILE",
             "PYTHONUSERBASE", "PYTHONEXECUTABLE", "PYTHONPLATLIBDIR",
+            // The server's further names (VariantService), so the host refuses at least what it refuses.
+            "ELECTRON_RUN_AS_NODE", "PERL5DB", "CLASSPATH", "DOTNET_STARTUP_HOOKS", "CORECLR_PROFILER", "CORECLR_PROFILER_PATH", "CORECLR_ENABLE_PROFILING",
+            "OLDPWD", "SHELLOPTS", "BASHOPTS", "CDPATH", "GLOBIGNORE", "PS4", "ZDOTDIR", "GIT_TERMINAL_PROMPT", "GH_CONFIG_DIR", "GIT_ASKPASS",
+            "SSH_ASKPASS", "GIT_PROXY_COMMAND", "GIT_EXTERNAL_DIFF", "GIT_PAGER", "GIT_EDITOR", "GIT_SEQUENCE_EDITOR", "GIT_TEMPLATE_DIR", "GIT_DIR",
+            "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_COMMON_DIR", "RIPGREP_CONFIG_PATH",
+            "GCONV_PATH", "GIT_SSL_NO_VERIFY", "GIT_SSL_CAINFO", "GIT_SSL_CAPATH", "GIT_ALLOW_PROTOCOL",
         )
         private val reservedPrefixes = listOf(
-            "LD_", "DYLD_", "TEAMCODE_", "ANTHROPIC_", "CLAUDE_", "OPENAI_", "CODEX_", "XDG_", "GIT_CONFIG_",
+            "LD_", "DYLD_", "TEAMCODE_", "ANTHROPIC_", "CLAUDE_", "OPENAI_", "CODEX_", "XDG_", "GIT_CONFIG_", "BASH_FUNC_",
             // The launcher prefixes of the variant model (domain Variants.kt): the host refuses at least what it refuses.
             "NPM_CONFIG_", "UV_", "PIP_", "NODE_", "PYTHON", "COREPACK_", "SSL", "CURL_",
         )

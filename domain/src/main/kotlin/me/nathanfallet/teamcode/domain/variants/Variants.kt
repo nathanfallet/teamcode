@@ -192,8 +192,19 @@ interface VariantService {
             "NODE_OPTIONS", "NODE_PATH", "JAVA_TOOL_OPTIONS", "JDK_JAVA_OPTIONS", "_JAVA_OPTIONS", "PYTHONPATH", "PYTHONSTARTUP",
             "PYTHONHOME", "PERL5OPT", "PERL5LIB", "RUBYOPT", "RUBYLIB", "GIT_SSH", "GIT_SSH_COMMAND", "GIT_EXEC_PATH", "GIT_CONFIG_GLOBAL",
             "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "SSL_CERT_FILE", "SSL_CERT_DIR", "NODE_EXTRA_CA_CERTS", "REQUESTS_CA_BUNDLE",
+            // What else steers the loader or a runtime (glibc's tunables, TLS checks and key logs, code a runtime loads), the
+            // shell, Git, SSH and the GitHub CLI (the programs they run, where they read a repository) or an agent's tools.
+            "GLIBC_TUNABLES", "NODE_TLS_REJECT_UNAUTHORIZED", "NODE_ICU_DATA", "ELECTRON_RUN_AS_NODE", "PYTHONUSERBASE", "PYTHONEXECUTABLE",
+            "PYTHONPLATLIBDIR", "PYTHONBREAKPOINT", "PERL5DB", "CLASSPATH", "DOTNET_STARTUP_HOOKS", "CORECLR_PROFILER", "CORECLR_PROFILER_PATH",
+            "CORECLR_ENABLE_PROFILING", "CURL_CA_BUNDLE", "SSLKEYLOGFILE", "OLDPWD", "SHELLOPTS", "BASHOPTS", "CDPATH", "GLOBIGNORE", "PS4", "ZDOTDIR",
+            "GIT_TERMINAL_PROMPT", "GH_CONFIG_DIR", "GIT_ASKPASS", "SSH_ASKPASS", "GIT_PROXY_COMMAND", "GIT_EXTERNAL_DIFF", "GIT_PAGER", "GIT_EDITOR",
+            "GIT_SEQUENCE_EDITOR", "GIT_TEMPLATE_DIR", "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY",
+            "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_COMMON_DIR", "RIPGREP_CONFIG_PATH", "GCONV_PATH",
+            // What weakens Git's TLS or protocols, as NODE_TLS_REJECT_UNAUTHORIZED does Node's.
+            "GIT_SSL_NO_VERIFY", "GIT_SSL_CAINFO", "GIT_SSL_CAPATH", "GIT_ALLOW_PROTOCOL",
         )
-        private val reservedEnvPrefixes = listOf("LD_", "DYLD_", "TEAMCODE_", "ANTHROPIC_", "CLAUDE_", "OPENAI_", "CODEX_", "XDG_", "GIT_CONFIG_")
+        /** `BASH_FUNC_` names an exported shell function. */
+        private val reservedEnvPrefixes = listOf("LD_", "DYLD_", "TEAMCODE_", "ANTHROPIC_", "CLAUDE_", "OPENAI_", "CODEX_", "XDG_", "GIT_CONFIG_", "BASH_FUNC_")
         /**
          * A hosted command's variables can change neither how its launcher resolves or installs the package nor how its
          * Node.js or Python runtime loads code and checks certificates (`NODE_TLS_REJECT_UNAUTHORIZED`, `PYTHONBREAKPOINT`...).
