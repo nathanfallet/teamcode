@@ -7,16 +7,29 @@ import io.ktor.client.statement.*
 import io.ktor.http.*
 import io.ktor.utils.io.*
 import kotlinx.io.readByteArray
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.*
 import me.nathanfallet.teamcode.domain.accounts.*
 import me.nathanfallet.teamcode.domain.capacity.AccountQuota
 import me.nathanfallet.teamcode.domain.capacity.QuotaUpdate
 import me.nathanfallet.teamcode.domain.team.TeamFailure
+import me.nathanfallet.teamcode.domain.gateway.ProviderAccountAction
 import java.time.Instant
 
 class ClaudeTransport(private val http: HttpClient) : ProviderTransport {
     override val provider = "anthropic"
     override val protocol = me.nathanfallet.teamcode.domain.gateway.WireProtocol.MESSAGES
+    override suspend fun accountActionRequired(response: HttpResponse): ProviderAccountAction? {
+        if (response.status != HttpStatusCode.BadRequest) return null
+        return withTimeoutOrNull(ClaudeAccountRefusals.READ_TIMEOUT_MILLIS) {
+            try {
+                val bytes = response.bodyAsChannel().readRemaining(ClaudeAccountRefusals.MAX_BYTES.toLong() + 1).readByteArray()
+                ClaudeAccountRefusals.classify(bytes)
+            } catch (error: CancellationException) { throw error }
+            catch (_: Exception) { null } // An unreadable diagnostic never makes an unknown request safe to replay.
+        }
+    }
     override fun quotas(accountId: String, headers: Headers, now: Long) = headerQuotas(accountId, headers, now)
     override suspend fun refresh(previous: ProviderCredentials): ProviderCredentials = renew(previous).credentials
     override suspend fun renew(previous: ProviderCredentials): RefreshedCredentials = http.preparePost("https://platform.claude.com/v1/oauth/token") {

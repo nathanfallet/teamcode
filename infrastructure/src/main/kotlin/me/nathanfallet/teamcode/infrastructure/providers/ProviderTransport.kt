@@ -8,6 +8,7 @@ import me.nathanfallet.teamcode.domain.capacity.AccountQuota
 import me.nathanfallet.teamcode.domain.capacity.QuotaUpdate
 import me.nathanfallet.teamcode.domain.capacity.ProviderRequestIds
 import me.nathanfallet.teamcode.domain.gateway.WireProtocol
+import me.nathanfallet.teamcode.domain.gateway.ProviderAccountAction
 
 /** Fixed provider destinations; no end-user URL can receive a subscription credential. */
 interface ProviderTransport {
@@ -20,6 +21,8 @@ interface ProviderTransport {
     suspend fun usageUpdate(account: AccountRecord, credentials: ProviderCredentials): QuotaUpdate =
         QuotaUpdate(usage(account, credentials), System.currentTimeMillis())
     suspend fun send(account: AccountRecord, credentials: ProviderCredentials, body: JsonObject, headers: Map<String, String>, receive: suspend (HttpResponse) -> Unit)
+    /** Inspect only recognized, definite refusals before output. Unknown errors must not rotate the pool. */
+    suspend fun accountActionRequired(response: HttpResponse): ProviderAccountAction? = null
     fun quotas(accountId: String, headers: Headers, now: Long): List<AccountQuota>
     fun quotaUpdate(accountId: String, model: String, headers: Headers, now: Long): QuotaUpdate =
         QuotaUpdate(quotas(accountId, headers, now), now)
