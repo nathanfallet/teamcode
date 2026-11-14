@@ -22,6 +22,7 @@ internal fun claudeTermsRefusal(message: String = CLAUDE_TERMS_MESSAGE) =
         putJsonObject("error") { put("type", "invalid_request_error"); put("message", message) }
     }.toString()
 
+@OptIn(ExperimentalCoroutinesApi::class)
 class ClaudeAccountRefusalTest {
     @Test fun recognizesAnExplicitTermsAcceptanceInstructionInTheClaudeErrorEnvelope() {
         for (message in listOf(
@@ -54,7 +55,7 @@ class ClaudeAccountRefusalTest {
         )) assertNull(ClaudeAccountRefusals.classify(body.encodeToByteArray()))
     }
 
-    @Test fun onlyTheClaude400TransportInspectsTheRefusal() = runTest {
+    @Test fun onlyTheClaude400TransportInspectsTheRefusal() = runBlocking {
         HttpClient(MockEngine { respond(claudeTermsRefusal(), HttpStatusCode.BadRequest) }).use { http ->
             val response = http.get("https://fixture.invalid")
             assertNull(CodexTransport(http).accountActionRequired(response))
@@ -67,7 +68,7 @@ class ClaudeAccountRefusalTest {
         }
     }
 
-    @Test fun anOversizedBodyIsUnknownEvenWithAnAcceptanceInstructionAtItsStart() = runTest {
+    @Test fun anOversizedBodyIsUnknownEvenWithAnAcceptanceInstructionAtItsStart() = runBlocking {
         HttpClient(MockEngine { respond(claudeTermsRefusal() + " ".repeat(ClaudeAccountRefusals.MAX_BYTES), HttpStatusCode.BadRequest) }).use { http ->
             assertNull(ClaudeTransport(http).accountActionRequired(http.get("https://fixture.invalid")))
         }
