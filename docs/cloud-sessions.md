@@ -375,7 +375,7 @@ The recipient is checked when the transfer is requested, when it is accepted, an
 | `create` under the [access policy](cloud-conversations.md#access), as for a creation on their behalf | `cloud_permission_denied` |
 | The session's recorded agent model and effort against the team's model policy, exactly as inference will check them | `model_not_allowed`, `effort_not_allowed` |
 | An inference allowance at all (a pool weight or daily allowance of zero refuses). Today's consumption is not checked: a transfer neither resets nor borrows allowances | `recipient_no_quota` |
-| The retained-session cap, in the owner-change transaction under the recipient's member row lock | `cloud_session_limit` |
+| The retained-session cap: refused at the request and at the acceptance (`409 cloud_session_limit`, nothing is paused), and checked again in the owner-change transaction under the recipient's member row lock (a race fails the transfer) | `cloud_session_limit` |
 
 The checks are a list of `CloudRecipientCheck` ports. Environment variables, MCP servers and skills are delivered to cloud sessions by other branches (environment preparation, the MCP gateway and the skill catalog); their assignment checks (for example the profile's `requiredVariables` for the recipient) join this list when they are merged, without changing the transfer flow.
 

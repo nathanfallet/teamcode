@@ -392,6 +392,7 @@ class CloudRoutesTest {
         override suspend fun expireOffers(limit: Int) = 0
         override suspend fun maintain() = Unit
         val recipientLimits = mutableListOf<Int>()
+        override suspend fun retained(teamId: String, memberId: String) = 0
         override suspend fun recipients(teamId: String, limit: Int): List<CloudTransferRecipient> {
             recipientLimits += limit
             return listOf(store.member(teamId, "admin-id")!!, store.member(teamId, "colleague-id")!!).map { CloudTransferRecipient(it.id, it.username, it.role.isAdministrator) }
