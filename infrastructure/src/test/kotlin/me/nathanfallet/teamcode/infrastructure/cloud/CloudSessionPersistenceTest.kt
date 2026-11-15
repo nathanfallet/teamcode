@@ -360,7 +360,8 @@ class CloudSessionPersistenceTest {
         failure("cloud_session_limit") { ra.sessions.create(admin, colleague.member.id, CloudSessionDraft("Over", profile.id, null, null, null, emptyMap(), null), null) }
         // 0 removes the retained cap: the same member can keep creating sessions.
         ra.admin.saveSettings(admin, CloudSettings(pausedRetentionDays = 1, maxRunningSessionsPerMember = 2, maxRetainedSessionsPerMember = 0))
-        ra.sessions.create(admin, colleague.member.id, CloudSessionDraft("No limit", profile.id, null, null, null, emptyMap(), null), null)
+        val extra = (ra.sessions.create(admin, colleague.member.id, CloudSessionDraft("No limit", profile.id, null, null, null, emptyMap(), null), null) as CloudCreateOutcome.Created).session
+        ra.sessions.delete(colleague, null, extra.id)
         ra.admin.saveSettings(admin, CloudSettings(pausedRetentionDays = 1, maxRunningSessionsPerMember = 2, maxRetainedSessionsPerMember = 2))
         // No role lists the team's sessions through the service; the store still pages them (keyset) for the workers.
         failure("forbidden") { ra.sessions.list(admin, CloudSessionQuery(owner = colleague.member.id, limit = 1)) }
@@ -370,7 +371,7 @@ class CloudSessionPersistenceTest {
         val next = ra.store.list(admin.teamId, CloudSessionQuery(owner = null, limit = 50, beforeId = page.nextBeforeId))
         assertTrue(next.sessions.none { it.id in page.sessions.map(CloudSession::id) })
         // Includes the deleted session created by the `cloud:*` keys step and the two of the renaming step.
-        assertEquals(11, page.sessions.size + next.sessions.size)
+        assertEquals(12, page.sessions.size + next.sessions.size) // 11 and the one created above the lifted cap
     }
 
     private suspend fun failureModesAndEarlyCheckpoint(ra: Replica, rb: Replica, admin: Principal, profile: CloudProfile) {
