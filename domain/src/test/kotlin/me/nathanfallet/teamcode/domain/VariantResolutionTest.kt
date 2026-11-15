@@ -52,6 +52,14 @@ class VariantResolutionTest {
         invalid(NewVariant(VariantKind.ENV, "lower", "org", VariantBinding.SHARED, sharedSecret = secret))
         for (reserved in listOf("PATH", "LD_PRELOAD", "DYLD_INSERT_LIBRARIES", "NODE_OPTIONS", "ANTHROPIC_BASE_URL", "OPENAI_API_KEY", "TEAMCODE_TOKEN", "HTTPS_PROXY"))
             invalid(NewVariant(VariantKind.ENV, reserved, "org", VariantBinding.SHARED, sharedSecret = secret))
+        // The loader, the runtimes, the shell, Git's programs and an agent's tools.
+        for (reserved in listOf("GLIBC_TUNABLES", "NODE_TLS_REJECT_UNAUTHORIZED", "SSLKEYLOGFILE", "CURL_CA_BUNDLE", "DOTNET_STARTUP_HOOKS", "CLASSPATH",
+            "SHELLOPTS", "ZDOTDIR", "GIT_ASKPASS", "SSH_ASKPASS", "GIT_PROXY_COMMAND", "GIT_DIR", "GH_CONFIG_DIR", "RIPGREP_CONFIG_PATH", "BASH_FUNC_X",
+            "GIT_SSL_NO_VERIFY", "GIT_SSL_CAINFO", "GIT_ALLOW_PROTOCOL", "GCONV_PATH"))
+            invalid(NewVariant(VariantKind.ENV, reserved, "org", VariantBinding.SHARED, sharedSecret = secret))
+        // What teams set every day stays theirs.
+        for (name in listOf("GIT_AUTHOR_NAME", "GIT_COMMITTER_EMAIL", "PYTHONUNBUFFERED", "NODE_ENV", "SSH_KEY_NAME"))
+            VariantService.validate(NewVariant(VariantKind.ENV, name, "org", VariantBinding.SHARED, sharedSecret = secret))
         val mcpVariant = variant("mcp", VariantKind.MCP, "tracker", endpoint = "https://mcp.example.test")
         assertFailsWith<TeamFailure> { VariantService.validate(mcpVariant, VariantUpdate(1, "mcp", sharedSecret = secret, clearSharedSecret = true)) }
         assertFailsWith<TeamFailure> { VariantService.validate(variant("env", VariantKind.ENV, "TOKEN"), VariantUpdate(1, "env", clearSharedSecret = true)) }

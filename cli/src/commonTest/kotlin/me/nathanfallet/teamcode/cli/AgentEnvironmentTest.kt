@@ -22,6 +22,12 @@ class AgentEnvironmentTest {
         assertEquals(offered.keys.minus("NPM_TOKEN").sorted(), AgentEnvironment.refused(offered))
     }
 
+    @Test fun theServersFurtherNamesNeverReachTheAgent() {
+        val offered = listOf("GLIBC_TUNABLES", "NODE_TLS_REJECT_UNAUTHORIZED", "SSLKEYLOGFILE", "DOTNET_STARTUP_HOOKS", "CLASSPATH", "ZDOTDIR",
+            "GIT_ASKPASS", "SSH_ASKPASS", "GIT_PROXY_COMMAND", "GIT_DIR", "RIPGREP_CONFIG_PATH", "GIT_SSL_NO_VERIFY", "GCONV_PATH").associateWith { "x" } + ("GIT_AUTHOR_NAME" to "a")
+        assertEquals(mapOf("GIT_AUTHOR_NAME" to "a"), AgentEnvironment.accepted(offered))
+    }
+
     @Test fun scriptExportsQuotedValuesAndUnsetsWithdrawnNames() {
         val script = AgentEnvironment.script(mapOf("B_VALUE" to "it's \$HOME `x` \"q\" \\", "A_VALUE" to "plain value"), withdrawn = setOf("GONE", "A_VALUE", "PATH"))
         val lines = script.lines().filter { it.isNotBlank() && !it.startsWith("#") }
