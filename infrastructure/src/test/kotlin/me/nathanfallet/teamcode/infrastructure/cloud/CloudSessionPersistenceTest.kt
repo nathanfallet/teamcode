@@ -358,6 +358,10 @@ class CloudSessionPersistenceTest {
         assertEquals("expired", ra.store.find(admin.teamId, lost.id)!!.terminatedReason)
         repeat(2) { rb.sessions.create(colleague, null, CloudSessionDraft("Slot $it", profile.id, null, null, null, emptyMap(), null), null) }
         failure("cloud_session_limit") { ra.sessions.create(admin, colleague.member.id, CloudSessionDraft("Over", profile.id, null, null, null, emptyMap(), null), null) }
+        // 0 removes the retained cap: the same member can keep creating sessions.
+        ra.admin.saveSettings(admin, CloudSettings(pausedRetentionDays = 1, maxRunningSessionsPerMember = 2, maxRetainedSessionsPerMember = 0))
+        ra.sessions.create(admin, colleague.member.id, CloudSessionDraft("No limit", profile.id, null, null, null, emptyMap(), null), null)
+        ra.admin.saveSettings(admin, CloudSettings(pausedRetentionDays = 1, maxRunningSessionsPerMember = 2, maxRetainedSessionsPerMember = 2))
         // No role lists the team's sessions through the service; the store still pages them (keyset) for the workers.
         failure("forbidden") { ra.sessions.list(admin, CloudSessionQuery(owner = colleague.member.id, limit = 1)) }
         failure("forbidden") { ra.sessions.list(admin, CloudSessionQuery(owner = "*", limit = 2)) }

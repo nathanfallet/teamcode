@@ -99,7 +99,7 @@ class CloudSessionService(
         )
         if (onBehalf && session.environment.requireGitHub) throw TeamFailure("github_owner_consent", 422,
             "This profile requires GitHub, and a session created on someone's behalf has no GitHub access until its owner allows it. Ask the owner to create the session.")
-        val outcome = store.insert(session, actor, idempotency, settings.maxRetainedSessionsPerMember)
+        val outcome = store.insert(session, actor, idempotency, settings.retainedLimit)
         // Queued after the session commits, idempotently: if this step fails, the client's retry with the same
         // Idempotency-Key replays the creation and queues the message then.
         draft.initialMessage?.let { text ->
@@ -145,7 +145,7 @@ class CloudSessionService(
             kind = CloudSessionKind.REMOTE, host = CloudSessionHost(device, folder?.name ?: draft.directoryName, permissionMode = draft.permissionMode, folderId = folder?.id,
                 resumeSessionId = draft.resumeSessionId),
         )
-        val outcome = store.insert(session, actor, idempotency, settings.maxRetainedSessionsPerMember)
+        val outcome = store.insert(session, actor, idempotency, settings.retainedLimit)
         draft.initialMessage?.let { text ->
             val created = when (outcome) { is CloudCreateOutcome.Created -> outcome.session; is CloudCreateOutcome.Replayed -> outcome.session }
             initialMessages?.queue(principal, created, text)

@@ -124,8 +124,8 @@ class CloudAdministrationService(
         private val dnsSubdomain = Regex("[a-z0-9]([-a-z0-9.]{0,251}[a-z0-9])?")
         fun validate(settings: CloudSettings) {
             if ((settings.pausedRetentionDays != null && settings.pausedRetentionDays !in 1..3650) || settings.failedWorkspaceRetentionDays !in 0..365 ||
-                settings.maxRunningSessionsPerMember !in 1..100 || settings.maxRetainedSessionsPerMember !in 1..1000 ||
-                settings.maxRetainedSessionsPerMember < settings.maxRunningSessionsPerMember ||
+                settings.maxRunningSessionsPerMember !in 0..100 || settings.maxRetainedSessionsPerMember !in 0..1000 ||
+                (settings.maxRunningSessionsPerMember > 0 && settings.maxRetainedSessionsPerMember > 0 && settings.maxRetainedSessionsPerMember < settings.maxRunningSessionsPerMember) ||
                 (settings.transcriptRetentionDays != null && settings.transcriptRetentionDays !in 1..3650) || settings.transferOfferDays !in 1..30 ||
                 settings.permissionDeadlineMinutes !in 0..CloudConversationRules.MAX_PERMISSION_DEADLINE_MINUTES ||
                 settings.remoteIdleTimeoutMinutes !in 0..CloudIdleRules.MAX_TIMEOUT_MINUTES ||

@@ -303,7 +303,9 @@ data class CloudSettings(
     val pausedRetentionDays: Int? = 30,
     /** Days a failed session keeps its workspace before deletion. */
     val failedWorkspaceRetentionDays: Int = 7,
+    /** Sessions of one member running at once; 0 means no limit (the cluster's `maxRunningPods` still applies). */
     val maxRunningSessionsPerMember: Int = 2,
+    /** Sessions of one member that are neither terminated nor failed, paused ones included; 0 means no limit. */
     val maxRetainedSessionsPerMember: Int = 20,
     /** Days transcript events and finished messages are kept, counted from each event; null keeps them indefinitely. Independent of pods and workspaces. */
     val transcriptRetentionDays: Int? = 30,
@@ -334,7 +336,12 @@ data class CloudSettings(
     val maxAutomationsPerMember: Int = 20,
     /** One member's automation runs that may be starting or working at once (1 to 100), apart from [maxRunningSessionsPerMember]. */
     val maxRunningAutomationsPerMember: Int = 2,
-)
+) {
+    /** The running cap as a number to compare with: [Int.MAX_VALUE] when it is 0 (no limit). */
+    val runningLimit: Int get() = if (maxRunningSessionsPerMember == 0) Int.MAX_VALUE else maxRunningSessionsPerMember
+    /** The retained cap as a number to compare with: [Int.MAX_VALUE] when it is 0 (no limit). */
+    val retainedLimit: Int get() = if (maxRetainedSessionsPerMember == 0) Int.MAX_VALUE else maxRetainedSessionsPerMember
+}
 enum class MemberTransfers(val wire: String) {
     DISABLED("disabled"), OFFER("offer");
     companion object { fun parse(value: String) = entries.singleOrNull { it.wire == value } }

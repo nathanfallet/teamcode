@@ -239,7 +239,7 @@ class ReconcileCloudSessionsUseCase(
             if (!startAllowed()) return now + MONITOR_MILLIS
             val epoch = current.currentEpoch + 1
             val pod = CloudSessionService.podName(current.id, epoch)
-            val limit = store.settings(current.teamId).maxRunningSessionsPerMember
+            val limit = store.settings(current.teamId).runningLimit
             val outcome = transition.start(current, current.copy(currentEpoch = epoch, phase = "scheduling", waitingSince = null, updatedAt = now),
                 CloudExecution(current.id, epoch, pod, ExecutionState.PENDING, now, ownerId = current.ownerId), owner, limit)
             if (outcome == StartOutcome.WaitingCapacity) {
