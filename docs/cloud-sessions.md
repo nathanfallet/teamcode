@@ -274,7 +274,7 @@ Advertised as `cloud.sessions.local.v1`, when cloud sessions, the runner channel
 
 ### Bounds and capacity
 
-- Settings `maxRunningSessionsPerMember` (default 2) and `maxRetainedSessionsPerMember` (default 20) apply to every member; per-member overrides in member policy are planned.
+- Settings `maxRunningSessionsPerMember` (default 2) and `maxRetainedSessionsPerMember` (default 20) apply to every member (`0` removes the limit); per-member overrides in member policy are planned.
 - Each cluster has `maxRunningPods`. Executions not yet ended count, for all sessions on the cluster.
 - A creation or resume beyond the running caps waits in `creating`/`resuming` with `phase = waiting_capacity`. Admission is FIFO per cluster: an older waiting session goes first unless its owner is at their own cap.
 - The retained cap (sessions neither terminated nor failed) is enforced synchronously: `409 cloud_session_limit`.
@@ -288,8 +288,8 @@ Administrators edit them through `PUT /api/v1/cloud/settings` or **Dashboard →
 | --- | --- | --- |
 | `pausedRetentionDays` | 30 | Days a paused session keeps its workspace. `null` keeps it indefinitely. |
 | `failedWorkspaceRetentionDays` | 7 | Days a session that failed after its first execution keeps its workspace. |
-| `maxRunningSessionsPerMember` | 2 | Running cap per member. |
-| `maxRetainedSessionsPerMember` | 20 | Retained cap per member. |
+| `maxRunningSessionsPerMember` | 2 | Running cap per member, 0 to 100; `0` means no limit (the cluster's `maxRunningPods` still applies). |
+| `maxRetainedSessionsPerMember` | 20 | Retained cap per member (paused sessions count), 0 to 1000; `0` means no limit. When both are set, the retained cap is at least the running one. |
 | `transcriptRetentionDays` | 30 | Days transcript events are kept (1 to 3,650). `null` keeps them indefinitely. |
 | `memberTransfers` | `offer` | `offer`: an owner may offer their own session and the recipient accepts; `disabled`: only administrators transfer. |
 | `transferOfferDays` | 7 | Days a recipient has to accept an offer (1 to 30). |

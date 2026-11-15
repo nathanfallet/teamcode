@@ -73,7 +73,7 @@ class CompleteCloudTransferUseCase(
                 expiresAt = settings.pausedRetentionDays?.let { now + it * ReconcileCloudSessionsUseCase.DAY_MILLIS }, failure = null, updatedAt = now))
             // Neither does a standing approval of tool uses: the recipient decides for themselves.
             .copy(githubAccess = github, permissionBypass = null)
-        return when (transfers.complete(s, next, transfer, owner, settings.maxRetainedSessionsPerMember)) {
+        return when (transfers.complete(s, next, transfer, owner, settings.retainedLimit)) {
             is TransferCompletion.Completed, TransferCompletion.Conflict -> now
             TransferCompletion.RecipientAtLimit -> fail(s, transfer, owner, now, CloudProblem("cloud_session_limit", "The recipient already retains the maximum number of cloud sessions."))
             TransferCompletion.RecipientUnavailable -> fail(s, transfer, owner, now, CloudProblem("recipient_unavailable", "The recipient is disabled or has not completed password setup."))

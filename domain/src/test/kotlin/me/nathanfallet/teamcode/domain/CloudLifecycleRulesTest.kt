@@ -61,4 +61,14 @@ class CloudLifecycleRulesTest {
         for (bad in listOf(CloudSettings(pausedRetentionDays = 0), CloudSettings(failedWorkspaceRetentionDays = -1), CloudSettings(maxRunningSessionsPerMember = 30, maxRetainedSessionsPerMember = 20)))
             assertFailsWith<TeamFailure> { CloudAdministrationService.validate(bad) }
     }
+
+    @Test fun zeroMeansNoSessionLimit() {
+        // 0 removes a cap; the retained cap only has to cover the running one when both are set.
+        for (ok in listOf(CloudSettings(maxRunningSessionsPerMember = 0), CloudSettings(maxRetainedSessionsPerMember = 0), CloudSettings(maxRunningSessionsPerMember = 0, maxRetainedSessionsPerMember = 0), CloudSettings(maxRunningSessionsPerMember = 30, maxRetainedSessionsPerMember = 0)))
+            CloudAdministrationService.validate(ok)
+        assertFailsWith<TeamFailure> { CloudAdministrationService.validate(CloudSettings(maxRunningSessionsPerMember = -1)) }
+        assertFailsWith<TeamFailure> { CloudAdministrationService.validate(CloudSettings(maxRetainedSessionsPerMember = 1001)) }
+        assertEquals(Int.MAX_VALUE, CloudSettings(maxRunningSessionsPerMember = 0, maxRetainedSessionsPerMember = 0).let { minOf(it.runningLimit, it.retainedLimit) })
+        assertEquals(2 to 20, CloudSettings().let { it.runningLimit to it.retainedLimit })
+    }
 }

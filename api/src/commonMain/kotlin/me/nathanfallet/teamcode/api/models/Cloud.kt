@@ -361,7 +361,9 @@ data class CloudClusterChoicesView(
 data class CloudSettingsView(
     val pausedRetentionDays: Int?,
     val failedWorkspaceRetentionDays: Int,
+    /** Sessions of one member running at once, 0 to 100; 0 means no limit. */
     val maxRunningSessionsPerMember: Int,
+    /** Sessions of one member neither terminated nor failed (paused ones included), 0 to 1000; 0 means no limit. */
     val maxRetainedSessionsPerMember: Int,
     /** Days transcript events and finished messages are kept; null keeps them indefinitely. */
     val transcriptRetentionDays: Int?,
