@@ -55,6 +55,13 @@ class SqlCloudTransferStore(private val database: Database) : CloudTransferStore
             .map { CloudTransferRecipient(it[Members.id], it[Members.username], readMemberRole(it).isAdministrator) }
     }
 
+    override suspend fun retained(teamId: String, memberId: String): Int = database.query {
+        CloudSessions.select(CloudSessions.id).where {
+            (CloudSessions.teamId eq teamId) and (CloudSessions.ownerId eq memberId) and
+                (CloudSessions.state notInList listOf(CloudSessionState.TERMINATED.wire, CloudSessionState.FAILED.wire))
+        }.count().toInt()
+    }
+
     override suspend fun open(transfer: CloudTransfer, actor: CloudActor, auditAction: String, session: SessionChange?): CloudTransferOutcome = database.query {
         requireCurrent(this, actor.principal)
         lockSession(transfer.sessionId)

@@ -110,6 +110,8 @@ interface CloudTransferStore {
      * [limit]. Only identifiers, usernames and roles are read.
      */
     suspend fun recipients(teamId: String, limit: Int): List<CloudTransferRecipient>
+    /** How many sessions [memberId] retains (any state but terminated or failed): what the retained cap counts, as the owner change does. */
+    suspend fun retained(teamId: String, memberId: String): Int
 
     /**
      * Inserts [transfer] under the session row lock. A repeated idempotency key replays the stored transfer (or fails

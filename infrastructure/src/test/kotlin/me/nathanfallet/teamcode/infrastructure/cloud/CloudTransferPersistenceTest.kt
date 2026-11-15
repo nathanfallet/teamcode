@@ -345,9 +345,9 @@ class CloudTransferPersistenceTest {
         val outcome = ra.transfers.get(t.admin, capped.id)
         assertEquals(CloudTransferState.COMPLETED, outcome.state, "The recipient holds one session: under the cap of 2")
         val third = ready(ra, rb, t.admin, profile, "Third")
-        val over = ra.transfers.request(t.admin, null, third.id, CloudTransferRequest(t.recipient.member.id, false, true), key("cap-2", "d14")).transfer
-        repeat(10) { if (ra.store.find(teamId, third.id)!!.state == PAUSING) rb.runner.checkpoint(teamId, third.id, 1, true); pass(ra) }
-        assertEquals(CloudTransferState.FAILED to "cloud_session_limit", ra.transfers.get(t.admin, over.id).let { it.state to it.failure?.code })
+        // Told at the request, not after the session paused: nothing is paused or left half done.
+        val refused = assertFailsWith<TeamFailure> { ra.transfers.request(t.admin, null, third.id, CloudTransferRequest(t.recipient.member.id, false, true), key("cap-2", "d14")) }
+        assertEquals("cloud_session_limit", refused.code)
         assertEquals(t.admin.member.id, ra.store.find(teamId, third.id)!!.ownerId)
         ra.admin.saveSettings(t.admin, CloudSettings())
         ra.sessions.delete(t.admin, null, third.id)

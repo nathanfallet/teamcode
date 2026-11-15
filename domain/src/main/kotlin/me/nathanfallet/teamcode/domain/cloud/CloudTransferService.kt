@@ -43,6 +43,7 @@ class CloudTransferService(
         if (!admin && settings.memberTransfers == MemberTransfers.DISABLED)
             throw TeamFailure("transfer_disabled", 403, "Your team does not allow members to transfer their sessions. Ask an administrator.")
         recipients.require(session, toMemberId)
+        requireRoom(settings, toMemberId, principal.teamId)
         val now = store.now()
         val transfer = CloudTransfer(
             id = UUID.randomUUID().toString(), teamId = principal.teamId, sessionId = session.id, fromMemberId = session.ownerId, toMemberId = toMemberId,
@@ -93,11 +94,21 @@ class CloudTransferService(
             if (session.state.terminal || session.desiredState == DesiredState.TERMINATED) return close(transfer, actor, CloudTransferState.CANCELLED, "cloud.transfer.cancelled", now, endedProblem)
             transferable(session, transfer.id)
             recipients.require(session, transfer.toMemberId)
+            requireRoom(settings, transfer.toMemberId, transfer.teamId)
             val accepted = transfer.copy(state = CloudTransferState.ACCEPTED, resume = resume ?: transfer.resume, pendingInputs = settings.transferPendingInputs,
                 decidedBy = actor.attribution, decidedAt = now, updatedAt = now, version = transfer.version + 1)
             transfers.update(transfer, accepted, actor, "cloud.transfer.accepted", SessionChange(session, toward(session, accepted, now)))?.let { return it }
         }
         throw busy()
+    }
+
+    /**
+     * The recipient's retained cap, told now: the owner change checks it too, but only after the session paused, and a transfer
+     * that failed there left the owner with a session that "went nowhere". The check at the change stays for the race.
+     */
+    private suspend fun requireRoom(settings: CloudSettings, recipientId: String, teamId: String) {
+        if (transfers.retained(teamId, recipientId) >= settings.maxRetainedSessionsPerMember)
+            throw TeamFailure("cloud_session_limit", 409, "The recipient already retains the maximum number of cloud sessions. They must delete one first.")
     }
 
     suspend fun decline(principal: Principal, onBehalfOf: String?, id: String): CloudTransfer {
