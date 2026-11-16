@@ -58,7 +58,7 @@ class TodoMcpServerTest {
             ran += listOf(command) + arguments
             answers.firstOrNull { it.first(arguments) }?.second
         }, session))
-        fun gh(match: (List<String>) -> Boolean, output: String, exit: Int = 0) { answers += match to Captured(exit, output) }
+        fun gh(match: (List<String>) -> Boolean, output: String, exit: Int = 0, truncated: Boolean = false) { answers += match to Captured(exit, output, truncated = truncated) }
     }
 
     private fun request(method: String, params: JsonObject = JsonObject(emptyMap()), id: Int = 1) =
@@ -153,6 +153,29 @@ class TodoMcpServerTest {
         proof = Json.parseToJsonElement(server.requests.last().second).jsonObject["checks"]!!.jsonArray.single().jsonObject
         assertEquals(true, proof["passed"]!!.jsonPrimitive.boolean)
         assertTrue(server.requests.indexOf(link) < server.requests.indexOfLast { it.first.endsWith("/proof") }, "the link is recorded before the proof")
+    }
+
+    @Test fun theSearchLetsGhDropTheBodiesSoTheAnswerStaysSmall() = runBlocking {
+        val server = Server(view(item("a", "doing", listOf(TodoCheckView("pr_merged", repo = repo)))))
+        // What gh prints once its own filter kept the matching pull request and removed its body.
+        server.gh({ it.take(2) == listOf("pr", "list") }, """[{"number":1310,"state":"MERGED","url":"https://github.com/$repo/pull/1310","author":{"login":"ada"},"mergeCommit":{"oid":"4e1c9a2f00"}}]""")
+        server.gh({ it.take(2) == listOf("api", "user") }, "ada\n")
+        server.tool("todo_complete", buildJsonObject { put("id", "a") })
+        val search = server.ran.first { it.take(3) == listOf("gh", "pr", "list") }
+        val filter = search[search.indexOf("--jq") + 1]
+        assertContains(filter, "<!-- teamcode-todo: 7f3a9c10/a -->"); assertContains(filter, "del(.body)")
+        val report = Json.parseToJsonElement(server.requests.last().second).jsonObject["checks"]!!.jsonArray.single().jsonObject
+        assertEquals(true, report["passed"]!!.jsonPrimitive.boolean, "A body-less answer from the filtered search is read")
+    }
+
+    @Test fun anAnswerOverTheRunnersBoundIsUnknownAndSaysWhy() = runBlocking {
+        val server = Server(view(item("a", "doing", listOf(TodoCheckView("pr_merged", repo = repo)))))
+        server.gh({ it.take(2) == listOf("pr", "list") }, "[" + "x".repeat(64 * 1024), truncated = true)
+        server.tool("todo_complete", buildJsonObject { put("id", "a") })
+        val report = Json.parseToJsonElement(server.requests.last().second).jsonObject["checks"]!!.jsonArray.single().jsonObject
+        assertTrue(report["passed"] == null || report["passed"] is kotlinx.serialization.json.JsonNull, "Unknown, not a failure")
+        assertContains(report["observed"]!!.jsonPrimitive.content, "more than 64 KiB")
+        assertTrue("could not be read" !in report["observed"]!!.jsonPrimitive.content, "Not the generic message that hid the cause")
     }
 
     @Test fun aPrFromAnotherAuthorOrAnotherListIsNeverTaken() = runBlocking {

@@ -82,7 +82,7 @@ The server instructions (field `instructions` of the MCP handshake) and `todo_he
 
 | Check | Run by | How |
 | --- | --- | --- |
-| `pr_merged`, `pr_closed` | the MCP process, with `gh` | the PR linked to the item, else the PR of the repo whose body carries the item's marker (`gh pr list --search "<list prefix> <item id> in:body"`, then the exact marker decides) and whose author is the token's login; found PRs are bound to the item |
+| `pr_merged`, `pr_closed` | the MCP process, with `gh` | the PR linked to the item, else the PR of the repo whose body carries the item's marker (`gh pr list --search "<list prefix> <item id> in:body"`, then the exact marker decides, done by `gh` itself with `--jq` so the bodies never reach the MCP process; an answer of more than 64 KiB is `unknown` and says so) and whose author is the token's login; found PRs are bound to the item |
 | `release_contains` | the MCP process, with `gh` | the earliest published, non-draft release (the 30 newest are listed, at most 15 compared) whose tag is ahead of or at the merge commit of the item named by `of` (or `commit`); it is bound to the item with its tag |
 | `ci_green` | the MCP process, with `gh run list --commit` | every run on the commit completed and green; none yet, running or failed is "not done" |
 | `command` | the MCP process, in a shell (`sh -c`, `cmd /c` on Windows) | the stored command, with `${pr:<item>.number}`, `${pr:<item>.mergeSha}`, `${release:<item>.tag}` replaced from the links; a value not linked yet leaves the check unknown and nothing runs; output is bounded to 300 characters and masked |
