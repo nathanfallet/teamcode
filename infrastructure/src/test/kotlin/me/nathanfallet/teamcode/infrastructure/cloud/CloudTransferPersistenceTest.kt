@@ -349,6 +349,11 @@ class CloudTransferPersistenceTest {
         val refused = assertFailsWith<TeamFailure> { ra.transfers.request(t.admin, null, third.id, CloudTransferRequest(t.recipient.member.id, false, true), key("cap-2", "d14")) }
         assertEquals("cloud_session_limit", refused.code)
         assertEquals(t.admin.member.id, ra.store.find(teamId, third.id)!!.ownerId)
+        // 0 is no limit, at the request too: the same transfer is accepted once the cap is lifted.
+        ra.admin.saveSettings(t.admin, CloudSettings(maxRetainedSessionsPerMember = 0, maxRunningSessionsPerMember = 2))
+        val lifted = ra.transfers.request(t.admin, null, third.id, CloudTransferRequest(t.recipient.member.id, false, true), key("cap-3", "d15")).transfer
+        assertEquals(CloudTransferState.ACCEPTED, lifted.state)
+        ra.transfers.cancel(t.admin, null, lifted.id)
         ra.admin.saveSettings(t.admin, CloudSettings())
         ra.sessions.delete(t.admin, null, third.id)
     }

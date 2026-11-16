@@ -107,7 +107,7 @@ class CloudTransferService(
      * that failed there left the owner with a session that "went nowhere". The check at the change stays for the race.
      */
     private suspend fun requireRoom(settings: CloudSettings, recipientId: String, teamId: String) {
-        if (transfers.retained(teamId, recipientId) >= settings.maxRetainedSessionsPerMember)
+        if (transfers.retained(teamId, recipientId) >= settings.retainedLimit)
             throw TeamFailure("cloud_session_limit", 409, "The recipient already retains the maximum number of cloud sessions. They must delete one first.")
     }
 
