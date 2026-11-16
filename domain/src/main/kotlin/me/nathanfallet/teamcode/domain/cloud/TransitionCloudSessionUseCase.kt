@@ -14,7 +14,7 @@ class TransitionCloudSessionUseCase(private val store: CloudSessionStore) {
     suspend fun commit(expected: CloudSession, transition: CloudTransition): CloudSession? {
         val next = transition.next
         require(next.id == expected.id && next.teamId == expected.teamId && next.generation == expected.generation) { "A transition must derive from the row it replaces." }
-        CloudStateMachine.require(expected.state, next.state)
+        if (!(CloudStateMachine.reopenable(expected) && next.state == CloudSessionState.PAUSED)) CloudStateMachine.require(expected.state, next.state)
         require(next.currentEpoch == expected.currentEpoch) { "The epoch advances only through start()." }
         require(next.ownerId == expected.ownerId) { "The owner changes only through a completed transfer." }
         return store.compareAndSet(expected, next, transition.write)

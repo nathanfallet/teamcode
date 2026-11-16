@@ -379,7 +379,7 @@ private fun ApiCatalog.cloudSessions() {
     post("/api/v1/cloud/sessions/{id}/resume") {
         operationId = "resumeCloudSession"; tag(ApiTags.CLOUD_SESSIONS)
         summary = "Resume a paused session"
-        description = "Starts a new execution on the kept workspace and conversation. During a pause, cancels it when the runner has not checkpointed yet, otherwise resumes as soon as the pause completes."
+        description = "Starts a new execution on the kept workspace and conversation. During a pause, cancels it when the runner has not checkpointed yet, otherwise resumes as soon as the pause completes. A remote session the device refused (`terminated`, `host_refused`) is reopened by resuming it from its device; any other ended session answers `session_not_running`."
         parameters {
             sessionId()
             onBehalfOf()
@@ -387,7 +387,7 @@ private fun ApiCatalog.cloudSessions() {
         responses {
             ok<CloudSessionView>("Accepted: the session is resuming.", HttpStatusCode.Accepted)
             notFound("No such session (`not_found`).")
-            conflict("The session cannot resume now (`invalid_transition`, `session_transferring`, `session_busy`), or it is a remote session of another device (`remote_host_mismatch`, `remote_host_removed`); a message with `wake` asks its host instead.")
+            conflict("The session cannot resume now (`session_not_running`, `invalid_transition`, `session_transferring`, `session_busy`), or it is a remote session of another device (`remote_host_mismatch`, `remote_host_removed`); a message with `wake` asks its host instead.")
         }
     }
     delete("/api/v1/cloud/sessions/{id}") {

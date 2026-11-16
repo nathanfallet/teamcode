@@ -41,8 +41,8 @@ internal fun interface HostLauncher {
  *   ([DaemonOrderView.resumeSessionId]) is refused (`resume_not_found`) unless it is one of that folder's conversations;
  *   accepted, its conversation id is stored for the host, which forks it (`--resume ID --fork-session`) at its first start.
  * - **Supervision.** A host that exits while its session should still run on that epoch is started again on a new
- *   epoch, at most [maxStarts] times in [startWindowMillis]; the session is then refused (`host_failed`) if it is still
- *   queued. A host that stops answering without exiting (or a previous daemon's host, which this one cannot see exit)
+ *   epoch, at most [maxStarts] times in [startWindowMillis]; the session then waits in the queue, without being
+ *   refused, until the window allows another start. A host that stops answering without exiting (or a previous daemon's host, which this one cannot see exit)
  *   is checked on the server every [lostCheckMillis]: once the server paused its session for the lost host
  *   (`host_offline`, on that epoch), the daemon resumes it, within the same limit, and the queue gives it a new host
  *   that fences the silent one. A host whose session paused, ended or moved to another host is forgotten.
@@ -149,7 +149,14 @@ internal class DeviceDaemon(
         if (resume != null && (order.agent != "claude" || !readable { transcripts.belongs(directory, resume) })) {
             refuse(id, RefusalReasons.RESUME_NOT_FOUND); return true
         }
-        if (!startAllowed(id, now)) { refuse(id, RefusalReasons.HOST_FAILED); return true }
+        // A host that keeps stopping before it is ready (a device that is still starting, an update in progress) does not end the
+        // session: it stays queued, and is tried again once the oldest of its recent starts leaves the window.
+        val wait = startWaitMillis(id, now)
+        if (wait > 0) {
+            report("The host of session $id keeps stopping before it is ready; trying again in ${wait / 1000 + 1} s.")
+            retryAt[id] = now + wait
+            return false
+        }
         accept(id, directory, order.agent, resume)
         return true
     }
@@ -181,10 +188,11 @@ internal class DeviceDaemon(
         catch (_: Exception) { retryAt[id] = now() + retryMillis }
     }
 
-    private fun startAllowed(id: String, now: Long): Boolean {
+    /** 0 when another start is allowed now, otherwise how long until the oldest of the recent starts leaves the window. */
+    private fun startWaitMillis(id: String, now: Long): Long {
         val recent = starts.getOrPut(id) { mutableListOf() }
         recent.removeAll { now - it > startWindowMillis }
-        return recent.size < maxStarts
+        return if (recent.size < maxStarts) 0 else (recent.min() + startWindowMillis - now).coerceAtLeast(1)
     }
 
     /** Opens the session's epoch on this device, records it, and starts its host. */
@@ -281,7 +289,7 @@ internal class DeviceDaemon(
             if (!stillOurs) { forget(entry.sessionId); continue }
             val record = records.load(entry.sessionId)
             hosted.remove(entry.sessionId)
-            if (record == null || !startAllowed(entry.sessionId, now())) {
+            if (record == null || startWaitMillis(entry.sessionId, now()) > 0L) {
                 report("The host of session ${entry.sessionId} stopped (exit code $code); not starting it again.")
                 sessions.remove(entry.sessionId)
                 continue

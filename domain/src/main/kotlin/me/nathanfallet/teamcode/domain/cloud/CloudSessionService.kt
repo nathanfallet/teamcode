@@ -465,7 +465,8 @@ class CloudSessionService(
     suspend fun resume(principal: Principal, onBehalfOf: String?, id: String): CloudSession {
         val actor = actor(principal, onBehalfOf)
         val session = visible(principal, store.find(principal.teamId, id))
-        if (session.state.terminal || session.desiredState == DesiredState.TERMINATED) throw notRunning()
+        // A session the device refused is reopened by resuming it: it never ran, and its conversation is still on the device.
+        if (!CloudStateMachine.reopenable(session) && (session.state.terminal || session.desiredState == DesiredState.TERMINATED)) throw notRunning()
         if (session.kind == CloudSessionKind.LOCAL) throw localSession()
         // Synchronous rechecks: the owner must still be enabled and assigned to the profile.
         val owner = store.member(principal.teamId, session.ownerId)
@@ -481,6 +482,11 @@ class CloudSessionService(
         return transition(principal.teamId, id) { current ->
             val now = store.now()
             when {
+                CloudStateMachine.reopenable(current) -> CloudTransition(
+                    current.copy(state = CloudSessionState.PAUSED, phase = null, desiredState = DesiredState.RUNNING, terminatedReason = null, failure = null,
+                        expiresAt = null, resumeBlocked = null, pauseRequestedAt = null, pauseForce = false, updatedAt = now),
+                    CloudWrite(actor = actor, auditAction = "cloud.session.reopened", reconcileAt = now),
+                )
                 current.state.terminal || current.desiredState == DesiredState.TERMINATED -> throw notRunning()
                 // An accepted transfer pauses the session; only the transfer itself resumes it, for the recipient.
                 current.state == CloudSessionState.TRANSFERRING || current.transferId != null -> throw TeamFailure("session_transferring", 409, "The session is being transferred to another member.")
