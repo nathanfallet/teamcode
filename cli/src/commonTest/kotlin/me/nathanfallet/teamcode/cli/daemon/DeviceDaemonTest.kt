@@ -56,6 +56,7 @@ class DeviceDaemonTest {
         }
 
         var lostCheckMillis = 30_000L
+        var startWindowMillis = 600_000L
 
         /** This device's Claude Code projects, in the scratch directory. */
         val claude = root / "claude-projects"
@@ -71,7 +72,7 @@ class DeviceDaemonTest {
         }
 
         fun daemon(version: String = "1.0.0") = DeviceDaemon(server.client(), folders, records, state, hosts, version, { reports += it }, { stop }, home,
-            transcripts = transcripts, pollWaitMillis = 50, tickMillis = 10, stopWaitMillis = 5_000, retryMillis = 100, lostCheckMillis = lostCheckMillis)
+            transcripts = transcripts, pollWaitMillis = 50, tickMillis = 10, stopWaitMillis = 5_000, retryMillis = 100, lostCheckMillis = lostCheckMillis, startWindowMillis = startWindowMillis)
 
         /** Runs a daemon until [stop], in [scope]. */
         fun start(scope: CoroutineScope, version: String = "1.0.0"): Job { stop = false; return scope.launch { daemon(version).run() } }
@@ -189,7 +190,8 @@ class DeviceDaemonTest {
         assertTrue(f.server.events.none { it.startsWith("host") })
     }
 
-    @Test fun aHostThatDiesIsStartedAgainThenGivenUpAfterThreeStarts() = test { f ->
+    @Test fun aHostThatDiesIsStartedAgainThenWaitsInTheQueueInsteadOfBeingRefused() = test { f ->
+        f.startWindowMillis = 1_500
         val folder = f.folder("project")
         f.server.queue("s1", folder.id, "project")
         val daemon = f.start(this)
@@ -203,9 +205,14 @@ class DeviceDaemonTest {
         waitUntil { f.reports.any { "not starting it again" in it } }
         assertEquals(3, f.hosts.started.size, "At most three starts in the window")
         assertTrue(f.state.read().isEmpty())
-        // Back in the queue later (its epoch was lost before it was ready): refused instead of looping.
+        // Back in the queue (its epoch was lost before it was ready): it waits, it is not refused (a refusal ends the session
+        // for good), and once the window has passed it is hosted again.
         f.server.sessions.getValue("s1").apply { phase = "waiting_host"; state = "preparing" }
-        waitUntil { "refuse s1 host_failed" in f.server.events }
+        waitUntil { f.reports.any { "trying again in" in it } }
+        // The daemon's clock is real (monotonic): let the window pass for real, the test's own time is virtual.
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { kotlinx.coroutines.delay(1_700) }
+        waitUntil { f.hosts.started.size == 4 }
+        assertTrue(f.server.events.none { it.startsWith("refuse s1") }, "The session is never refused for a host that kept stopping")
         f.stop = true
         daemon.join()
     }

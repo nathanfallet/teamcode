@@ -187,6 +187,23 @@ class DeviceDaemonPersistenceTest {
         assertEquals(2, sessions.host(laptop, first.id).currentEpoch)
         assertEquals(emptyList(), daemon.poll(laptop, 0, "1.0.0").orders)
 
+        // The refused session ended (`terminated`, `host_refused`); its owner reopens it from its device by resuming it, and the
+        // daemon's queue hands it out again. Another device cannot, and a session that was deleted stays ended.
+        pass()
+        assertEquals(TERMINATED, sessionStore.find(laptop.teamId, second.id)!!.state)
+        failure("remote_host_mismatch") { sessions.resume(desktop, null, second.id) }
+        sessions.resume(laptop, null, second.id)
+        pass()
+        val reopened = sessionStore.find(laptop.teamId, second.id)!!
+        assertEquals(listOf<Any?>(RESUMING, CloudSessionService.WAITING_HOST, null, null), listOf(reopened.state, reopened.phase, reopened.terminatedReason, reopened.failure))
+        assertEquals(listOf(second.id), daemon.poll(laptop, 0, "1.0.0").orders.map { it.sessionId })
+        assertEquals(1, sessions.host(laptop, second.id).currentEpoch)
+        val deleted = (sessions.createRemote(phone, null, draft(folder = "teamcode"), null) as CloudCreateOutcome.Created).session
+        sessions.delete(phone, null, deleted.id)
+        pass()
+        assertEquals(TERMINATED, sessionStore.find(laptop.teamId, deleted.id)!!.state)
+        failure("session_not_running") { sessions.resume(laptop, null, deleted.id) }
+
         // A waiting poll returns as soon as an order arrives, without a transaction held between reads.
         var started: String? = null
         onSleep = { if (started == null) started = (sessions.createRemote(phone, null, draft(folder = "teamcode"), null) as CloudCreateOutcome.Created).session.id }
