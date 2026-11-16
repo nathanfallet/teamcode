@@ -41,10 +41,10 @@ internal fun interface HostLauncher {
  *   ([DaemonOrderView.resumeSessionId]) is refused (`resume_not_found`) unless it is one of that folder's conversations;
  *   accepted, its conversation id is stored for the host, which forks it (`--resume ID --fork-session`) at its first start.
  * - **Supervision.** A host that exits while its session should still run on that epoch is started again on a new
- *   epoch, at most [maxStarts] times in [startWindowMillis]; the session then waits in the queue, without being
- *   refused, until the window allows another start. A host that stops answering without exiting (or a previous daemon's host, which this one cannot see exit)
+ *   epoch after a wait that doubles with each start of the last [startWindowMillis] (from [startBackoffMillis], at most
+ *   [maxStartBackoffMillis]); there is no number of starts after which it is given up or the session refused. A host that stops answering without exiting (or a previous daemon's host, which this one cannot see exit)
  *   is checked on the server every [lostCheckMillis]: once the server paused its session for the lost host
- *   (`host_offline`, on that epoch), the daemon resumes it, within the same limit, and the queue gives it a new host
+ *   (`host_offline`, on that epoch), the daemon resumes it, and the queue gives it a new host (after the same growing wait)
  *   that fences the silent one. A host whose session paused, ended or moved to another host is forgotten.
  * - **Stop.** It stops polling, asks the server to pause every session it hosts (each agent finishes its turn and its
  *   host checkpoints and exits), waits for them up to [stopWaitMillis], then says it is offline
@@ -66,7 +66,8 @@ internal class DeviceDaemon(
     private val pollWaitMillis: Long = 20_000,
     private val tickMillis: Long = 2_000,
     private val stopWaitMillis: Long = 540_000,
-    private val maxStarts: Int = 3,
+    private val startBackoffMillis: Long = 2_000,
+    private val maxStartBackoffMillis: Long = 300_000,
     private val startWindowMillis: Long = 600_000,
     private val retryMillis: Long = 30_000,
     private val maxBackoffMillis: Long = 60_000,
@@ -150,7 +151,7 @@ internal class DeviceDaemon(
             refuse(id, RefusalReasons.RESUME_NOT_FOUND); return true
         }
         // A host that keeps stopping before it is ready (a device that is still starting, an update in progress) does not end the
-        // session: it stays queued, and is tried again once the oldest of its recent starts leaves the window.
+        // session: it stays queued, and is tried again after a growing wait.
         val wait = startWaitMillis(id, now)
         if (wait > 0) {
             report("The host of session $id keeps stopping before it is ready; trying again in ${wait / 1000 + 1} s.")
@@ -188,11 +189,18 @@ internal class DeviceDaemon(
         catch (_: Exception) { retryAt[id] = now() + retryMillis }
     }
 
-    /** 0 when another start is allowed now, otherwise how long until the oldest of the recent starts leaves the window. */
+    /**
+     * How long to wait before this session's host starts again: nothing for the first start, then the wait doubles with each
+     * start of the last [startWindowMillis] (from [startBackoffMillis], at most [maxStartBackoffMillis]). There is no number of
+     * starts after which the session is given up: a host that keeps stopping because its device is still starting or being
+     * updated is tried again, slowly, until it runs; a host that ran for the whole window starts afresh.
+     */
     private fun startWaitMillis(id: String, now: Long): Long {
         val recent = starts.getOrPut(id) { mutableListOf() }
         recent.removeAll { now - it > startWindowMillis }
-        return if (recent.size < maxStarts) 0 else (recent.min() + startWindowMillis - now).coerceAtLeast(1)
+        if (recent.isEmpty()) return 0
+        val backoff = (startBackoffMillis shl (recent.size - 1).coerceAtMost(16)).coerceAtMost(maxStartBackoffMillis)
+        return (recent.max() + backoff - now).coerceAtLeast(0)
     }
 
     /** Opens the session's epoch on this device, records it, and starts its host. */
@@ -270,6 +278,8 @@ internal class DeviceDaemon(
     private suspend fun watchHosts() {
         for (entry in hosted.values.toList()) {
             val code = entry.process?.exitCode()
+            // A host that stopped waits out its growing delay before the server is asked about it again.
+            if (code != null) retryAt[entry.sessionId]?.let { if (now() < it) continue }
             // A host still running (or a previous daemon's) is asked about every lostCheckMillis only: it may have gone silent.
             if (code == null) {
                 val now = now()
@@ -288,12 +298,20 @@ internal class DeviceDaemon(
             val stillOurs = view.desiredState == "running" && view.state != "terminated" && view.currentEpoch == entry.epoch
             if (!stillOurs) { forget(entry.sessionId); continue }
             val record = records.load(entry.sessionId)
-            hosted.remove(entry.sessionId)
-            if (record == null || startWaitMillis(entry.sessionId, now()) > 0L) {
-                report("The host of session ${entry.sessionId} stopped (exit code $code); not starting it again.")
+            if (record == null) {
+                hosted.remove(entry.sessionId)
+                report("The host of session ${entry.sessionId} stopped (exit code $code) and its record is gone; not starting it again.")
                 sessions.remove(entry.sessionId)
                 continue
             }
+            // Growing wait instead of giving up: the entry stays, and this tick leaves it for the next one.
+            val wait = startWaitMillis(entry.sessionId, now())
+            if (wait > 0) {
+                if (retryAt[entry.sessionId] == null) report("The host of session ${entry.sessionId} stopped (exit code $code); starting it again in ${wait / 1000 + 1} s.")
+                retryAt[entry.sessionId] = now() + wait
+                continue
+            }
+            hosted.remove(entry.sessionId)
             report("The host of session ${entry.sessionId} stopped (exit code $code); starting it again.")
             accept(entry.sessionId, record.directory, record.agent)
         }
@@ -305,9 +323,8 @@ internal class DeviceDaemon(
      */
     private suspend fun resumeLost(entry: Hosted) {
         val id = entry.sessionId
-        val recent = starts[id].orEmpty().count { now() - it <= startWindowMillis }
-        if (records.load(id) == null || recent >= maxStarts) {
-            report("The host of session $id stopped answering; not starting it again.")
+        if (records.load(id) == null) {
+            report("The host of session $id stopped answering and its record is gone; not starting it again.")
             forget(id)
             return
         }

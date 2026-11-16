@@ -1,5 +1,6 @@
 package me.nathanfallet.teamcode.cli.daemon
 
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -56,7 +57,7 @@ class DeviceDaemonTest {
         }
 
         var lostCheckMillis = 30_000L
-        var startWindowMillis = 600_000L
+        var startBackoffMillis = 1L
 
         /** This device's Claude Code projects, in the scratch directory. */
         val claude = root / "claude-projects"
@@ -72,7 +73,7 @@ class DeviceDaemonTest {
         }
 
         fun daemon(version: String = "1.0.0") = DeviceDaemon(server.client(), folders, records, state, hosts, version, { reports += it }, { stop }, home,
-            transcripts = transcripts, pollWaitMillis = 50, tickMillis = 10, stopWaitMillis = 5_000, retryMillis = 100, lostCheckMillis = lostCheckMillis, startWindowMillis = startWindowMillis)
+            transcripts = transcripts, pollWaitMillis = 50, tickMillis = 10, stopWaitMillis = 5_000, retryMillis = 100, lostCheckMillis = lostCheckMillis, startBackoffMillis = startBackoffMillis)
 
         /** Runs a daemon until [stop], in [scope]. */
         fun start(scope: CoroutineScope, version: String = "1.0.0"): Job { stop = false; return scope.launch { daemon(version).run() } }
@@ -85,6 +86,8 @@ class DeviceDaemonTest {
     }
 
     private suspend fun waitUntil(condition: () -> Boolean) = withTimeout(60_000) { while (!condition()) delay(5) }
+    /** For a wait on the daemon's own clock, which is real (monotonic) while the test's time is virtual. */
+    private suspend fun waitRealUntil(condition: () -> Boolean) = withContext(kotlinx.coroutines.Dispatchers.Default) { withTimeout(20_000) { while (!condition()) delay(5) } }
 
     @Test fun aMemberWaitingForAFoldersConversationsGetsOnlyThatFolders() = test { f ->
         val folder = f.folder("project")
@@ -190,29 +193,20 @@ class DeviceDaemonTest {
         assertTrue(f.server.events.none { it.startsWith("host") })
     }
 
-    @Test fun aHostThatDiesIsStartedAgainThenWaitsInTheQueueInsteadOfBeingRefused() = test { f ->
-        f.startWindowMillis = 1_500
+    @Test fun aHostThatKeepsDyingIsStartedAgainWithoutLimitAndTheSessionIsNeverRefused() = test { f ->
+        f.startBackoffMillis = 1
         val folder = f.folder("project")
         f.server.queue("s1", folder.id, "project")
         val daemon = f.start(this)
-        waitUntil { f.hosts.started.size == 1 }
-        f.hosts.crash += "s1"
-        waitUntil { f.hosts.started.size == 2 }
-        assertEquals(2, f.hosts.started.last().second, "A new epoch for the new host")
-        f.hosts.crash += "s1"
-        waitUntil { f.hosts.started.size == 3 }
-        f.hosts.crash += "s1"
-        waitUntil { f.reports.any { "not starting it again" in it } }
-        assertEquals(3, f.hosts.started.size, "At most three starts in the window")
-        assertTrue(f.state.read().isEmpty())
-        // Back in the queue (its epoch was lost before it was ready): it waits, it is not refused (a refusal ends the session
-        // for good), and once the window has passed it is hosted again.
-        f.server.sessions.getValue("s1").apply { phase = "waiting_host"; state = "preparing" }
-        waitUntil { f.reports.any { "trying again in" in it } }
-        // The daemon's clock is real (monotonic): let the window pass for real, the test's own time is virtual.
-        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { kotlinx.coroutines.delay(1_700) }
-        waitUntil { f.hosts.started.size == 4 }
+        waitRealUntil { f.hosts.started.size == 1 }
+        // Far more than the three starts that used to end it: every crash is followed by a new epoch.
+        for (round in 2..8) {
+            f.hosts.crash += "s1"
+            waitRealUntil { f.hosts.started.size == round }
+            assertEquals(round, f.hosts.started.last().second, "A new epoch for the new host")
+        }
         assertTrue(f.server.events.none { it.startsWith("refuse s1") }, "The session is never refused for a host that kept stopping")
+        assertTrue(f.reports.none { "not starting it again" in it }, "The daemon never gives a session up")
         f.stop = true
         daemon.join()
     }
@@ -238,23 +232,23 @@ class DeviceDaemonTest {
         assertFalse("resume owner" in f.server.events, "Paused by its owner: not resumed")
     }
 
-    @Test fun aSilentHostIsReplacedAtMostThreeTimesInTheWindow() = test { f ->
+    @Test fun aSilentHostIsReplacedEveryTimeTheServerPausesItsSession() = test { f ->
         f.lostCheckMillis = 20
         val folder = f.folder("project")
         f.server.queue("s1", folder.id, "project")
         f.hosts.hang += "s1"
         val daemon = f.start(this)
-        for (count in 1..3) {
-            waitUntil { f.hosts.started.size == count }
+        // More than the three replacements that used to be the most: the session is never given up.
+        for (count in 1..6) {
+            waitRealUntil { f.hosts.started.size == count }
             f.server.loseHost("s1")
         }
-        waitUntil { f.reports.any { "stopped answering; not starting it again" in it } }
+        waitRealUntil { f.hosts.started.size == 7 }
         f.hosts.hang.clear()
         f.stop = true
         daemon.join()
-        assertEquals(3, f.hosts.started.size)
-        assertEquals(2, f.server.events.count { it == "resume s1" })
-        assertTrue(f.state.read().isEmpty())
+        assertEquals(6, f.server.events.count { it == "resume s1" })
+        assertTrue(f.reports.none { "not starting it again" in it })
     }
 
     @Test fun aTerminalWakesADaemonSessionOnlyWhileTheDaemonIsOffline() = test { f ->
