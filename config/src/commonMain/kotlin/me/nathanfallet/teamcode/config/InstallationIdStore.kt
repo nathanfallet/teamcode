@@ -1,7 +1,10 @@
 package me.nathanfallet.teamcode.config
 
+import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.TimeSource
 import kotlin.uuid.Uuid
 import okio.FileSystem
+import okio.IOException
 import okio.Path.Companion.toPath
 
 /**
@@ -21,9 +24,31 @@ class InstallationIdStore(private val path: String, private val files: PrivateFi
         require(metadata.symlinkTarget == null && metadata.isRegularFile && (metadata.size ?: 0) <= 64) {
             "The installation identity must be a small regular file, not a symbolic link."
         }
-        val id = FileSystem.SYSTEM.read(file) { readUtf8() }
+        val id = readRetrying(file)
         require(isInstallationId(id)) { "Invalid TeamCode installation identity." }
         return id
+    }
+
+    /**
+     * Windows can refuse to open a file for a moment while another first run publishes it (a sharing violation surfaces as
+     * "file not found" although the metadata just showed it). The file exists and is complete once published, so a short,
+     * bounded retry reads it; a real failure still surfaces after the last attempt.
+     */
+    private fun readRetrying(file: okio.Path): String {
+        var attempt = 0
+        while (true) {
+            try { return FileSystem.SYSTEM.read(file) { readUtf8() } }
+            catch (error: IOException) {
+                if (++attempt >= READ_ATTEMPTS) throw error
+                val until = TimeSource.Monotonic.markNow() + RETRY_DELAY_MILLIS.milliseconds
+                while (until.hasNotPassedNow()) { /* common code has no sleep; the wait is short and only on this rare path */ }
+            }
+        }
+    }
+
+    private companion object {
+        const val READ_ATTEMPTS = 20
+        const val RETRY_DELAY_MILLIS = 25
     }
 }
 
