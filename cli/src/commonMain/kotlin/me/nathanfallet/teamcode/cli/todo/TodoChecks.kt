@@ -7,7 +7,8 @@ import me.nathanfallet.teamcode.cli.platform.environment
 import me.nathanfallet.teamcode.cli.platform.startAgentProcess
 
 /** What a finished child process left: its exit code and the (bounded) text it printed, or [timedOut]. */
-internal class Captured(val exit: Int, val output: String, val timedOut: Boolean = false)
+/** [truncated]: the command printed more than the runner keeps (64 KiB), so [output] is cut and must not be parsed. */
+internal class Captured(val exit: Int, val output: String, val timedOut: Boolean = false, val truncated: Boolean = false)
 
 /** Runs one command and captures its output; null when it could not be started. Stubbed in tests, real in [ProcessRunner]. */
 internal fun interface CommandCapture {
@@ -27,15 +28,18 @@ internal object ProcessRunner : CommandCapture {
         }
         process.closeInput()
         val text = StringBuilder()
+        var truncated = false
         val finished = withTimeoutOrNull(timeoutMillis) {
             while (true) {
                 val line = process.readLine(MAX_OUTPUT) ?: break
-                if (text.length < MAX_OUTPUT) text.append(line).append('\n')
+                // A line is cut at MAX_OUTPUT bytes, so one that reaches it was longer; later lines are dropped once the text is full.
+                if (line.encodeToByteArray().size >= MAX_OUTPUT) truncated = true
+                if (text.length < MAX_OUTPUT) text.append(line).append('\n') else truncated = true
             }
             true
         }
         val exit = process.stop(1_000)
-        return Captured(exit, text.toString(), timedOut = finished == null)
+        return Captured(exit, text.toString(), timedOut = finished == null, truncated = truncated)
     }
 }
 
@@ -56,7 +60,15 @@ internal class TodoChecks(private val runner: CommandCapture, private val sessio
     /** What a PR looked like: [state] is OPEN, CLOSED or MERGED. */
     private class Pr(val number: Int, val url: String, val state: String, val sha: String?, val author: String?)
 
-    private suspend fun gh(vararg arguments: String): Captured? = runner.run("gh", arguments.toList(), null, GH_TIMEOUT_MILLIS)?.takeIf { !it.timedOut && it.exit == 0 }
+    /** `gh`'s answer, or null when it failed or timed out. An answer cut at the runner's bound is "unknown", said as what it is, never parsed. */
+    private suspend fun gh(vararg arguments: String): Captured? {
+        val answer = runner.run("gh", arguments.toList(), null, GH_TIMEOUT_MILLIS)?.takeIf { !it.timedOut && it.exit == 0 } ?: return null
+        if (answer.truncated) throw Unknown("gh printed more than 64 KiB; the answer was cut and cannot be read (${arguments.take(2).joinToString(" ")})")
+        return answer
+    }
+
+    /** A jq string literal: the marker is ours, but it is quoted properly all the same. */
+    private fun jqString(value: String) = "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
 
     private fun repoOf(url: String) = Regex("https://github\\.com/([^/]+/[^/]+)/pull/\\d+").find(url)?.groupValues?.get(1)
 
@@ -73,10 +85,13 @@ internal class TodoChecks(private val runner: CommandCapture, private val sessio
             return parsePr(json.parseToJsonElement(answer.output).jsonObject)
         }
         val marker = marker(list, item.id)
-        // The search narrows the candidates; the exact marker in the body decides, so another list's PR is never taken.
-        val answer = gh("pr", "list", "--repo", repo, "--state", "all", "--search", "${list.id.take(8)} ${item.id} in:body", "--json", "number,state,url,mergeCommit,author,body", "--limit", "20")
+        // The search narrows the candidates; the exact marker in the body decides, so another list's PR is never taken. gh does that
+        // filtering (`--jq`) and drops the bodies: 20 pull requests with their review sections and proofs are far over what the runner
+        // keeps, and a cut JSON could not be read. An answer that still carries a body (a gh that ignored the filter) is checked here.
+        val answer = gh("pr", "list", "--repo", repo, "--state", "all", "--search", "${list.id.take(8)} ${item.id} in:body", "--json", "number,state,url,mergeCommit,author,body", "--limit", "20",
+            "--jq", "[.[] | select((.body // \"\") | contains(${jqString(marker)})) | del(.body)]")
             ?: throw Unknown("gh could not search the pull requests of $repo")
-        val found = json.parseToJsonElement(answer.output).jsonArray.map { it.jsonObject }.filter { it["body"]?.jsonPrimitive?.contentOrNull?.contains(marker) == true }
+        val found = json.parseToJsonElement(answer.output).jsonArray.map { it.jsonObject }.filter { "body" !in it || it["body"]?.jsonPrimitive?.contentOrNull?.contains(marker) == true }
         val me = gh("api", "user", "--jq", ".login")?.output?.trim()
         val mine = found.map(::parsePr).filter { me == null || it.author == null || it.author == me }
         return mine.maxByOrNull { it.number }
