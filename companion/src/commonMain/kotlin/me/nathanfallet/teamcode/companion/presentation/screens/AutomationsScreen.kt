@@ -86,18 +86,18 @@ fun AutomationsScreen(
         started = true
         onStopOrDispose { }
     }
-    val actions: @Composable androidx.compose.foundation.layout.RowScope.() -> Unit = {
+    val actions: @Composable () -> Unit = {
         TcIconButton(PhosphorIcons.Regular.ArrowsClockwise, stringResource(Res.string.automations_refresh), onClick = viewModel::reload, enabled = !state.loading, modifier = Modifier.testTag("automations-refresh"))
         TcIconButton(PhosphorIcons.Regular.Plus, stringResource(Res.string.automations_new), onClick = onCreate, kind = IconButtonKind.OUTLINED, modifier = Modifier.testTag("automations-new"))
     }
     Column(Modifier.fillMaxSize().background(colors.background), horizontalAlignment = Alignment.CenterHorizontally) {
-        if (onBack != null) NavBar(backLabel, onBack, stringResource(Res.string.automations_title), actions = actions)
+        if (onBack != null) NavBar(backLabel, onBack, stringResource(Res.string.automations_title), actions = { actions() })
         Column(
             Modifier.widthIn(max = ContentWidth).fillMaxWidth().then(if (onBack == null) Modifier.windowInsetsPadding(WindowInsets.statusBars) else Modifier)
                 .padding(start = 16.dp, end = 16.dp, top = if (onBack == null) 8.dp else 0.dp, bottom = 10.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            if (onBack == null) LargeTitle(stringResource(Res.string.automations_title), actions = actions)
+            if (onBack == null) LargeTitle(stringResource(Res.string.automations_title), actions = { actions() })
             if (state.administrator) Segmented(
                 listOf(AutomationScope.MINE to stringResource(Res.string.automations_mine), AutomationScope.TEAM to stringResource(Res.string.automations_team)),
                 selected = state.scope, onSelect = viewModel::setScope, modifier = Modifier.fillMaxWidth(), tag = { "automations-${it.name.lowercase()}" },

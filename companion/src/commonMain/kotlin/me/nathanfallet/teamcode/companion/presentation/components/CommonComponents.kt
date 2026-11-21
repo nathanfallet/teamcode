@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.FlowRowScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
@@ -586,10 +587,10 @@ fun TcTextField(
 /**
  * A tab's large title, under the status bar, with its actions at the end. The title keeps its own width: when the actions
  * do not fit beside it (a narrow phone, several buttons), they move to a line of their own under it instead of squeezing
- * the title into a column of letters.
+ * the title into a column of letters. The actions wrap among themselves the same way: none is ever squeezed out of sight.
  */
 @Composable
-fun LargeTitle(title: String, modifier: Modifier = Modifier, actions: @Composable RowScope.() -> Unit = {}) {
+fun LargeTitle(title: String, modifier: Modifier = Modifier, actions: @Composable FlowRowScope.() -> Unit = {}) {
     FlowRow(
         modifier.fillMaxWidth().heightIn(min = 44.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -597,7 +598,16 @@ fun LargeTitle(title: String, modifier: Modifier = Modifier, actions: @Composabl
         itemVerticalAlignment = Alignment.CenterVertically,
     ) {
         Text(title, style = androidx.compose.material3.MaterialTheme.typography.headlineMedium, color = TeamCode.colors.text, maxLines = 1, modifier = Modifier.semantics { heading() })
-        Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End), verticalAlignment = Alignment.CenterVertically, content = actions)
+        // The actions are a flow of their own, not a Row: a Row measures its children in order and gives the last one what is
+        // left, so on a phone wide enough to keep this block beside the title but too narrow for all of it, the last action
+        // (the new-session plus) shrank to nothing. In a flow an action that does not fit moves to the next line at its own size.
+        FlowRow(
+            Modifier.weight(1f),
+            horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+            itemVerticalAlignment = Alignment.CenterVertically,
+            content = actions,
+        )
     }
 }
 
